@@ -583,10 +583,14 @@ final class ComposeDraft {
     }
 
     private func completeImport(_ placeholder: UUID, fileName: String, duration: Double) {
-        guard !isDiscarded,
-              sealedCapsule == nil,
+        if isDiscarded {
+            // The letter was let go while this memory was still on its way; the save
+            // may have recreated the capsule's folder, so clear it again.
+            MediaStore.deleteAll(for: id)
+            return
+        }
+        guard sealedCapsule == nil,
               let index = media.firstIndex(where: { $0.id == placeholder }) else {
-            // The letter was let go while this memory was still on its way.
             MediaStore.delete(fileName: fileName, capsuleID: id)
             return
         }

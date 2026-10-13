@@ -206,7 +206,9 @@ struct ComposeWriteStep: View {
                 .padding(.bottom, isEditingLetter ? 8 : 32)
             }
             .scrollIndicators(.hidden)
-            .scrollDisabled(isEditingLetter)
+            // While writing, the paper exactly fills the page, so only the editor scrolls.
+            // (`scrollDisabled` would propagate to the TextEditor as well.)
+            .scrollBounceBehavior(.basedOnSize)
             .scrollDismissesKeyboard(.interactively)
         }
         .animation(.smooth(duration: 0.4), value: isEditingLetter)
@@ -1406,30 +1408,36 @@ struct ComposeStyleStep: View {
     private func carousel(in size: CGSize) -> some View {
         let cardWidth = max(min(size.width - 96, 320), 200)
         let cardHeight = max(min(size.height - 240, 470), 280)
-        return ScrollView(.horizontal) {
-            LazyHStack(spacing: 16) {
-                ForEach(ThemeID.allCases, id: \.self) { styleID in
-                    ComposeStylePreviewCard(
-                        themeID: styleID,
-                        monogram: draft.monogram,
-                        isSelected: styleID == draft.themeID
-                    )
-                    .frame(width: cardWidth, height: cardHeight)
-                    .onTapGesture { choose(styleID) }
-                    .scrollTransition { content, phase in
-                        content
-                            .scaleEffect(phase.isIdentity ? 1 : 0.9)
-                            .opacity(phase.isIdentity ? 1 : 0.55)
+        return ScrollViewReader { reader in
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 16) {
+                    ForEach(ThemeID.allCases, id: \.self) { styleID in
+                        ComposeStylePreviewCard(
+                            themeID: styleID,
+                            monogram: draft.monogram,
+                            isSelected: styleID == draft.themeID
+                        )
+                        .frame(width: cardWidth, height: cardHeight)
+                        .onTapGesture { choose(styleID) }
+                        .scrollTransition { content, phase in
+                            content
+                                .scaleEffect(phase.isIdentity ? 1 : 0.9)
+                                .opacity(phase.isIdentity ? 1 : 0.55)
+                        }
                     }
                 }
+                .scrollTargetLayout()
             }
-            .scrollTargetLayout()
+            .contentMargins(.horizontal, max((size.width - cardWidth) / 2, 0), for: .scrollContent)
+            .scrollTargetBehavior(.viewAligned)
+            .scrollPosition(id: $focusedStyle)
+            .scrollIndicators(.hidden)
+            .frame(height: cardHeight + 24)
+            .onAppear {
+                // Start on the letter's current stationery, even deep inside the lazy stack.
+                reader.scrollTo(draft.themeID, anchor: .center)
+            }
         }
-        .contentMargins(.horizontal, max((size.width - cardWidth) / 2, 0), for: .scrollContent)
-        .scrollTargetBehavior(.viewAligned)
-        .scrollPosition(id: $focusedStyle)
-        .scrollIndicators(.hidden)
-        .frame(height: cardHeight + 24)
     }
 
     private var pageDots: some View {
