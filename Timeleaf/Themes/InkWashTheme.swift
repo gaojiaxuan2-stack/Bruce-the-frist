@@ -95,7 +95,8 @@ struct InkWashBurst: View {
         ZStack {
             Color.clear
             if !isFinished {
-                TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: false)) { timeline in
+                // 30 fps, like the backgrounds: the bloom is slow, and each frame still pays for a soft blur.
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { timeline in
                     Canvas { context, size in
                         InkWashBurstRenderer.draw(
                             in: &context,
@@ -683,15 +684,31 @@ private enum InkWashBurstRenderer {
     private static func drawStillWash(in context: inout GraphicsContext, cx: Double, cy: Double, unit: Double, time: Double) {
         let alpha = 0.22 * sin(Double.pi * min(time / duration, 1))
         guard alpha > 0.002 else { return }
-        let path = inkWashBlot(cx: cx, cy: cy, radius: unit * 0.24, seed: 2, wobble: 0.2)
-        context.drawLayer { layer in
-            layer.addFilter(.blur(radius: CGFloat(unit * 0.03)))
+        let radius = unit * 0.24
+        let softness = unit * 0.03
+        let path = inkWashBlot(cx: cx, cy: cy, radius: radius, seed: 2, wobble: 0.2)
+        var bounded = context
+        bounded.clip(to: inkWashLayerBounds(cx: cx, cy: cy, reach: radius * 1.15 + softness * 3))
+        bounded.drawLayer { layer in
+            layer.addFilter(.blur(radius: CGFloat(softness)))
             layer.fill(path, with: .color(InkWashPalette.ink.opacity(alpha)))
         }
     }
 
+    /// A square around the drop that holds a blurred layer: the offscreen pass covers only
+    /// the ink (plus the blur's reach), not the whole screen.
+    private static func inkWashLayerBounds(cx: Double, cy: Double, reach: Double) -> Path {
+        Path(CGRect(x: cx - reach, y: cy - reach, width: reach * 2, height: reach * 2))
+    }
+
     /// Concentric washes that spread, soften and pale as the water carries the ink.
+    /// All rings share one blurred layer (their softness differs by only a few points),
+    /// so the bloom costs a single blur per frame instead of one per ring.
     private static func drawWashes(in context: inout GraphicsContext, cx: Double, cy: Double, unit: Double, time: Double) {
+        var washes: [InkWashBurstWash] = []
+        var softnessSum = 0.0
+        var weightSum = 0.0
+        var reach = 0.0
         for ring in 0..<4 {
             let start = 0.1 + Double(ring) * 0.13
             let local = (time - start) / 1.75
@@ -701,13 +718,26 @@ private enum InkWashBurstRenderer {
             let radius = unit * (0.05 + (0.15 + 0.085 * Double(ring)) * grow)
             let alpha = (0.34 - 0.06 * Double(ring)) * min(1, local * 6) * pow(1 - progress, 1.3)
             guard alpha > 0.002 else { continue }
-            let path = inkWashBlot(cx: cx, cy: cy, radius: radius, seed: ring, wobble: 0.16 + 0.12 * grow)
-            let softness = 1.5 + 9 * progress + Double(ring) * 1.5
-            let edgeWidth = 1.2 + 2 * (1 - progress)
-            context.drawLayer { layer in
-                layer.addFilter(.blur(radius: CGFloat(softness)))
-                layer.fill(path, with: .color(InkWashPalette.ink.opacity(alpha * 0.8)))
-                layer.stroke(path, with: .color(InkWashPalette.ink.opacity(alpha)), lineWidth: CGFloat(edgeWidth))
+            let wobble = 0.16 + 0.12 * grow
+            washes.append(InkWashBurstWash(
+                path: inkWashBlot(cx: cx, cy: cy, radius: radius, seed: ring, wobble: wobble),
+                alpha: alpha,
+                edgeWidth: 1.2 + 2 * (1 - progress)
+            ))
+            // The more visible a ring, the more its softness counts.
+            softnessSum += (1.5 + 9 * progress + Double(ring) * 1.5) * alpha
+            weightSum += alpha
+            reach = max(reach, radius * (1.05 + 0.5 * wobble))
+        }
+        guard !washes.isEmpty, weightSum > 0 else { return }
+        let softness = softnessSum / weightSum
+        var bounded = context
+        bounded.clip(to: inkWashLayerBounds(cx: cx, cy: cy, reach: reach + 4 + softness * 3))
+        bounded.drawLayer { layer in
+            layer.addFilter(.blur(radius: CGFloat(softness)))
+            for wash in washes {
+                layer.fill(wash.path, with: .color(InkWashPalette.ink.opacity(wash.alpha * 0.8)))
+                layer.stroke(wash.path, with: .color(InkWashPalette.ink.opacity(wash.alpha)), lineWidth: CGFloat(wash.edgeWidth))
             }
         }
     }
@@ -719,10 +749,13 @@ private enum InkWashBurstRenderer {
         let alpha = 0.8 * (1 - inkWashSmoothstep(0.9, 2.2, time))
         guard alpha > 0.002 else { return }
         let radius = unit * (0.015 + 0.045 * appear + 0.03 * spread)
+        let softness = 0.6 + 4 * spread
         let path = inkWashBlot(cx: cx, cy: cy, radius: radius, seed: 9, wobble: 0.14)
         let gradient = Gradient(colors: [InkWashPalette.ink.opacity(alpha), InkWashPalette.ink.opacity(alpha * 0.65)])
-        context.drawLayer { layer in
-            layer.addFilter(.blur(radius: CGFloat(0.6 + 4 * spread)))
+        var bounded = context
+        bounded.clip(to: inkWashLayerBounds(cx: cx, cy: cy, reach: radius * 1.15 + 2 + softness * 3))
+        bounded.drawLayer { layer in
+            layer.addFilter(.blur(radius: CGFloat(softness)))
             layer.fill(
                 path,
                 with: .radialGradient(gradient, center: CGPoint(x: cx, y: cy), startRadius: 0, endRadius: CGFloat(radius * 1.1))
@@ -757,6 +790,13 @@ private enum InkWashBurstRenderer {
             }
         }
     }
+}
+
+/// One ring of the blooming wash, gathered so all rings can share a single blurred layer.
+private struct InkWashBurstWash {
+    let path: Path
+    let alpha: Double
+    let edgeWidth: Double
 }
 
 // MARK: - Letter paper pieces

@@ -3,17 +3,25 @@ import UIKit
 
 /// An asynchronously loaded thumbnail that fills (and is clipped to) its frame.
 /// Photos and videos show their picture (videos with a small play badge);
-/// voice notes show a waveform on the style's signature gradient.
+/// voice notes show a waveform on the style's accent, tinted by its signature gradient.
 struct MediaThumbnailView: View {
     private let url: URL
     private let kind: MediaKind
+    private let maxPixelSize: CGFloat
 
     @State private var image: UIImage?
-    @State private var imageURL: URL?
+    @State private var loadedRequest: MediaThumbnailRequest?
 
-    init(url: URL, kind: MediaKind) {
+    /// - Parameter maxPixelSize: the longest side, in pixels, the decoded picture needs.
+    ///   Small grid tiles can ask for less to save memory and decoding time.
+    init(url: URL, kind: MediaKind, maxPixelSize: CGFloat = 600) {
         self.url = url
         self.kind = kind
+        self.maxPixelSize = maxPixelSize
+    }
+
+    private var request: MediaThumbnailRequest {
+        MediaThumbnailRequest(url: url, maxPixelSize: maxPixelSize)
     }
 
     private var accessibilityName: Text {
@@ -30,8 +38,8 @@ struct MediaThumbnailView: View {
             .overlay { badge }
             .clipped()
             .contentShape(Rectangle())
-            .task(id: url) {
-                await loadThumbnail()
+            .task(id: request) {
+                await loadThumbnail(request)
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityName)
@@ -42,7 +50,7 @@ struct MediaThumbnailView: View {
     private var picture: some View {
         if kind == .audio {
             MediaThumbnailAudioFace()
-        } else if let image, imageURL == url {
+        } else if let image, loadedRequest == request {
             Image(uiImage: image)
                 .resizable()
                 .scaledToFill()
@@ -60,15 +68,21 @@ struct MediaThumbnailView: View {
         }
     }
 
-    private func loadThumbnail() async {
+    private func loadThumbnail(_ request: MediaThumbnailRequest) async {
         guard kind != .audio else { return }
-        let loaded = await MediaStore.thumbnail(for: url, kind: kind)
+        let loaded = await MediaStore.thumbnail(for: request.url, kind: kind, maxPixelSize: request.maxPixelSize)
         guard !Task.isCancelled else { return }
         withAnimation(.easeOut(duration: 0.3)) {
             image = loaded
-            imageURL = url
+            loadedRequest = request
         }
     }
+}
+
+/// What a thumbnail was decoded for; a new file or a new size loads it again.
+private struct MediaThumbnailRequest: Hashable {
+    let url: URL
+    let maxPixelSize: CGFloat
 }
 
 // MARK: - Faces
@@ -99,11 +113,15 @@ private struct MediaThumbnailAudioFace: View {
     var body: some View {
         ZStack {
             Rectangle()
+                .fill(theme.accent)
+            // Only a whisper of the signature gradient, so the glyph keeps at least
+            // 3:1 against the tile in every style (accentInk is made for accent).
+            Rectangle()
                 .fill(theme.linearGradient)
+                .opacity(0.2)
             Image(systemName: "waveform")
                 .font(.system(size: 26, weight: .regular))
-                .foregroundStyle(Color.white.opacity(0.95))
-                .shadow(color: Color.black.opacity(0.28), radius: 6, x: 0, y: 2)
+                .foregroundStyle(theme.accentInk)
         }
     }
 }

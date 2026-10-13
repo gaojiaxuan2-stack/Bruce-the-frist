@@ -522,6 +522,16 @@ private enum AuroraBurstPainter {
         )
     ]
 
+    /// Widths (× the ribbon's width) and opacities of the nested strokes that make a ribbon's glow.
+    /// Summed, they follow a Gaussian-blurred stroke of the ribbon's width (blur ≈ 0.45 × width).
+    private static let glowLayers: [(width: CGFloat, opacity: Double)] = [
+        (width: 2.7, opacity: 0.05),
+        (width: 2.15, opacity: 0.11),
+        (width: 1.6, opacity: 0.18),
+        (width: 1.1, opacity: 0.2),
+        (width: 0.6, opacity: 0.16)
+    ]
+
     static func draw(in context: inout GraphicsContext, size: CGSize, elapsed: Double, sweeps: Bool) {
         guard elapsed >= 0, elapsed < duration, size.width > 0, size.height > 0 else { return }
         var light = context
@@ -578,10 +588,17 @@ private enum AuroraBurstPainter {
             endPoint: end
         )
 
-        var veil = context
-        veil.opacity = envelope * 0.75
-        veil.addFilter(.blur(radius: ribbon.width * 0.45))
-        veil.stroke(path, with: shading, style: StrokeStyle(lineWidth: ribbon.width, lineCap: .round))
+        // The soft veil is built from a few nested strokes whose light adds up (plus-lighter)
+        // to the profile of a blurred stroke, so no offscreen blur pass runs every frame.
+        for layer in glowLayers {
+            var veil = context
+            veil.opacity = envelope * 0.75 * layer.opacity
+            veil.stroke(
+                path,
+                with: shading,
+                style: StrokeStyle(lineWidth: ribbon.width * layer.width, lineCap: .round, lineJoin: .round)
+            )
+        }
 
         var core = context
         core.opacity = envelope * 0.8

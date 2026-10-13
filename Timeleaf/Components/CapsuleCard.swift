@@ -214,7 +214,9 @@ struct CapsuleCard: View {
         case .draft:
             sentences.append(String(localized: "Draft"))
         }
-        return sentences.joined(separator: ". ")
+        // One phrase per line: VoiceOver pauses at each break, and no language-specific
+        // punctuation is glued between localized phrases.
+        return sentences.joined(separator: "\n")
     }
 }
 
