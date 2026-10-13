@@ -191,16 +191,20 @@ struct PackageHeader: Codable {
     var requiresPassphrase: Bool; var passphraseHint: String
     var salt: Data; var embeddedKey: Data?     // embeddedKey present only when no passphrase
 }
-enum CapsulePackageError: LocalizedError { case invalidFile, wrongPassphrase, stillSealed, corrupted, missingPackage }
+enum CapsulePackageError: LocalizedError { case invalidFile, wrongPassphrase, stillSealed, corrupted, missingPackage, tooLarge }
 enum CapsulePackage {
     static let fileExtension: String           // "timeleaf"
     static let contentType: UTType             // UTType(exportedAs: "com.timeleaf.capsule")
-    @MainActor static func export(_ capsule: TimeCapsule, passphrase: String?, hint: String) throws -> URL  // temp file "<Title>.timeleaf"
+    static let maxShareBytes: Int              // 300 MB – the most media one shared letter may carry
+    @MainActor static func export(_ capsule: TimeCapsule, passphrase: String?, hint: String) throws -> URL  // temp file "<Title>.timeleaf"; .tooLarge over maxShareBytes
     static func readHeader(from url: URL) throws -> PackageHeader
     @MainActor static func importPackage(from url: URL, into context: ModelContext) throws -> TimeCapsule
     @MainActor static func unpack(_ capsule: TimeCapsule, passphrase: String?, in context: ModelContext) throws
+    static func removeTemporaryFiles()         // leftover export copies + half-swapped inbox files; launch only
 }
 ```
+Do not `switch` exhaustively over `CapsulePackageError` (show `error.localizedDescription`; match single
+cases with `catch CapsulePackageError.stillSealed`).
 File format: `"TLEAF1"` (6 bytes) · UInt32 BE header length · header JSON (ISO-8601 dates) ·
 `AES.GCM` combined sealed box of the payload, **with the header bytes as authenticated data**
 (tampering with the unlock date breaks decryption). Payload = UInt32 BE manifest length ·
@@ -210,7 +214,11 @@ salt 16 B, 210 000 rounds, 32 B) via CommonCrypto, or a random 256-bit key store
 `importPackage` handles security-scoped URLs, copies the file into `MediaStore.inboxURL`,
 inserts an incoming `TimeCapsule` (`isIncoming = true`, `sealedAt`/`unlockDate`/theme/names from
 the header, `recipientKind = .someone`, empty message, `packageFileName` set) and saves; if a capsule with the
-same id already exists it returns that one. `unpack` throws `.stillSealed` before `unlockDate`,
+same id already exists it returns that one — and if that one is still waiting to be unpacked, the new file
+atomically replaces its stored package and refreshes its header fields (title, names, dates, theme, secret-word
+flag and hint) and arrival reminder. `export` sums the media file sizes before reading any media and throws
+`.tooLarge` above `maxShareBytes`; `readHeader`/`importPackage`/`unpack` reject files larger than
+`maxShareBytes` + 16 MB with `.invalidFile` before reading them. `unpack` throws `.stillSealed` before `unlockDate`,
 `.wrongPassphrase` on authentication failure; on success fills message/mood/prompt, writes media via
 `MediaStore`, creates `CapsuleMedia`, deletes the package file, clears `packageFileName`, saves.
 
@@ -218,7 +226,8 @@ same id already exists it returns that one. `unpack` throws `.stillSealed` befor
 ```swift
 enum NotificationScheduler {
     static func requestAuthorization() async -> Bool
-    static func schedule(capsuleID: UUID, title: String, unlockDate: Date, senderName: String, isIncoming: Bool, toSelf: Bool)
+    static func schedule(capsuleID: UUID, title: String, unlockDate: Date, senderName: String, isIncoming: Bool, toSelf: Bool,
+                         recipientName: String = "", sealedAt: Date? = nil)   // sealedAt: journey start (default now)
     static func cancel(capsuleID: UUID)
 }
 final class NotificationCenterDelegate: NSObject, UNUserNotificationCenterDelegate {
@@ -227,6 +236,7 @@ final class NotificationCenterDelegate: NSObject, UNUserNotificationCenterDelega
 }
 ```
 Notification `userInfo["capsuleID"] = uuidString`. Foreground notifications show as banners.
+Triggers carry the current calendar and time zone, so they fire at the absolute unlock instant.
 
 ### `Services/AppLock.swift`
 ```swift
@@ -247,8 +257,13 @@ Notification `userInfo["capsuleID"] = uuidString`. Foreground notifications show
     static func seal(_ capsule: TimeCapsule, in context: ModelContext) async  // sealedAt = now (if nil), insert if needed, save, request permission, schedule notification
     static func markOpened(_ capsule: TimeCapsule, in context: ModelContext)  // openedAt = now, save, cancel notification
     static func delete(_ capsule: TimeCapsule, in context: ModelContext)      // cancel notification, delete media + inbox package, delete model, save
+    static func rescheduleNotifications(in context: ModelContext) async     // never prompts; if allowed, re-schedules the soonest 30 sealed, unopened, future letters
+    static func removeOrphanedMedia(in context: ModelContext)               // once per launch: media folders / inbox packages of no capsule, export leftovers
 }
 ```
+`markOpened`/`delete`/`seal` ignore a model that is already deleted. `AppShell` calls `rescheduleNotifications`
+on every `.active` and `removeOrphanedMedia` from a root `.task`; `StylesView` calls `rescheduleNotifications`
+when notifications become allowed.
 
 ## Components (`Components/*.swift`)
 

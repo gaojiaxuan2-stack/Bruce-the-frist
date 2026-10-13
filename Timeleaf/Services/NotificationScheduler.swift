@@ -24,6 +24,8 @@ enum NotificationScheduler {
     /// Schedules the arrival notification (and, for long journeys of the author's own letters,
     /// a quiet halfway note). Replaces anything previously scheduled for this capsule.
     /// - Parameter recipientName: optional; lets the sender's copy say who the letter went to.
+    /// - Parameter sealedAt: optional; when the journey began (defaults to now). Pass it when
+    ///   rescheduling so the halfway note and "sealed … ago" stay true.
     static func schedule(
         capsuleID: UUID,
         title: String,
@@ -31,7 +33,8 @@ enum NotificationScheduler {
         senderName: String,
         isIncoming: Bool,
         toSelf: Bool,
-        recipientName: String = ""
+        recipientName: String = "",
+        sealedAt: Date? = nil
     ) {
         let center = UNUserNotificationCenter.current()
         let identifiers = notificationIdentifiers(for: capsuleID)
@@ -39,11 +42,12 @@ enum NotificationScheduler {
 
         let now = Date.now
         guard unlockDate > now else { return }
+        let start = min(sealedAt ?? now, now)
 
         let letterTitle = displayTitle(title)
         let sender = trimmed(senderName)
         let recipient = trimmed(recipientName)
-        let journey = journeyPhrase(from: now, to: unlockDate)
+        let journey = journeyPhrase(from: start, to: unlockDate)
 
         let arrival = makeRequest(
             identifier: arrivalIdentifier(for: capsuleID),
@@ -56,9 +60,10 @@ enum NotificationScheduler {
         center.add(arrival, withCompletionHandler: nil)
 
         // "Halfway" is measured from the moment of sealing, which only the author knows.
-        let duration = unlockDate.timeIntervalSince(now)
+        let duration = unlockDate.timeIntervalSince(start)
         guard !isIncoming, duration >= halfwayThreshold else { return }
-        let halfwayDate = now.addingTimeInterval(duration / 2)
+        let halfwayDate = start.addingTimeInterval(duration / 2)
+        guard halfwayDate > now.addingTimeInterval(60) else { return }
         let halfway = makeRequest(
             identifier: halfwayIdentifier(for: capsuleID),
             title: halfwayTitle(toSelf: toSelf, recipient: recipient),
@@ -183,10 +188,17 @@ extension NotificationScheduler {
         content.relevanceScore = relevance
         content.userInfo = [capsuleIDKey: capsuleID.uuidString]
 
-        let components = Calendar.current.dateComponents(
+        // Pin the absolute instant: floating components would be re-read in whatever time zone
+        // the device is in later. Rounded up so the knock never comes before the seal may break.
+        let fireInstant = Date(timeIntervalSinceReferenceDate: fireDate.timeIntervalSinceReferenceDate.rounded(.up))
+        var calendar = Calendar.current
+        calendar.timeZone = TimeZone.current
+        var components = calendar.dateComponents(
             [.year, .month, .day, .hour, .minute, .second],
-            from: fireDate
+            from: fireInstant
         )
+        components.calendar = calendar
+        components.timeZone = calendar.timeZone
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
         return UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
     }

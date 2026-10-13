@@ -43,6 +43,10 @@ struct AppShell: View {
         .onOpenURL { url in
             handleIncoming(url)
         }
+        .task {
+            // Once per launch, before any compose flow can exist.
+            CapsuleActions.removeOrphanedMedia(in: modelContext)
+        }
         .onChange(of: scenePhase, initial: true) { _, phase in
             // No cover on .inactive: system prompts (microphone, camera, notifications)
             // make the scene inactive mid-flow and must not flash the lock screen.
@@ -57,6 +61,8 @@ struct AppShell: View {
                 } else {
                     lockWindow.update(isLocked: false, appLock: appLock, theme: theme)
                 }
+                // Letters sealed while notifications were off still deserve their knock.
+                Task { await CapsuleActions.rescheduleNotifications(in: modelContext) }
             @unknown default:
                 break
             }

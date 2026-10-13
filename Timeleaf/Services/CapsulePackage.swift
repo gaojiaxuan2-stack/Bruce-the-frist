@@ -44,6 +44,7 @@ enum CapsulePackageError: LocalizedError {
     case stillSealed
     case corrupted
     case missingPackage
+    case tooLarge
 
     var errorDescription: String? {
         switch self {
@@ -57,6 +58,8 @@ enum CapsulePackageError: LocalizedError {
             return String(localized: "Part of this letter was lost along the way, so it can't be opened safely. Ask the sender to share it once more.")
         case .missingPackage:
             return String(localized: "The sealed letter can no longer be found on this device. Ask the sender to share it with you again.")
+        case .tooLarge:
+            return String(localized: "This letter is too large to share — try removing a long video.")
         }
     }
 }
@@ -66,6 +69,9 @@ enum CapsulePackageError: LocalizedError {
 enum CapsulePackage {
     static let fileExtension: String = "timeleaf"
     static let contentType: UTType = UTType(exportedAs: "com.timeleaf.capsule")
+    /// The most media (in bytes) one shared letter may carry. Export and unpacking hold the
+    /// whole letter in memory, so anything larger is refused up front.
+    static let maxShareBytes: Int = 300 * 1024 * 1024
 
     // Format constants
     private static let magic = Data("TLEAF1".utf8)
@@ -77,6 +83,13 @@ enum CapsulePackage {
     private static let pbkdf2Rounds: UInt32 = 210_000
     private static let minimumSealedBoxLength = 12 + 16   // nonce + tag
     private static var preambleLength: Int { magic.count + 4 }
+    /// Largest `.timeleaf` file we accept: the media cap plus room for the letter, header and seal.
+    private static let maxPackageBytes = maxShareBytes + 16 * 1024 * 1024
+    /// Suffix of a package being swapped into the inbox (see `removeTemporaryFiles`).
+    private static let stagingSuffix = ".partial"
+    private static var exportRootURL: URL {
+        FileManager.default.temporaryDirectory.appending(component: "TimeleafExports", directoryHint: .isDirectory)
+    }
 
     // MARK: Export
 
@@ -84,6 +97,10 @@ enum CapsulePackage {
     /// named after the letter so the share sheet shows something lovely.
     @MainActor
     static func export(_ capsule: TimeCapsule, passphrase: String?, hint: String) throws -> URL {
+        // Measure before reading a single byte of media.
+        guard totalMediaByteCount(of: capsule) <= maxShareBytes else {
+            throw CapsulePackageError.tooLarge
+        }
         let secretWord = normalizedPassphrase(passphrase)
         let salt = makeRandomData(size: .bits128)
 
@@ -126,6 +143,10 @@ enum CapsulePackage {
             throw CapsulePackageError.corrupted
         }
         guard let combined = sealedBox.combined else { throw CapsulePackageError.corrupted }
+        // Whatever we send must also be accepted on the other side.
+        guard preambleLength + headerData.count + combined.count <= maxPackageBytes else {
+            throw CapsulePackageError.tooLarge
+        }
 
         var preamble = CapsulePackageByteWriter()
         preamble.appendBytes(magic)
@@ -143,6 +164,8 @@ enum CapsulePackage {
     static func readHeader(from url: URL) throws -> PackageHeader {
         let isScoped = url.startAccessingSecurityScopedResource()
         defer { if isScoped { url.stopAccessingSecurityScopedResource() } }
+
+        guard isWithinPackageLimit(url) else { throw CapsulePackageError.invalidFile }
 
         let handle: FileHandle
         do {
@@ -179,13 +202,16 @@ enum CapsulePackage {
         let destination = MediaStore.inboxURL.appending(component: packageFileName, directoryHint: .notDirectory)
 
         if let existing = existingCapsule(id: capsuleID, in: context) {
-            // Restore a lost package for a letter that still waits to be opened.
-            if existing.isIncoming,
-               existing.packageFileName != nil,
-               !FileManager.default.fileExists(atPath: destination.path(percentEncoded: false)) {
-                try copyPackage(from: url, to: destination)
+            // A letter that still waits to be opened takes the freshly received package: it may
+            // repair a lost or damaged copy, or carry a different secret word.
+            if existing.isIncoming, existing.packageFileName != nil {
+                try replacePackage(at: destination, with: url)
                 existing.packageFileName = packageFileName
+                refresh(existing, from: header)
                 try? context.save()
+                discardSystemInboxCopy(at: url, wasSecurityScoped: isScoped)
+                scheduleArrivalReminder(for: existing)
+                return existing
             }
             discardSystemInboxCopy(at: url, wasSecurityScoped: isScoped)
             return existing
@@ -236,6 +262,7 @@ enum CapsulePackage {
         guard now >= capsule.unlockDate else { throw CapsulePackageError.stillSealed }
 
         let packageURL = MediaStore.inboxURL.appending(component: packageFileName, directoryHint: .notDirectory)
+        guard isWithinPackageLimit(packageURL) else { throw CapsulePackageError.invalidFile }
         let fileData: Data
         do {
             fileData = try Data(contentsOf: packageURL, options: .mappedIfSafe)
@@ -272,6 +299,22 @@ enum CapsulePackage {
             try? FileManager.default.removeItem(at: packageURL)
         } catch {
             // The context keeps the changes and autosaves later; the package stays as a backup.
+        }
+    }
+
+    // MARK: Housekeeping
+
+    /// Removes exported copies left in the temporary folder and half-swapped inbox packages.
+    /// Call only when no share sheet can be open (at launch).
+    static func removeTemporaryFiles() {
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: exportRootURL)
+        guard let items = try? fileManager.contentsOfDirectory(
+            at: MediaStore.inboxURL,
+            includingPropertiesForKeys: nil
+        ) else { return }
+        for item in items where item.lastPathComponent.hasSuffix(stagingSuffix) {
+            try? fileManager.removeItem(at: item)
         }
     }
 }
@@ -323,6 +366,18 @@ extension CapsulePackage {
         return writer.data
     }
 
+    /// Sum of the media file sizes on disk, read from file metadata only.
+    @MainActor
+    private static func totalMediaByteCount(of capsule: TimeCapsule) -> Int {
+        var total = 0
+        for item in capsule.media {
+            guard let url = MediaStore.url(for: item),
+                  let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else { continue }
+            total += size
+        }
+        return total
+    }
+
     @MainActor
     private static func exportSenderName(for capsule: TimeCapsule) -> String {
         let name = capsule.senderName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -333,8 +388,7 @@ extension CapsulePackage {
 
     private static func makeExportURL(title: String) throws -> URL {
         let fileManager = FileManager.default
-        let exportRoot = fileManager.temporaryDirectory
-            .appending(component: "TimeleafExports", directoryHint: .isDirectory)
+        let exportRoot = exportRootURL
         removeStaleExports(in: exportRoot)
 
         let folder = exportRoot.appending(component: UUID().uuidString, directoryHint: .isDirectory)
@@ -398,6 +452,13 @@ extension CapsulePackage {
 // MARK: - Private: reading and opening
 
 extension CapsulePackage {
+    /// `false` for files too large to be a letter we could have sent; unknown sizes pass
+    /// (the bounds-checked reader still guards everything that follows).
+    private static func isWithinPackageLimit(_ url: URL) -> Bool {
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else { return true }
+        return size <= maxPackageBytes
+    }
+
     /// Validates the magic and returns the header length the preamble announces.
     private static func headerLength(fromPreamble preamble: Data) throws -> Int {
         var reader = CapsulePackageByteReader(preamble, failure: .invalidFile)
@@ -532,6 +593,43 @@ extension CapsulePackage {
         } catch {
             throw CapsulePackageError.invalidFile
         }
+    }
+
+    /// Swaps a newly received package in for the stored one in a single step, so a failure
+    /// leaves the previous package untouched.
+    private static func replacePackage(at destination: URL, with source: URL) throws {
+        if source.standardizedFileURL == destination.standardizedFileURL { return }
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: destination.path(percentEncoded: false)) else {
+            try copyPackage(from: source, to: destination)
+            return
+        }
+        let staging = MediaStore.inboxURL.appending(
+            component: "\(UUID().uuidString)\(stagingSuffix)",
+            directoryHint: .notDirectory
+        )
+        do {
+            try fileManager.copyItem(at: source, to: staging)
+            _ = try fileManager.replaceItemAt(destination, withItemAt: staging)
+        } catch {
+            try? fileManager.removeItem(at: staging)
+            throw CapsulePackageError.invalidFile
+        }
+    }
+
+    /// The outside of the envelope comes from the newest package.
+    @MainActor
+    private static func refresh(_ capsule: TimeCapsule, from header: PackageHeader) {
+        capsule.title = header.title
+        capsule.senderName = header.senderName
+        capsule.recipientName = header.recipientName
+        capsule.unlockDate = header.unlockDate
+        capsule.sealedAt = header.sealedAt
+        if let theme = ThemeID(rawValue: header.themeRaw) {
+            capsule.theme = theme
+        }
+        capsule.requiresPassphrase = header.requiresPassphrase
+        capsule.passphraseHint = header.passphraseHint
     }
 
     /// "Open in Timeleaf" hands the app a private copy inside its own `Documents/Inbox`
