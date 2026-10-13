@@ -1,0 +1,3896 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@ ago" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@前"
+          }
+        }
+      }
+    },
+    "%@ chose it for you." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这是%@为你选的。"
+          }
+        }
+      }
+    },
+    "%@ may open it on %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@可在%2$@开启它。"
+          }
+        }
+      }
+    },
+    "%@ of the way" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已走过%@的路程"
+          }
+        }
+      }
+    },
+    "%@ will receive a sealed letter that can only be opened on %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@将收到一封封存的信，要到%2$@才能开启。"
+          }
+        }
+      }
+    },
+    "%@ · %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · %2$@"
+          }
+        }
+      }
+    },
+    "%lld letters are waiting to be opened" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有%lld封信等你开启"
+          }
+        }
+      }
+    },
+    "%lld letters have found their way back to you." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有%lld封信，寻路回到了你身边。"
+          }
+        }
+      }
+    },
+    "%lld letters travelling · next arrives %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld封信在路上 · 下一封%2$@抵达"
+          }
+        }
+      }
+    },
+    "%lld of %lld" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld / %2$lld"
+          }
+        }
+      }
+    },
+    "1 month" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一个月"
+          }
+        }
+      }
+    },
+    "1 year" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一年"
+          }
+        }
+      }
+    },
+    "10 years" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "十年"
+          }
+        }
+      }
+    },
+    "3 years" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "三年"
+          }
+        }
+      }
+    },
+    "5 years" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "五年"
+          }
+        }
+      }
+    },
+    "6 months" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "半年"
+          }
+        }
+      }
+    },
+    "A few words back across the years. They stay here, with the letter." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隔着岁月回几句话。它们会留在这里，与这封信相伴。"
+          }
+        }
+      }
+    },
+    "A gentle touch when seals press and break" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封印落下与碎裂时，轻轻一触"
+          }
+        }
+      }
+    },
+    "A hint only they would understand" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一个只有对方能懂的提示"
+          }
+        }
+      }
+    },
+    "A letter across time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一封穿越时光的信"
+          }
+        }
+      }
+    },
+    "A letter from %@ is ready to open" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@寄来的信，可以拆开了"
+          }
+        }
+      }
+    },
+    "A letter from your past has arrived" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一封来自过去的信，已经到了"
+          }
+        }
+      }
+    },
+    "A letter has found its way back to you." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有一封信，寻路回到了你身边。"
+          }
+        }
+      }
+    },
+    "A letter is waiting to be opened" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有一封信等你开启"
+          }
+        }
+      }
+    },
+    "A letter to %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写给%@的信"
+          }
+        }
+      }
+    },
+    "A letter to the person you are becoming." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一封信，写给你正在成为的那个人。"
+          }
+        }
+      }
+    },
+    "A sealed letter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一封封存的信"
+          }
+        }
+      }
+    },
+    "A secret word guards this letter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这封信有暗语守护"
+          }
+        }
+      }
+    },
+    "About Timeleaf · 时笺" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关于时笺"
+          }
+        }
+      }
+    },
+    "Add a secret word" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设置暗语"
+          }
+        }
+      }
+    },
+    "Allow" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许"
+          }
+        }
+      }
+    },
+    "Another prompt" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "换一个问题"
+          }
+        }
+      }
+    },
+    "Arrival" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "抵达"
+          }
+        }
+      }
+    },
+    "Arrival date" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "抵达日期"
+          }
+        }
+      }
+    },
+    "Arrival time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "抵达时间"
+          }
+        }
+      }
+    },
+    "Arrived %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@抵达"
+          }
+        }
+      }
+    },
+    "Arrived · waiting for you" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已抵达 · 等你开启"
+          }
+        }
+      }
+    },
+    "Arrives" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "抵达"
+          }
+        }
+      }
+    },
+    "Arrives %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@抵达"
+          }
+        }
+      }
+    },
+    "Arrives at" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "抵达时刻"
+          }
+        }
+      }
+    },
+    "Ask before anyone can see your letters" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在任何人看到你的信之前，先验证身份"
+          }
+        }
+      }
+    },
+    "Back" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "返回"
+          }
+        }
+      }
+    },
+    "Begin" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始"
+          }
+        }
+      }
+    },
+    "Begin with it" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以此开篇"
+          }
+        }
+      }
+    },
+    "Begins a new letter to the future" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始写一封寄往未来的信"
+          }
+        }
+      }
+    },
+    "Beyond here, the river is unwritten." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再往前，河流尚未写就。"
+          }
+        }
+      }
+    },
+    "Camera" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "相机"
+          }
+        }
+      }
+    },
+    "Cancel" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消"
+          }
+        }
+      }
+    },
+    "Choose its stationery" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为它挑选信纸"
+          }
+        }
+      }
+    },
+    "Choose the day these words find their way back." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选一个日子，让这些字句寻路而归。"
+          }
+        }
+      }
+    },
+    "Choose your paper" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选一张信纸"
+          }
+        }
+      }
+    },
+    "Close" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭"
+          }
+        }
+      }
+    },
+    "Continue" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续"
+          }
+        }
+      }
+    },
+    "Day" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "天"
+          }
+        }
+      }
+    },
+    "Days" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "天"
+          }
+        }
+      }
+    },
+    "Dear %@," : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "亲爱的%@："
+          }
+        }
+      }
+    },
+    "Dear %@…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "亲爱的%@……"
+          }
+        }
+      }
+    },
+    "Dear Future," : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "亲爱的未来："
+          }
+        }
+      }
+    },
+    "Dear future me," : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "亲爱的未来的我："
+          }
+        }
+      }
+    },
+    "Dear past me…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "亲爱的过去的我……"
+          }
+        }
+      }
+    },
+    "Delete" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除"
+          }
+        }
+      }
+    },
+    "Delete Forever" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "永久删除"
+          }
+        }
+      }
+    },
+    "Delete forever" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "永久删除"
+          }
+        }
+      }
+    },
+    "Delete letter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除信件"
+          }
+        }
+      }
+    },
+    "Delete this letter?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除这封信？"
+          }
+        }
+      }
+    },
+    "Describe the view from where you are sitting right now." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "描述一下此刻你坐着的地方，眼前是怎样的风景。"
+          }
+        }
+      }
+    },
+    "Describe your room as if to a stranger, a hundred years from now." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向一百年后的陌生人，描述一下你的房间。"
+          }
+        }
+      }
+    },
+    "Discard" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放弃"
+          }
+        }
+      }
+    },
+    "Discard this letter?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放弃这封信？"
+          }
+        }
+      }
+    },
+    "Done" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完成"
+          }
+        }
+      }
+    },
+    "Draft" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "草稿"
+          }
+        }
+      }
+    },
+    "Edit" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "编辑"
+          }
+        }
+      }
+    },
+    "Every letter has come home. Perhaps it is time to write another." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每一封信都已归来。也许，是时候再写一封了。"
+          }
+        }
+      }
+    },
+    "Every letter is a small act of faith in tomorrow." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每一封信，都是对明天的一次小小信任。"
+          }
+        }
+      }
+    },
+    "Every letter is dressed for its journey. Swipe to find the one that feels like you." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每封信都要为旅途换上衣裳。左右滑动，找到最像你的那一张。"
+          }
+        }
+      }
+    },
+    "Every letter keeps the paper it was written on. You can change yours any time." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每封信都会留住写下它的那张纸。你的信纸，随时可以更换。"
+          }
+        }
+      }
+    },
+    "Every letter needs someone waiting at the other end of time." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每一封信，都需要有人在时间的另一端等候。"
+          }
+        }
+      }
+    },
+    "Everything stays on this device. Shared letters are encrypted; the date is enforced by the app." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一切都只留在这台设备上。分享的信件经过加密；开启日期由本应用把关。"
+          }
+        }
+      }
+    },
+    "Face ID" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "面容 ID"
+          }
+        }
+      }
+    },
+    "Feeling calm" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "心境平和"
+          }
+        }
+      }
+    },
+    "Feeling cosy" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "温暖惬意"
+          }
+        }
+      }
+    },
+    "Feeling dreamy" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恍若梦中"
+          }
+        }
+      }
+    },
+    "Feeling happy" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "满心欢喜"
+          }
+        }
+      }
+    },
+    "Feeling hopeful" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "满怀希望"
+          }
+        }
+      }
+    },
+    "Feeling loved" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "被爱包围"
+          }
+        }
+      }
+    },
+    "Feeling tender" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "心头柔软"
+          }
+        }
+      }
+    },
+    "Feeling wistful" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有些怅惘"
+          }
+        }
+      }
+    },
+    "Folding your words…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在折起你的字句……"
+          }
+        }
+      }
+    },
+    "For %@ · sealed %@ ago" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "寄给%1$@ · 封存于%2$@前"
+          }
+        }
+      }
+    },
+    "For a friend, a love, a child — opened only on the day you choose." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写给朋友、爱人或孩子——只在你选定的那天开启。"
+          }
+        }
+      }
+    },
+    "For the person you are becoming." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "献给正在成为的你。"
+          }
+        }
+      }
+    },
+    "From" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "落款"
+          }
+        }
+      }
+    },
+    "From %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自%@"
+          }
+        }
+      }
+    },
+    "From %@ · sealed %@ ago" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自%1$@ · 封存于%2$@前"
+          }
+        }
+      }
+    },
+    "From your past self · sealed %@ ago" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自过去的你 · 封存于%@前"
+          }
+        }
+      }
+    },
+    "Future Me" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未来的我"
+          }
+        }
+      }
+    },
+    "Gathering…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在收集……"
+          }
+        }
+      }
+    },
+    "Give this letter a name" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "给这封信起个名字"
+          }
+        }
+      }
+    },
+    "Good afternoon" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下午好"
+          }
+        }
+      }
+    },
+    "Good afternoon, %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下午好，%@"
+          }
+        }
+      }
+    },
+    "Good evening" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "晚上好"
+          }
+        }
+      }
+    },
+    "Good evening, %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "晚上好，%@"
+          }
+        }
+      }
+    },
+    "Good morning" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "早上好"
+          }
+        }
+      }
+    },
+    "Good morning, %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "早上好，%@"
+          }
+        }
+      }
+    },
+    "Haptics" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "触感反馈"
+          }
+        }
+      }
+    },
+    "Hint" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提示"
+          }
+        }
+      }
+    },
+    "Hint · %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提示 · %@"
+          }
+        }
+      }
+    },
+    "Horizon" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "天际"
+          }
+        }
+      }
+    },
+    "Hour" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "小时"
+          }
+        }
+      }
+    },
+    "Hours" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "小时"
+          }
+        }
+      }
+    },
+    "How does today feel?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今天，感觉如何？"
+          }
+        }
+      }
+    },
+    "How your letters are signed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的信将以此署名"
+          }
+        }
+      }
+    },
+    "If today had a colour, which would it be?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "如果今天有颜色，会是哪一种？"
+          }
+        }
+      }
+    },
+    "In transit" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在途中"
+          }
+        }
+      }
+    },
+    "In use" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用中"
+          }
+        }
+      }
+    },
+    "It is still on its way — this letter cannot be opened yet." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它仍在路上——这封信暂时还无法开启。"
+          }
+        }
+      }
+    },
+    "It rests in your vault now, travelling quietly toward that day." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它已安放在你的信匣里，正静静地走向那一天。"
+          }
+        }
+      }
+    },
+    "It sounds just like 时间 — time.\n笺 is the fine paper a letter is written on." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "念起来，正是“时间”。\n笺，是用来写信的雅致纸张。"
+          }
+        }
+      }
+    },
+    "It will never arrive. Its words and memories will be gone for good." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它将永远不会抵达。信中的字句与回忆，都会永远消失。"
+          }
+        }
+      }
+    },
+    "It will wait until %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它会一直等到%@。"
+          }
+        }
+      }
+    },
+    "It's time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时候到了"
+          }
+        }
+      }
+    },
+    "It's time. Ready to open." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时候到了，可以开启了。"
+          }
+        }
+      }
+    },
+    "It’s time." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时候到了。"
+          }
+        }
+      }
+    },
+    "Journey" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "旅程"
+          }
+        }
+      }
+    },
+    "Keep It" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保留"
+          }
+        }
+      }
+    },
+    "Keep as prompt" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "附上此问"
+          }
+        }
+      }
+    },
+    "Keep holding…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "别松手……"
+          }
+        }
+      }
+    },
+    "Keep this reply" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "留下这封回信"
+          }
+        }
+      }
+    },
+    "Keep writing" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续写"
+          }
+        }
+      }
+    },
+    "Kept as prompt" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已附上此问"
+          }
+        }
+      }
+    },
+    "Kept inside" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "信中珍藏"
+          }
+        }
+      }
+    },
+    "Kept safe until it arrives." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在它抵达之前，会被妥善保管。"
+          }
+        }
+      }
+    },
+    "Know the moment a letter can be opened" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "信可以开启的那一刻，第一时间知道"
+          }
+        }
+      }
+    },
+    "Letter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "信件正文"
+          }
+        }
+      }
+    },
+    "Letters" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "信件"
+          }
+        }
+      }
+    },
+    "Letters still on their way" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍在路上的信"
+          }
+        }
+      }
+    },
+    "Listen" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "试听"
+          }
+        }
+      }
+    },
+    "Loading" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在载入"
+          }
+        }
+      }
+    },
+    "Lock with %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用%@锁定"
+          }
+        }
+      }
+    },
+    "Locked with your secret word: only someone who knows it can open the letter, and Timeleaf keeps it closed until %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已用你的暗语上锁：只有知道它的人才能打开这封信，而时笺会让它一直封存到%@。"
+          }
+        }
+      }
+    },
+    "Looking back at today, what will you be grateful for?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回望今天，你会感激什么？"
+          }
+        }
+      }
+    },
+    "Memories" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回忆"
+          }
+        }
+      }
+    },
+    "Memories are optional — a letter can travel alone." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回忆并非必需——一封信也可以独自启程。"
+          }
+        }
+      }
+    },
+    "Minute" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分钟"
+          }
+        }
+      }
+    },
+    "Minutes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分钟"
+          }
+        }
+      }
+    },
+    "Mood %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "心情：%@"
+          }
+        }
+      }
+    },
+    "More" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更多"
+          }
+        }
+      }
+    },
+    "Need a spark?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要一点灵感吗？"
+          }
+        }
+      }
+    },
+    "News of spring, pressed between pages." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一缕春信，夹在书页之间。"
+          }
+        }
+      }
+    },
+    "Next New Year's Day" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "明年元旦"
+          }
+        }
+      }
+    },
+    "Next arrival" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下一封抵达"
+          }
+        }
+      }
+    },
+    "No peeking" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不许偷看"
+          }
+        }
+      }
+    },
+    "No sample letter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有示例信件"
+          }
+        }
+      }
+    },
+    "No words this time — only what was kept inside." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这一回没有文字——只有收藏在信里的点滴。"
+          }
+        }
+      }
+    },
+    "Not even you can open it before the day arrives." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "那一天到来之前，连你自己也打不开它。"
+          }
+        }
+      }
+    },
+    "Not now" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂不"
+          }
+        }
+      }
+    },
+    "Not yet — this letter is still travelling through time. It will open on the day it was meant for." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还未到时候——这封信仍在时光中跋涉，会在属于它的那一天开启。"
+          }
+        }
+      }
+    },
+    "Not yet — 还未到时候" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还未到时候"
+          }
+        }
+      }
+    },
+    "Nothing is travelling right now — the river is calm." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此刻没有信在路上——河面风平浪静。"
+          }
+        }
+      }
+    },
+    "Nothing is travelling yet." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有信在路上。"
+          }
+        }
+      }
+    },
+    "Nothing sealed yet" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没有封存的信"
+          }
+        }
+      }
+    },
+    "Nothing tucked in yet" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还什么都没放进来"
+          }
+        }
+      }
+    },
+    "Notifications" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通知"
+          }
+        }
+      }
+    },
+    "Now" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此刻"
+          }
+        }
+      }
+    },
+    "OK" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "好"
+          }
+        }
+      }
+    },
+    "Off — turn them on in Settings" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已关闭——请在“设置”中打开"
+          }
+        }
+      }
+    },
+    "On" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已打开"
+          }
+        }
+      }
+    },
+    "On — you'll know the moment a letter can be opened" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已打开——信可以开启的那一刻，你就会知道"
+          }
+        }
+      }
+    },
+    "Once sealed, no one — not even you — can open it before %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一旦封存，在%@之前，谁都无法开启——包括你自己。"
+          }
+        }
+      }
+    },
+    "One letter travelling · arrives %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一封信在路上 · %@抵达"
+          }
+        }
+      }
+    },
+    "Only someone who knows it can open the letter." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只有知道暗语的人，才能打开这封信。"
+          }
+        }
+      }
+    },
+    "Open" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开"
+          }
+        }
+      }
+    },
+    "Open Settings" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开设置"
+          }
+        }
+      }
+    },
+    "Open a letter file" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开信件文件"
+          }
+        }
+      }
+    },
+    "Open envelope" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已拆开的信封"
+          }
+        }
+      }
+    },
+    "Open your letter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开你的信"
+          }
+        }
+      }
+    },
+    "Opened" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已开启"
+          }
+        }
+      }
+    },
+    "Opened %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@开启"
+          }
+        }
+      }
+    },
+    "Opened on %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启于%@"
+          }
+        }
+      }
+    },
+    "Opens" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启"
+          }
+        }
+      }
+    },
+    "Opens %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@开启"
+          }
+        }
+      }
+    },
+    "Opens full screen" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以全屏打开"
+          }
+        }
+      }
+    },
+    "Opens in %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@后开启"
+          }
+        }
+      }
+    },
+    "Opens on %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将于%@开启"
+          }
+        }
+      }
+    },
+    "Opens the letter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开这封信"
+          }
+        }
+      }
+    },
+    "Optic ID" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Optic ID"
+          }
+        }
+      }
+    },
+    "Page %lld of %lld" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第%1$lld页，共%2$lld页"
+          }
+        }
+      }
+    },
+    "Part of this letter was lost along the way, so it can't be opened safely. Ask the sender to share it once more." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这封信有一部分在途中遗失了，无法安全开启。请让寄信人再分享一次。"
+          }
+        }
+      }
+    },
+    "Passcode" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "密码"
+          }
+        }
+      }
+    },
+    "Past Me" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "过去的我"
+          }
+        }
+      }
+    },
+    "Pause" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂停"
+          }
+        }
+      }
+    },
+    "Pause voice note" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂停语音留言"
+          }
+        }
+      }
+    },
+    "Photo" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "照片"
+          }
+        }
+      }
+    },
+    "Photos" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "照片"
+          }
+        }
+      }
+    },
+    "Photos & videos" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "照片与视频"
+          }
+        }
+      }
+    },
+    "Play voice note" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "播放语音留言"
+          }
+        }
+      }
+    },
+    "Plays full screen" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以全屏播放"
+          }
+        }
+      }
+    },
+    "Precise as a clock. Quiet as a promise." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "准如钟表，静如诺言。"
+          }
+        }
+      }
+    },
+    "Preferences" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "偏好"
+          }
+        }
+      }
+    },
+    "Prepare letter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "准备信件"
+          }
+        }
+      }
+    },
+    "Preparing…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在准备……"
+          }
+        }
+      }
+    },
+    "Press and hold the seal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "长按封印"
+          }
+        }
+      }
+    },
+    "Press and hold to break the seal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "长按以启封"
+          }
+        }
+      }
+    },
+    "Press and hold to seal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "长按封存"
+          }
+        }
+      }
+    },
+    "Press and hold to seal the letter." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "长按以封存这封信。"
+          }
+        }
+      }
+    },
+    "Read, remembered, kept." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读过，记着，珍藏着。"
+          }
+        }
+      }
+    },
+    "Ready" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可开启"
+          }
+        }
+      }
+    },
+    "Ready to open" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可以开启了"
+          }
+        }
+      }
+    },
+    "Ready to seal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "准备封存"
+          }
+        }
+      }
+    },
+    "Ready to tuck in" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可以放进信里了"
+          }
+        }
+      }
+    },
+    "Ready. Send it by Messages, Mail or AirDrop — or keep it in Files." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "准备好了。用信息、邮件或隔空投送寄出——也可以存放在“文件”中。"
+          }
+        }
+      }
+    },
+    "Receive a .timeleaf someone sent you" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接收别人寄给你的 .timeleaf 文件"
+          }
+        }
+      }
+    },
+    "Received" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来信"
+          }
+        }
+      }
+    },
+    "Recipient" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收信人"
+          }
+        }
+      }
+    },
+    "Remove" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除"
+          }
+        }
+      }
+    },
+    "Save" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存"
+          }
+        }
+      }
+    },
+    "Save for later" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "稍后再写"
+          }
+        }
+      }
+    },
+    "Say hello to whoever opens this — a laugh, a song, the rain outside." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向打开这封信的人问声好——一声笑、一首歌、窗外的雨。"
+          }
+        }
+      }
+    },
+    "Seal" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封缄"
+          }
+        }
+      }
+    },
+    "Seal a letter and watch it drift toward the day it may be opened." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封存一封信，看它漂向可以开启的那一天。"
+          }
+        }
+      }
+    },
+    "Seal a moment" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封存此刻"
+          }
+        }
+      }
+    },
+    "Seal a voice, a photo, a few honest lines — and choose the day they may be opened." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封存一段声音、一张照片、几行真心话——再选一个可以开启它们的日子。"
+          }
+        }
+      }
+    },
+    "Seal the letter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封存这封信"
+          }
+        }
+      }
+    },
+    "Sealed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已封存"
+          }
+        }
+      }
+    },
+    "Sealed envelope" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封缄的信封"
+          }
+        }
+      }
+    },
+    "Sealed for %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已为%@封存"
+          }
+        }
+      }
+    },
+    "Sealed in wax, kept by time." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "火漆封缄，岁月珍藏。"
+          }
+        }
+      }
+    },
+    "Sealed letter to %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封存的信，致%@"
+          }
+        }
+      }
+    },
+    "Sealed on %@ · travelling for %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封存于%1$@ · 已在途中%2$@"
+          }
+        }
+      }
+    },
+    "Sealed on %@, %@ ago." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封存于%1$@，距今已有%2$@。"
+          }
+        }
+      }
+    },
+    "Sealed · 封存中" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封存中"
+          }
+        }
+      }
+    },
+    "Sealed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封好了。"
+          }
+        }
+      }
+    },
+    "Sealed. Opens %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已封存，%@开启"
+          }
+        }
+      }
+    },
+    "Sealing…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在封存……"
+          }
+        }
+      }
+    },
+    "Second" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "秒"
+          }
+        }
+      }
+    },
+    "Seconds" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "秒"
+          }
+        }
+      }
+    },
+    "Secret word" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暗语"
+          }
+        }
+      }
+    },
+    "See you on %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "那就%@见。"
+          }
+        }
+      }
+    },
+    "Send a letter further" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "把信寄得更远"
+          }
+        }
+      }
+    },
+    "Send it through time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "寄往时光彼岸"
+          }
+        }
+      }
+    },
+    "Send the letter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "寄出这封信"
+          }
+        }
+      }
+    },
+    "Sent to you by someone dear." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "由挂念你的人寄来。"
+          }
+        }
+      }
+    },
+    "Settings" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设置"
+          }
+        }
+      }
+    },
+    "Share the letter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分享这封信"
+          }
+        }
+      }
+    },
+    "Share with %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分享给%@"
+          }
+        }
+      }
+    },
+    "Show all %lld" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示全部%lld封"
+          }
+        }
+      }
+    },
+    "Show fewer" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收起"
+          }
+        }
+      }
+    },
+    "Shows the sealed letter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看这封封存的信"
+          }
+        }
+      }
+    },
+    "Skip" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳过"
+          }
+        }
+      }
+    },
+    "Skip for now" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时跳过"
+          }
+        }
+      }
+    },
+    "So every letter here is a leaf of time:\nwritten today, sealed with care,\nand opened only when its day arrives." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所以这里的每一封信，都是一页时光：\n写于今日，郑重封存，\n只在属于它的那天开启。"
+          }
+        }
+      }
+    },
+    "Some memories couldn't be added." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有些回忆没能添加进来。"
+          }
+        }
+      }
+    },
+    "Someone dear" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "珍视的人"
+          }
+        }
+      }
+    },
+    "Start recording" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始录音"
+          }
+        }
+      }
+    },
+    "Stationery" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "信纸"
+          }
+        }
+      }
+    },
+    "Still awake, %@?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@，还没睡吗？"
+          }
+        }
+      }
+    },
+    "Still awake?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还没睡吗？"
+          }
+        }
+      }
+    },
+    "Still on their way — soonest first." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍在路上——最先抵达的排在前面。"
+          }
+        }
+      }
+    },
+    "Stop recording" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止录音"
+          }
+        }
+      }
+    },
+    "Style" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "风格"
+          }
+        }
+      }
+    },
+    "Styles" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "风格"
+          }
+        }
+      }
+    },
+    "Take your time. The future is a patient reader." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "慢慢写。未来是个耐心的读者。"
+          }
+        }
+      }
+    },
+    "Tap the envelope" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点信封"
+          }
+        }
+      }
+    },
+    "Tap to finish" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点结束"
+          }
+        }
+      }
+    },
+    "Tap to record" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点录音"
+          }
+        }
+      }
+    },
+    "Tell them the word your own way. It isn't case-sensitive, and it can't be recovered if forgotten." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用你自己的方式把暗语告诉对方。暗语不区分大小写，一旦遗忘便无法找回。"
+          }
+        }
+      }
+    },
+    "That secret word doesn't open this letter. Try again — the hint might help." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个暗语打不开这封信。再试一次吧——提示或许能帮上忙。"
+          }
+        }
+      }
+    },
+    "The day has come · 时候到了" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "约定之日"
+          }
+        }
+      }
+    },
+    "The journey" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "旅程"
+          }
+        }
+      }
+    },
+    "The letter you sent can now be opened" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你寄出的信，现在可以开启了"
+          }
+        }
+      }
+    },
+    "The letter you sent to %@ can now be opened" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你寄给%@的信，现在可以开启了"
+          }
+        }
+      }
+    },
+    "The letter, its memories and your reply will be gone for good." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这封信、信中的回忆和你的回信，都将永远消失。"
+          }
+        }
+      }
+    },
+    "The question you answered" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你回答过的问题"
+          }
+        }
+      }
+    },
+    "The river is still." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "河面一片静谧。"
+          }
+        }
+      }
+    },
+    "The river of time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时间之河"
+          }
+        }
+      }
+    },
+    "The sealed letter can no longer be found on this device. Ask the sender to share it with you again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在这台设备上已找不到这封封存的信。请让寄信人再分享给你一次。"
+          }
+        }
+      }
+    },
+    "The wait is over." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待结束了。"
+          }
+        }
+      }
+    },
+    "Their name" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对方的名字"
+          }
+        }
+      }
+    },
+    "This doesn't seem to be a Timeleaf letter, or it was creased on its way to you. Ask the sender to share it once more." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这似乎不是一封时笺的信，或是在寄来的路上被折损了。请让寄信人再分享一次。"
+          }
+        }
+      }
+    },
+    "This is how your letter will be signed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的信将以此落款。"
+          }
+        }
+      }
+    },
+    "This letter is too large to share — try removing a long video." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这封信太大，无法分享——试着移除一段较长的视频。"
+          }
+        }
+      }
+    },
+    "This letter will travel for %@ — arriving on %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这封信将在路上走%1$@——于%2$@抵达。"
+          }
+        }
+      }
+    },
+    "Timeleaf" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时笺"
+          }
+        }
+      }
+    },
+    "Timeleaf Letter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一封时笺"
+          }
+        }
+      }
+    },
+    "Timeleaf is locked" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时笺已锁定"
+          }
+        }
+      }
+    },
+    "Timeleaf needs the microphone to keep your voice." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时笺需要使用麦克风，才能留住你的声音。"
+          }
+        }
+      }
+    },
+    "Title" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标题"
+          }
+        }
+      }
+    },
+    "To" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "致"
+          }
+        }
+      }
+    },
+    "To %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "致%@"
+          }
+        }
+      }
+    },
+    "To %@ · From %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "致%1$@ · 来自%2$@"
+          }
+        }
+      }
+    },
+    "To %@ · from %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "致%1$@ · 来自%2$@"
+          }
+        }
+      }
+    },
+    "To %@, from %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "致%1$@，来自%2$@"
+          }
+        }
+      }
+    },
+    "To whom?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写给谁？"
+          }
+        }
+      }
+    },
+    "Touch ID" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "触控 ID"
+          }
+        }
+      }
+    },
+    "Travelling" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在途中"
+          }
+        }
+      }
+    },
+    "Try again" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再试一次"
+          }
+        }
+      }
+    },
+    "Try to open it" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "试着打开它"
+          }
+        }
+      }
+    },
+    "Tuck in what words can't hold — today's light, a song you love, your voice saying hello." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放进文字装不下的东西——今天的光、一首你爱的歌、你问候的声音。"
+          }
+        }
+      }
+    },
+    "Unfolding the package…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在展开信件……"
+          }
+        }
+      }
+    },
+    "Unlock" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解锁"
+          }
+        }
+      }
+    },
+    "Unlock Timeleaf to read your letters." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解锁时笺，阅读你的信。"
+          }
+        }
+      }
+    },
+    "Untitled letter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无题的信"
+          }
+        }
+      }
+    },
+    "Up to five minutes" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最长五分钟"
+          }
+        }
+      }
+    },
+    "Use %@ to return to your letters." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用%@，回到你的信件中。"
+          }
+        }
+      }
+    },
+    "Vault" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "信匣"
+          }
+        }
+      }
+    },
+    "Version %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "版本 %@"
+          }
+        }
+      }
+    },
+    "Video" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "视频"
+          }
+        }
+      }
+    },
+    "Videos" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "视频"
+          }
+        }
+      }
+    },
+    "Voice note" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "语音留言"
+          }
+        }
+      }
+    },
+    "Voices" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "声音"
+          }
+        }
+      }
+    },
+    "What are you afraid of, and what would you tell that fear?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你在害怕什么？你想对那份害怕说些什么？"
+          }
+        }
+      }
+    },
+    "What are you learning, slowly?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你正在慢慢学会什么？"
+          }
+        }
+      }
+    },
+    "What are you proud of that nobody noticed?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有什么事让你骄傲，却没有人注意到？"
+          }
+        }
+      }
+    },
+    "What do you believe now that you hope you still believe?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此刻你相信的事里，哪些是你希望将来依然相信的？"
+          }
+        }
+      }
+    },
+    "What do you hope hasn't changed?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你希望什么还没有改变？"
+          }
+        }
+      }
+    },
+    "What do you hope you will have let go of?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你希望到那时，自己已经放下了什么？"
+          }
+        }
+      }
+    },
+    "What do you want to forgive yourself for?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你想原谅自己什么？"
+          }
+        }
+      }
+    },
+    "What do you want to remember about the people around you?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关于身边的人，你想记住些什么？"
+          }
+        }
+      }
+    },
+    "What does an ordinary Tuesday look like for you?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你寻常的一个星期二，是什么样子？"
+          }
+        }
+      }
+    },
+    "What is the weather like — outside, and inside?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "天气如何——窗外的，和心里的？"
+          }
+        }
+      }
+    },
+    "What should we call you?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该怎么称呼你？"
+          }
+        }
+      }
+    },
+    "What small thing made you smile today?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今天，有什么小事让你笑了？"
+          }
+        }
+      }
+    },
+    "What smells like home to you right now?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此刻，什么气味让你想起家？"
+          }
+        }
+      }
+    },
+    "What would you do with one completely free day?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "如果有一整天完全属于你，你会怎么过？"
+          }
+        }
+      }
+    },
+    "What would you like to ask the one reading this?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你想问读信的人什么？"
+          }
+        }
+      }
+    },
+    "What would you tell the you of one year ago?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你想对一年前的自己说些什么？"
+          }
+        }
+      }
+    },
+    "What you seal today, you will open as someone new." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今天封存的，将由一个崭新的你来开启。"
+          }
+        }
+      }
+    },
+    "When should it arrive?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它该在何时抵达？"
+          }
+        }
+      }
+    },
+    "Where the brush rests, the mist begins." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "笔歇之处，烟岚始生。"
+          }
+        }
+      }
+    },
+    "Which dream are you quietly carrying?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你正悄悄怀揣着哪一个梦？"
+          }
+        }
+      }
+    },
+    "Which promise do you want your future self to keep?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你希望未来的自己守住哪一个承诺？"
+          }
+        }
+      }
+    },
+    "Which song is on repeat these days?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近单曲循环的是哪首歌？"
+          }
+        }
+      }
+    },
+    "Who do you miss right now, and why?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此刻你在想念谁？为什么？"
+          }
+        }
+      }
+    },
+    "Who made your life lighter this month?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个月，是谁让你的日子轻盈了一些？"
+          }
+        }
+      }
+    },
+    "Without a secret word, it's Timeleaf — not the encryption — that keeps the date. Add one to lock it for real." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有暗语时，守住日期的是时笺，而不是加密。加上暗语，才算真正上锁。"
+          }
+        }
+      }
+    },
+    "Words" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文字"
+          }
+        }
+      }
+    },
+    "Words, photos, voices and videos" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文字、照片、声音与视频"
+          }
+        }
+      }
+    },
+    "Words, photos, your voice, a few seconds of video — folded into one letter and sealed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文字、照片、你的声音、几秒钟的影像——折进同一封信里，就此封存。"
+          }
+        }
+      }
+    },
+    "Write" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "书写"
+          }
+        }
+      }
+    },
+    "Write a letter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写一封信"
+          }
+        }
+      }
+    },
+    "Write back to %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回信给%@"
+          }
+        }
+      }
+    },
+    "Write back to your past self" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "给过去的自己回信"
+          }
+        }
+      }
+    },
+    "Write to the person you are becoming." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写给你正在成为的那个人。"
+          }
+        }
+      }
+    },
+    "Write to the person you will be. Choose a day, seal it, and let time carry it there." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写给将来的自己。选一个日子，封存它，让时间把它送达。"
+          }
+        }
+      }
+    },
+    "Write your first letter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写下第一封信"
+          }
+        }
+      }
+    },
+    "Write your first letter to the future." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "给未来写下第一封信吧。"
+          }
+        }
+      }
+    },
+    "Written %@ ago — on %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写于%1$@前——%2$@"
+          }
+        }
+      }
+    },
+    "Written in the stars, opened in their time." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "书于星河，启于其时。"
+          }
+        }
+      }
+    },
+    "Year" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "年"
+          }
+        }
+      }
+    },
+    "Years" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "年"
+          }
+        }
+      }
+    },
+    "Your initials become your seal." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你名字的首字，会成为你的印章。"
+          }
+        }
+      }
+    },
+    "Your letter" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的信"
+          }
+        }
+      }
+    },
+    "Your letter is halfway through its journey" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的信已走过一半旅程"
+          }
+        }
+      }
+    },
+    "Your letter to %@ is halfway there" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你写给%@的信，已行至半途"
+          }
+        }
+      }
+    },
+    "Your letters are resting, safe and unread." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的信正安然栖息，无人翻阅。"
+          }
+        }
+      }
+    },
+    "Your name" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的名字"
+          }
+        }
+      }
+    },
+    "Your vault is quiet." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的信匣还很安静。"
+          }
+        }
+      }
+    },
+    "Your words and the memories you added will be erased." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你写下的文字和添加的回忆都将被抹去。"
+          }
+        }
+      }
+    },
+    "Your words are travelling quietly through time." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的字句，正静静穿行于时光之中。"
+          }
+        }
+      }
+    },
+    "Your words, held in drifting northern light." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的字句，安放在流转的极光里。"
+          }
+        }
+      }
+    },
+    "^[%lld memory](inflect: true)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld份回忆"
+          }
+        }
+      }
+    },
+    "^[%lld word](inflect: true)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "共%lld字"
+          }
+        }
+      }
+    },
+    "a %@ %@ in %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%3$@里的一个%1$@%2$@"
+          }
+        }
+      }
+    },
+    "a little while" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "片刻"
+          }
+        }
+      }
+    },
+    "afternoon" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "午后"
+          }
+        }
+      }
+    },
+    "evening" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "晚上"
+          }
+        }
+      }
+    },
+    "for %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "寄给%@"
+          }
+        }
+      }
+    },
+    "from %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自%@"
+          }
+        }
+      }
+    },
+    "in %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@后"
+          }
+        }
+      }
+    },
+    "in a moment" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "片刻后"
+          }
+        }
+      }
+    },
+    "just now" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刚刚"
+          }
+        }
+      }
+    },
+    "less than a minute" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不到一分钟"
+          }
+        }
+      }
+    },
+    "morning" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上午"
+          }
+        }
+      }
+    },
+    "night" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "夜里"
+          }
+        }
+      }
+    },
+    "of %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最长%@"
+          }
+        }
+      }
+    },
+    "someone dear" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一位挂念你的人"
+          }
+        }
+      }
+    },
+    "— %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "——%@"
+          }
+        }
+      }
+    },
+    "“%@”" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”"
+          }
+        }
+      }
+    },
+    "“%@” and everything sealed inside it will be gone. This cannot be undone." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”及封存其中的一切都将消失。此操作无法撤销。"
+          }
+        }
+      }
+    },
+    "“%@” has finished its journey to you. Tap to break the seal." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”已走完来到你身边的旅程。轻点即可启封。"
+          }
+        }
+      }
+    },
+    "“%@” has reached the day you chose, %@ after you sealed it." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%1$@”已抵达你选定的日子，距你封存它已过去%2$@。"
+          }
+        }
+      }
+    },
+    "“%@” has reached the day you chose." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”已抵达你选定的日子。"
+          }
+        }
+      }
+    },
+    "“%@” is still sealed, drifting quietly toward %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%1$@”仍在封存中，正悄悄漂向%2$@。"
+          }
+        }
+      }
+    },
+    "“%@” — sealed %@ ago. Tap to break the seal." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%1$@”——封存于%2$@前。轻点即可启封。"
+          }
+        }
+      }
+    },
+    "“%@” — sealed moments ago. Tap to break the seal." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”——刚刚封存。轻点即可启封。"
+          }
+        }
+      }
+    },
+    "信 · Arrivals and reminders" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "抵达与提醒"
+          }
+        }
+      }
+    },
+    "偏好 · Small things, kept quietly" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "细微之处，静静安放"
+          }
+        }
+      }
+    },
+    "长按封印" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "见字如面"
+          }
+        }
+      }
+    },
+    "风格 · Choose the paper your days are written on" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选一张纸，书写你的日子"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}
