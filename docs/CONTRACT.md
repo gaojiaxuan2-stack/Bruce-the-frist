@@ -19,6 +19,9 @@ function is not listed here (or in an existing file under `Timeleaf/Core`,
 - No iOS 26-only APIs (no `glassEffect`, etc.). iOS 18 APIs (MeshGradient, `@Entry`,
   `onScrollGeometryChange`, `.containerRelativeFrame`, `phaseAnimator`, `keyframeAnimator`,
   `TimelineView`, `Canvas`, `.visualEffect`, `.scrollTransition`, `PhotosPicker`) are fine.
+- Text: use the theme's `display` / `body` / `label` fonts. They follow Dynamic Type (system-font
+  paths through `Theme.typeScale`, custom fonts through `relativeTo:`) and `AppShell` caps the whole
+  app at `...DynamicTypeSize.accessibility2`; do not add per-view font scaling.
 - Fonts: only fonts built into iOS (e.g. "Baskerville", "Georgia", "Didot", "Bodoni 72",
   "Cochin", "Snell Roundhand", "Savoye LET", "Hoefler Text", "Iowan Old Style",
   "Palatino", "Avenir Next", "Futura", "Gill Sans", "Optima", "Helvetica Neue", "Menlo",
@@ -68,13 +71,20 @@ Timeleaf/Features/Onboarding/  OnboardingView
 - `Core/Theme.swift`: `ThemeID` (6 cases, `.theme`), `Theme` tokens + `display(_:weight:)`,
   `body(_:weight:)`, `label(_:weight:)`, `linearGradient`; `@Environment(\.theme)`;
   `View.theme(_:)` (local subtree) and `View.screenTheme(_:)` (root of a screen/cover).
+  Fonts scale with Dynamic Type: `display` like `.title`, `body` like `.body`, `label` like `.footnote`.
+  `Theme.typeScale: (display: CGFloat, body: CGFloat, label: CGFloat)` (default `(1, 1, 1)`) is filled in
+  by `theme(_:)` / `screenTheme(_:)` from the environment's Dynamic Type size — never set it yourself.
 - `Core/Support.swift`: `SettingsKey` (`theme`, `userName`, `appLock`, `haptics`, `onboarded`),
   `AppTab` (`vault/horizon/styles`), `AppRouter` (@Observable: `selectedTab`,
   `presentedCapsuleID: UUID?`, `isComposing`, `alertMessage: String?`),
   `Color(hex:opacity:)`, `Date.adding(_:_:)`, `View.routerAlert(_ router: AppRouter)` (attach at the root of every full-screen cover).
 - `Core/PreviewData.swift`: `PreviewData.container` (in-memory, sample capsules).
-- `App/AppShell.swift`: applies `screenTheme`, gates `OnboardingView`, overlays
-  `LockScreenView` when `AppLock.isLocked`, imports `.timeleaf` URLs via `onOpenURL`.
+- `App/AppShell.swift`: applies `screenTheme` and caps Dynamic Type at `...DynamicTypeSize.accessibility2`,
+  gates `OnboardingView`, overlays `LockScreenView` when `AppLock.isLocked`, imports `.timeleaf` URLs via
+  `onOpenURL`. Each AppShell binds a `LockWindowController` (`App/LockWindowController.swift`) to its own
+  `UIWindowScene`; that window sits above every sheet and cover and shows `.veil` (style backdrop + seal; never
+  key, never touches the keyboard) while the scene is `.inactive` with the lock setting on, `.locked`
+  (`LockScreenView`, key, dismisses the keyboard) from `.background` while `AppLock.isLocked`, and `.hidden` otherwise.
 - `Themes/ThemeViews.swift`: dispatchers `ThemeBackground()`, `SealView(monogram:)`,
   `CeremonyBurst()`, `StationeryView()` — they switch on `theme.id` to the per-style views below.
 
@@ -147,6 +157,7 @@ enum MediaStore {
     func cancel()                               // stops and deletes the temp file
 }
 @MainActor @Observable final class AudioPlayback {
+    static func stopAll()                       // pauses whichever note is playing (call before a video plays)
     private(set) var isPlaying: Bool
     private(set) var progress: Double           // 0...1
     private(set) var duration: TimeInterval
@@ -156,6 +167,8 @@ enum MediaStore {
     func stop()
 }
 ```
+Only one `AudioPlayback` is audible at a time: starting one pauses the one that was playing.
+`VoiceRecorder.start()` calls `AudioPlayback.stopAll()` before it takes the microphone.
 
 ### `Services/MediaPickers.swift`
 ```swift
@@ -196,10 +209,10 @@ enum CapsulePackage {
     static let fileExtension: String           // "timeleaf"
     static let contentType: UTType             // UTType(exportedAs: "com.timeleaf.capsule")
     static let maxShareBytes: Int              // 300 MB – the most media one shared letter may carry
-    @MainActor static func export(_ capsule: TimeCapsule, passphrase: String?, hint: String) throws -> URL  // temp file "<Title>.timeleaf"; .tooLarge over maxShareBytes
+    @MainActor static func export(_ capsule: TimeCapsule, passphrase: String?, hint: String) async throws -> URL  // temp file "<Title>.timeleaf"; .tooLarge over maxShareBytes
     static func readHeader(from url: URL) throws -> PackageHeader
     @MainActor static func importPackage(from url: URL, into context: ModelContext) throws -> TimeCapsule
-    @MainActor static func unpack(_ capsule: TimeCapsule, passphrase: String?, in context: ModelContext) throws
+    @MainActor static func unpack(_ capsule: TimeCapsule, passphrase: String?, in context: ModelContext) async throws
     static func removeTemporaryFiles()         // leftover export copies + half-swapped inbox files; launch only
 }
 ```
@@ -214,9 +227,13 @@ salt 16 B, 210 000 rounds, 32 B) via CommonCrypto, or a random 256-bit key store
 `importPackage` handles security-scoped URLs, copies the file into `MediaStore.inboxURL`,
 inserts an incoming `TimeCapsule` (`isIncoming = true`, `sealedAt`/`unlockDate`/theme/names from
 the header, `recipientKind = .someone`, empty message, `packageFileName` set) and saves; if a capsule with the
-same id already exists it returns that one — and if that one is still waiting to be unpacked, the new file
-atomically replaces its stored package and refreshes its header fields (title, names, dates, theme, secret-word
-flag and hint) and arrival reminder. `export` sums the media file sizes before reading any media and throws
+same id already exists it returns that one. If that one is still waiting to be unpacked, a new file without a
+secret word is first opened in memory (header as authenticated data, plaintext discarded) and, only if whole,
+atomically replaces the stored package and refreshes the header fields (title, names, dates, theme, secret-word
+flag and hint) and arrival reminder; a secret-word file replaces it only when the stored package is missing or
+unreadable. A damaged new file is ignored while the stored package is readable (otherwise its error is thrown).
+`export` and `unpack` read and change the model on the main actor and do key derivation, sealing/decryption
+and file reading/writing in a detached task (callers use `try await`). `export` sums the media file sizes before reading any media and throws
 `.tooLarge` above `maxShareBytes`; `readHeader`/`importPackage`/`unpack` reject files larger than
 `maxShareBytes` + 16 MB with `.invalidFile` before reading them. `unpack` throws `.stillSealed` before `unlockDate`,
 `.wrongPassphrase` on authentication failure; on success fills message/mood/prompt, writes media via
@@ -291,7 +308,7 @@ struct EnvelopeView: View {                              // Animatable on openPr
     init(openProgress: Double, monogram: String, showsSeal: Bool = true)  // 0 = closed, 1 = flap fully open; aspect ≈ 1.45:1, fills width
 }
 struct CapsuleCard: View { init(capsule: TimeCapsule, now: Date) }   // list card for vault/horizon
-struct MediaThumbnailView: View { init(url: URL, kind: MediaKind) } // async thumbnail; fills its frame (clipped); play glyph for video, waveform for audio
+struct MediaThumbnailView: View { init(url: URL, kind: MediaKind, maxPixelSize: CGFloat = 600) } // async thumbnail; fills its frame (clipped); play glyph for video, waveform for audio
 enum TimePhrase {
     static func duration(from: Date, to: Date) -> String  // two largest units: "2 years, 3 months", "5 days, 4 hours", "12 minutes"
     static func relative(_ date: Date, now: Date = .now) -> String   // "in 2 years, 3 months" / "3 days ago"

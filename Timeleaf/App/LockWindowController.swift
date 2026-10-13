@@ -115,10 +115,14 @@ final class LockWindowController {
         UIView.animate(withDuration: 0.35, animations: {
             window.alpha = 0
         }, completion: { _ in
+            // Hand the keyboard focus back only if no newer cover has taken it meanwhile.
+            let wasKey = window.isKeyWindow
             window.isHidden = true
-            if window.isKeyWindow {
-                previous?.makeKey()
+            guard wasKey else { return }
+            let fallback = window.windowScene?.windows.first {
+                $0 !== window && !$0.isHidden && $0.windowLevel == .normal
             }
+            (previous ?? fallback)?.makeKey()
         })
     }
 

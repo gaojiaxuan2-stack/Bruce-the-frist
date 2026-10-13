@@ -2801,12 +2801,22 @@
         }
       }
     },
-    "This letter is too large to share — try removing a long video." : {
+    "This letter is too large to send as a file (over 300 MB)." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这封信太大，无法分享——试着移除一段较长的视频。"
+            "value" : "这封信太大，无法作为文件发送（超过 300 MB）。"
+          }
+        }
+      }
+    },
+    "This letter is too large to send as a file. It stays safe in your vault." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这封信太大，无法作为文件寄出。它会安然留在你的信匣里。"
           }
         }
       }
@@ -2927,6 +2937,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "写给谁？"
+          }
+        }
+      }
+    },
+    "Together these memories are over %@, so this letter can't be sent to %@. You can still seal it as a keepsake, or leave out a long video to send it." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这些回忆合计超过%1$@，这封信无法寄给%2$@。你仍可以把它封存为珍藏，或去掉一段较长的视频再寄出。"
+          }
+        }
+      }
+    },
+    "Too large to send as a file" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "太大，无法作为文件寄出"
+          }
+        }
+      }
+    },
+    "Too large to send as a file — it will be sealed as a keepsake." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "太大了，无法作为文件寄出——它将作为珍藏封存。"
+          }
+        }
+      }
+    },
+    "Too large to send as a file, so it stays with you as a keepsake." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它太大，无法作为文件寄出，便作为珍藏留在你身边。"
           }
         }
       }
