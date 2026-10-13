@@ -417,10 +417,10 @@ struct CapsuleCeremonyScreen: View {
         withAnimation(.easeInOut(duration: 0.3)) {
             gate = .unpacking
         }
-        // Let the "unfolding" state render before the (synchronous) decryption.
+        // A breath for the "unfolding" state; decryption itself runs off the main thread.
         try? await Task.sleep(for: .milliseconds(250))
         do {
-            try CapsulePackage.unpack(capsule, passphrase: passphrase, in: modelContext)
+            try await CapsulePackage.unpack(capsule, passphrase: passphrase, in: modelContext)
             Haptics.soft()
             withAnimation(.smooth(duration: 0.6)) {
                 gate = .open
@@ -447,7 +447,7 @@ struct CapsuleCeremonyScreen: View {
             // A breath for the spinner; key derivation is deliberately slow.
             try? await Task.sleep(for: .milliseconds(120))
             do {
-                try CapsulePackage.unpack(capsule, passphrase: word, in: modelContext)
+                try await CapsulePackage.unpack(capsule, passphrase: word, in: modelContext)
                 isUnlocking = false
                 secretFocused = false
                 Haptics.soft()

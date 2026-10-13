@@ -39,9 +39,10 @@ struct CapsuleReaderScreen: View {
         .scrollIndicators(.hidden)
         .scrollDismissesKeyboard(.interactively)
         .overlay(alignment: .topTrailing) {
+            // Mirrors the close button: a 38 pt face inside a 44 pt touch target.
             menu
-                .padding(.trailing, 20)
-                .padding(.top, 8)
+                .padding(.trailing, 17)
+                .padding(.top, 5)
         }
         .modifier(
             CapsuleScreenDeleteDialog(
@@ -160,7 +161,7 @@ struct CapsuleReaderScreen: View {
                 .foregroundStyle(theme.ink.opacity(0.85))
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .padding(28)
+        .padding(CapsuleReaderPaper.insets(for: theme.id))
         .background {
             StationeryView()
         }
@@ -364,6 +365,29 @@ struct CapsuleReaderScreen: View {
 }
 
 // MARK: - Private pieces
+
+/// The reading area of each style's stationery: the date, the words and the
+/// signature always sit inside it, clear of the ornaments the paper prints in its
+/// margins — Ink Wash's head and foot rules (y 32–36, H−40…H−36) and its chop,
+/// Celestial's crescent moon and first chart ring at the top-trailing pole
+/// (W−34, 34), Parchment's fleuron at the foot, Blossom's pressed petals in the
+/// lower-trailing corner.
+private enum CapsuleReaderPaper {
+    static func insets(for id: ThemeID) -> EdgeInsets {
+        switch id {
+        case .inkwash:
+            return EdgeInsets(top: 52, leading: 28, bottom: 58, trailing: 28)
+        case .celestial:
+            return EdgeInsets(top: 64, leading: 28, bottom: 36, trailing: 28)
+        case .parchment:
+            return EdgeInsets(top: 28, leading: 28, bottom: 44, trailing: 28)
+        case .blossom:
+            return EdgeInsets(top: 28, leading: 28, bottom: 56, trailing: 28)
+        case .aurora, .monolith:
+            return EdgeInsets(top: 28, leading: 28, bottom: 28, trailing: 28)
+        }
+    }
+}
 
 /// Sections drift up and fade in one after another when the letter opens.
 private struct CapsuleReaderReveal: ViewModifier {

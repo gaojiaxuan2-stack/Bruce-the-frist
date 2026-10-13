@@ -48,7 +48,7 @@ private struct CapsuleMediaPhotoSection: View {
     var body: some View {
         Group {
             if photos.count == 1, let photo = photos.first {
-                photoCard(photo, aspect: 4.0 / 3.0)
+                photoCard(photo, aspect: 4.0 / 3.0, adaptsToContent: true)
                     .padding(.horizontal, 20)
             } else {
                 carousel
@@ -81,13 +81,13 @@ private struct CapsuleMediaPhotoSection: View {
         .contentMargins(.horizontal, 24, for: .scrollContent)
     }
 
-    private func photoCard(_ photo: CapsuleMedia, aspect: CGFloat) -> some View {
+    private func photoCard(_ photo: CapsuleMedia, aspect: CGFloat, adaptsToContent: Bool = false) -> some View {
         Button {
             Haptics.tap()
             viewer = CapsuleMediaViewerStart(id: photo.id)
         } label: {
             VStack(alignment: .leading, spacing: 10) {
-                CapsuleMediaFrame(media: photo, aspect: aspect)
+                CapsuleMediaFrame(media: photo, aspect: aspect, adaptsToContent: adaptsToContent)
                 if !photo.caption.isEmpty {
                     Text(photo.caption)
                         .font(theme.body(14).italic())
@@ -130,7 +130,7 @@ private struct CapsuleMediaVideoSection: View {
             playing = CapsuleMediaVideoItem(id: video.id, url: url)
         } label: {
             VStack(alignment: .leading, spacing: 10) {
-                CapsuleMediaFrame(media: video, aspect: 16.0 / 9.0)
+                CapsuleMediaFrame(media: video, aspect: 16.0 / 9.0, adaptsToContent: true)
                     .overlay(alignment: .bottomTrailing) {
                         durationPill(video.duration)
                     }
@@ -297,20 +297,46 @@ private struct CapsuleMediaWaveform: View {
 
 // MARK: - Shared frame
 
-/// A rounded, softly shadowed frame of a fixed aspect ratio holding a thumbnail.
+private enum CapsuleMediaLayout {
+    /// Longest edge, in pixels, of the pictures shown in the reader: a full-width card
+    /// on a 3× phone or in the 640 pt iPad column stays sharp.
+    static let posterPixels: CGFloat = 1600
+    /// The tallest and the widest a frame may become (width / height).
+    static let tallestAspect: CGFloat = 4.0 / 5.0
+    static let widestAspect: CGFloat = 16.0 / 9.0
+}
+
+/// A rounded, softly shadowed frame holding a photo or a video poster.
+///
+/// With `adaptsToContent`, the frame takes the picture's own proportions (within
+/// 4:5 … 16:9); otherwise it keeps `aspect`, so carousel pages line up. A picture
+/// that would lose more than a sliver to cropping — a selfie, a vertical video, a
+/// panorama — is shown whole over a soft, blurred fill of itself.
 private struct CapsuleMediaFrame: View {
     let media: CapsuleMedia
     let aspect: CGFloat
+    var adaptsToContent = false
 
     @Environment(\.theme) private var theme
+    @State private var naturalAspect: CGFloat?
+    @State private var isPrepared = false
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: max(theme.cornerRadius, 8), style: .continuous)
     }
 
+    private var url: URL? {
+        MediaStore.url(for: media)
+    }
+
+    private var frameAspect: CGFloat {
+        guard adaptsToContent, let naturalAspect else { return aspect }
+        return min(max(naturalAspect, CapsuleMediaLayout.tallestAspect), CapsuleMediaLayout.widestAspect)
+    }
+
     var body: some View {
         Color.clear
-            .aspectRatio(aspect, contentMode: .fit)
+            .aspectRatio(frameAspect, contentMode: .fit)
             .overlay {
                 thumbnail
             }
@@ -319,12 +345,21 @@ private struct CapsuleMediaFrame: View {
                 shape.strokeBorder(theme.surfaceStroke, lineWidth: 0.5)
             }
             .shadow(color: Color.black.opacity(theme.colorScheme == .dark ? 0.35 : 0.12), radius: 14, y: 8)
+            .task(id: url) {
+                await prepare()
+            }
     }
 
     @ViewBuilder
     private var thumbnail: some View {
-        if let url = MediaStore.url(for: media) {
-            MediaThumbnailView(url: url, kind: media.kind)
+        if let url {
+            if !isPrepared {
+                theme.surface
+            } else if let whole = wholeAspect {
+                wholePicture(url: url, aspect: whole)
+            } else {
+                picture(url: url)
+            }
         } else {
             ZStack {
                 theme.surface
@@ -332,6 +367,46 @@ private struct CapsuleMediaFrame: View {
                     .font(.system(size: 22, weight: .light))
                     .foregroundStyle(theme.inkSecondary)
             }
+        }
+    }
+
+    /// The picture's own proportions when filling the frame would crop it noticeably.
+    private var wholeAspect: CGFloat? {
+        guard let naturalAspect else { return nil }
+        let ratio = naturalAspect / frameAspect
+        return ratio < 0.92 || ratio > 1.08 ? naturalAspect : nil
+    }
+
+    private func picture(url: URL) -> MediaThumbnailView {
+        MediaThumbnailView(url: url, kind: media.kind, maxPixelSize: CapsuleMediaLayout.posterPixels)
+    }
+
+    private func wholePicture(url: URL, aspect: CGFloat) -> some View {
+        ZStack {
+            picture(url: url)
+                .blur(radius: 28, opaque: true)
+                .overlay {
+                    theme.background.opacity(0.22)
+                }
+                .accessibilityHidden(true)
+            picture(url: url)
+                .aspectRatio(aspect, contentMode: .fit)
+        }
+    }
+
+    /// Decodes the picture once (the thumbnail view then reads it from the cache)
+    /// and learns its proportions.
+    private func prepare() async {
+        guard let url else { return }
+        let image = await MediaStore.thumbnail(for: url, kind: media.kind, maxPixelSize: CapsuleMediaLayout.posterPixels)
+        guard !Task.isCancelled else { return }
+        var measured: CGFloat?
+        if let size = image?.size, size.width > 0, size.height > 0 {
+            measured = size.width / size.height
+        }
+        withAnimation(.smooth(duration: 0.4)) {
+            naturalAspect = measured
+            isPrepared = true
         }
     }
 }
@@ -529,6 +604,8 @@ private struct CapsuleMediaVideoScreen: View {
         .background(Color.black.ignoresSafeArea())
         .environment(\.colorScheme, .dark)
         .onAppear {
+            // A voice note left playing in the reader falls silent for the film.
+            AudioPlayback.stopAll()
             try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
             player.play()
         }
@@ -548,10 +625,13 @@ private struct CapsuleMediaCloseButton: View {
                 .foregroundStyle(Color.white)
                 .frame(width: 38, height: 38)
                 .background(.ultraThinMaterial, in: Circle())
+                // A full 44 pt touch target around the 38 pt face.
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.leading, 20)
-        .padding(.vertical, 8)
+        .padding(.leading, 17)
+        .padding(.vertical, 5)
         .accessibilityLabel(Text("Close"))
     }
 }

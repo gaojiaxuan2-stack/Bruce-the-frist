@@ -91,8 +91,9 @@ struct CapsuleDestinationView: View {
             CapsuleScreenChromeIcon(systemName: "xmark")
         }
         .buttonStyle(.plain)
-        .padding(.leading, 20)
-        .padding(.top, 8)
+        // The 38 pt face sits 20 pt in and 8 pt down inside its 44 pt touch target.
+        .padding(.leading, 17)
+        .padding(.top, 5)
         .accessibilityLabel(Text("Close"))
     }
 
@@ -137,7 +138,9 @@ struct CapsuleScreenChromeIcon: View {
             .frame(width: diameter, height: diameter)
             .background(.ultraThinMaterial, in: Circle())
             .overlay(Circle().strokeBorder(theme.surfaceStroke, lineWidth: 0.5))
-            .contentShape(Circle())
+            // Never less than a 44 pt touch target, whatever the face's size.
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
     }
 }
 

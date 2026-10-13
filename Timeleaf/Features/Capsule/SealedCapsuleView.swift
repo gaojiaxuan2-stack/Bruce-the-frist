@@ -226,9 +226,12 @@ struct CapsuleSealedScreen: View {
     // MARK: Knock
 
     /// Tapping a sealed envelope: it shakes, the phone answers with a warning
-    /// tap, and a whisper reminds you that it is not time yet.
+    /// tap, and a whisper reminds you that it is not time yet. With Reduce Motion
+    /// on, the envelope stays still; the haptic and the whisper carry the answer.
     private func knock() {
-        knockCount += 1
+        if !reduceMotion {
+            knockCount += 1
+        }
         Haptics.warning()
         whisperToken += 1
         let token = whisperToken

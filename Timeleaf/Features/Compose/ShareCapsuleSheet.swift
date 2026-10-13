@@ -42,12 +42,15 @@ struct ShareCapsuleSheet: View {
                 .padding(.horizontal, 24)
                 .padding(.top, 52)
                 .padding(.bottom, 36)
+                .frame(maxWidth: 640)
+                .frame(maxWidth: .infinity)
             }
             .scrollIndicators(.hidden)
             .scrollDismissesKeyboard(.interactively)
+            // The drawn circle sits 16 pt from the corner; its 44 pt target reaches a little further.
             closeButton
-                .padding(.top, 16)
-                .padding(.trailing, 16)
+                .padding(.top, 11)
+                .padding(.trailing, 11)
         }
         .animation(.smooth(duration: 0.35), value: usesSecretWord)
         .animation(.smooth(duration: 0.35), value: preparedURL)
@@ -213,11 +216,16 @@ struct ShareCapsuleSheet: View {
                     Image(systemName: "exclamationmark.circle")
                 }
                 .font(theme.label(13))
-                .foregroundStyle(theme.seal)
+                .foregroundStyle(errorColor)
                 .multilineTextAlignment(.center)
                 .transition(.opacity)
             }
         }
+    }
+
+    /// Legible in every style: the deep accent on light paper, the seal's glow on dark.
+    private var errorColor: Color {
+        theme.colorScheme == .light ? theme.accent : theme.seal
     }
 
     private var footnote: some View {
@@ -252,7 +260,8 @@ struct ShareCapsuleSheet: View {
                 .frame(width: 34, height: 34)
                 .background { Circle().fill(theme.surface) }
                 .overlay { Circle().strokeBorder(theme.surfaceStroke, lineWidth: 0.75) }
-                .contentShape(Circle())
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text("Close"))
@@ -289,10 +298,10 @@ struct ShareCapsuleSheet: View {
         let hintText = usesSecretWord ? hint.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         let generation = exportGeneration
         Task { @MainActor in
-            // Let the button show its progress before the key derivation runs.
-            try? await Task.sleep(for: .milliseconds(120))
+            // The key derivation, sealing and writing run off the main thread inside `export`,
+            // so the sheet stays responsive (and dismissible) while a long video is packed.
             do {
-                let url = try CapsulePackage.export(capsule, passphrase: passphrase, hint: hintText)
+                let url = try await CapsulePackage.export(capsule, passphrase: passphrase, hint: hintText)
                 if generation == exportGeneration {
                     preparedURL = url
                     Haptics.success()
@@ -300,14 +309,20 @@ struct ShareCapsuleSheet: View {
                     // The choices changed while sealing; never offer a file made with old ones.
                     ShareCapsuleExportFiles.remove(url)
                 }
+            } catch CapsulePackageError.tooLarge {
+                // Media can't be removed from a sealed letter, so don't suggest it.
+                showError(String(localized: "This letter is too large to send as a file. It stays safe in your vault."), generation: generation)
             } catch {
-                if generation == exportGeneration {
-                    errorMessage = error.localizedDescription
-                    Haptics.warning()
-                }
+                showError(error.localizedDescription, generation: generation)
             }
             isPreparing = false
         }
+    }
+
+    private func showError(_ message: String, generation: Int) {
+        guard generation == exportGeneration else { return }
+        errorMessage = message
+        Haptics.warning()
     }
 }
 

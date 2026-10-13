@@ -15,6 +15,7 @@ struct VaultView: View {
     @Query(sort: \TimeCapsule.unlockDate) private var capsules: [TimeCapsule]
 
     @State private var pendingDeletion: TimeCapsule?
+    @State private var showsAllTravelling = false
     @State private var showsAllOpened = false
 
     var body: some View {
@@ -41,7 +42,8 @@ struct VaultView: View {
     private func vault(at now: Date) -> some View {
         let sections = VaultSections(capsules: capsules, now: now)
         return ScrollView {
-            VStack(alignment: .leading, spacing: 36) {
+            // Lazy all the way down: with a hundred letters only the cards on screen are built.
+            LazyVStack(alignment: .leading, spacing: 36) {
                 VaultGreeting(
                     now: now,
                     userName: userName,

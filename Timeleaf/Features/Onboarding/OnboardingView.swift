@@ -412,6 +412,7 @@ private struct OnboardingGlyphCard: View {
 
 private struct OnboardingPeekPage: View {
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(SettingsKey.userName) private var userName = ""
     let isActive: Bool
 
@@ -472,7 +473,10 @@ private struct OnboardingPeekPage: View {
 
     private func knock() {
         Haptics.warning()
-        withAnimation(.linear(duration: 0.5)) { knocks += 1 }
+        // With Reduce Motion on, the envelope stays still; the haptic and the whisper answer.
+        if !reduceMotion {
+            withAnimation(.linear(duration: 0.5)) { knocks += 1 }
+        }
         withAnimation(.smooth(duration: 0.3)) { whispers = true }
         whisperToken += 1
         let token = whisperToken

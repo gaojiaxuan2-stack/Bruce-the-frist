@@ -43,19 +43,18 @@ struct ComposeFlowView: View {
             ZStack {
                 ThemeBackground()
                 VStack(spacing: 0) {
-                    if showsTopBar {
-                        topBar
-                            .transition(.opacity)
-                    }
+                    topBar
+                        .modifier(ComposeFlowChromeFade(isVisible: showsChrome))
                     stepContainer
-                    if showsBottomBar {
+                    if !isEditingLetter {
                         bottomBar
+                            .modifier(ComposeFlowChromeFade(isVisible: showsChrome))
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
                 }
             }
-            .animation(.smooth(duration: 0.4), value: showsTopBar)
-            .animation(.smooth(duration: 0.3), value: showsBottomBar)
+            .animation(.smooth(duration: 0.4), value: showsChrome)
+            .animation(.smooth(duration: 0.3), value: isEditingLetter)
             .toolbar(.hidden, for: .navigationBar)
             .confirmationDialog(
                 "Discard this letter?",
@@ -75,12 +74,10 @@ struct ComposeFlowView: View {
 
     // MARK: Chrome
 
-    private var showsTopBar: Bool {
+    /// The bars fade away once the seal comes down, but keep their place in the layout,
+    /// so the ceremony's page (and its envelope) never changes size mid-press.
+    private var showsChrome: Bool {
         !draft.isSealing && draft.sealedCapsule == nil
-    }
-
-    private var showsBottomBar: Bool {
-        showsTopBar && !isEditingLetter
     }
 
     private var topBar: some View {
@@ -95,24 +92,47 @@ struct ComposeFlowView: View {
         .padding(.horizontal, 20)
         .padding(.top, 8)
         .padding(.bottom, 10)
+        // A comfortable column on iPad; the background stays full-bleed.
+        .frame(maxWidth: 640)
     }
 
     private var bottomBar: some View {
-        HStack(spacing: 14) {
-            if step != .recipient {
-                ComposeFlowIconButton(symbol: "chevron.left", label: "Back", size: 54, action: goBack)
-                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
+        VStack(spacing: 10) {
+            if step == .style && draft.isTooLargeToSend {
+                shareLimitCaption
+                    .transition(.opacity)
             }
-            if step == .seal {
-                Spacer(minLength: 0)
-            } else {
-                continueButton
+            HStack(spacing: 14) {
+                if step != .recipient {
+                    ComposeFlowIconButton(symbol: "chevron.left", label: "Back", size: 54, action: goBack)
+                        .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                }
+                if step == .seal {
+                    Spacer(minLength: 0)
+                } else {
+                    continueButton
+                }
             }
         }
         .padding(.horizontal, 20)
         .padding(.top, 10)
         .padding(.bottom, 12)
+        .frame(maxWidth: 640)
         .animation(.smooth(duration: 0.3), value: step)
+    }
+
+    /// Said once more just before "Ready to seal": the memories are too large to travel as a file.
+    private var shareLimitCaption: some View {
+        Label {
+            Text("Too large to send as a file — it will be sealed as a keepsake.")
+        } icon: {
+            Image(systemName: "shippingbox")
+        }
+        .font(theme.label(12))
+        .foregroundStyle(theme.inkSecondary)
+        .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity)
     }
 
     private var continueButton: some View {
@@ -322,6 +342,9 @@ private struct ComposeFlowIconButton: View {
     var size: CGFloat = 40
     let action: () -> Void
 
+    /// The drawn circle may be smaller, but the touch target never is.
+    private var hitSize: CGFloat { max(size, 44) }
+
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
@@ -329,7 +352,8 @@ private struct ComposeFlowIconButton: View {
                 .foregroundStyle(theme.ink)
                 .frame(width: size, height: size)
                 .background { circleFill }
-                .contentShape(Circle())
+                .frame(width: hitSize, height: hitSize)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text(label))
@@ -346,6 +370,18 @@ private struct ComposeFlowIconButton: View {
     }
 }
 
+/// Fades a bar in and out without removing it from the layout.
+private struct ComposeFlowChromeFade: ViewModifier {
+    let isVisible: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isVisible ? 1 : 0)
+            .allowsHitTesting(isVisible)
+            .accessibilityHidden(!isVisible)
+    }
+}
+
 // MARK: - Draft model
 
 /// One memory being tucked into the letter. `fileName == nil` while it is still loading.
@@ -354,6 +390,8 @@ struct ComposeMediaItem: Identifiable, Equatable {
     let kind: MediaKind
     var fileName: String?
     var duration: Double
+    /// Size of the saved file in bytes (0 while it is still loading).
+    var byteCount = 0
 
     var isReady: Bool { fileName != nil }
 }
@@ -461,6 +499,17 @@ final class ComposeDraft {
     /// Whether closing should ask before throwing the letter away.
     var hasContent: Bool {
         hasWords || !mood.isEmpty || !prompt.isEmpty || !media.isEmpty || !trimmedRecipientName.isEmpty
+    }
+
+    /// Bytes of media tucked into the letter so far.
+    var mediaByteCount: Int {
+        media.reduce(0) { $0 + $1.byteCount }
+    }
+
+    /// A letter to someone travels as one shared file, which may carry at most
+    /// `CapsulePackage.maxShareBytes` of media. A larger one can still be sealed as a keepsake.
+    var isTooLargeToSend: Bool {
+        recipientKind == .someone && mediaByteCount > CapsulePackage.maxShareBytes
     }
 
     // MARK: Media
@@ -596,10 +645,17 @@ final class ComposeDraft {
             MediaStore.delete(fileName: fileName, capsuleID: id)
             return
         }
+        let byteCount = ComposeDraft.fileSize(at: MediaStore.url(capsuleID: id, fileName: fileName))
         withAnimation(.smooth(duration: 0.4)) {
             media[index].fileName = fileName
             media[index].duration = duration
+            media[index].byteCount = byteCount
         }
+    }
+
+    /// Measured the way `CapsulePackage.export` measures a letter; 0 when unknown.
+    private static func fileSize(at url: URL) -> Int {
+        (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
     }
 
     private func failImport(_ placeholder: UUID) {
