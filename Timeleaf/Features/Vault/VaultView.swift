@@ -85,7 +85,9 @@ struct VaultView: View {
                 sections.travelling,
                 now: now,
                 title: "In transit",
-                subtitle: "Still on their way — soonest first."
+                subtitle: "Still on their way — soonest first.",
+                previewCount: VaultLayout.travellingPreviewCount,
+                showsAll: $showsAllTravelling
             )
         }
         if !sections.received.isEmpty {
@@ -97,13 +99,20 @@ struct VaultView: View {
             )
         }
         if !sections.opened.isEmpty {
-            openedSection(sections.opened, now: now)
+            listSection(
+                sections.opened,
+                now: now,
+                title: "Opened",
+                subtitle: "Read, remembered, kept.",
+                previewCount: VaultLayout.openedPreviewCount,
+                showsAll: $showsAllOpened
+            )
         }
         VaultFooter()
     }
 
     private func readySection(_ capsules: [TimeCapsule], now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
+        LazyVStack(alignment: .leading, spacing: 16) {
             SectionHeader("Ready to open", subtitle: "The wait is over.")
             ForEach(capsules) { capsule in
                 card(for: capsule) {
@@ -113,37 +122,32 @@ struct VaultView: View {
         }
     }
 
+    /// A chapter of plain cards. With `showsAll`, only the first `previewCount`
+    /// are shown until the reader asks for the rest, so one long chapter never
+    /// buries the ones below it.
     private func listSection(
         _ capsules: [TimeCapsule],
         now: Date,
         title: LocalizedStringKey,
-        subtitle: LocalizedStringKey
+        subtitle: LocalizedStringKey,
+        previewCount: Int = Int.max,
+        showsAll: Binding<Bool>? = nil
     ) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let isTruncatable = showsAll != nil && capsules.count > previewCount
+        let isExpanded = showsAll?.wrappedValue ?? true
+        let visible = isTruncatable && !isExpanded ? Array(capsules.prefix(previewCount)) : capsules
+        return LazyVStack(alignment: .leading, spacing: 14) {
             SectionHeader(title, subtitle: subtitle)
-            ForEach(capsules) { capsule in
-                card(for: capsule) {
-                    CapsuleCard(capsule: capsule, now: now)
-                }
-            }
-        }
-    }
-
-    private func openedSection(_ capsules: [TimeCapsule], now: Date) -> some View {
-        let limit = VaultLayout.openedPreviewCount
-        let visible = showsAllOpened ? capsules : Array(capsules.prefix(limit))
-        return VStack(alignment: .leading, spacing: 14) {
-            SectionHeader("Opened", subtitle: "Read, remembered, kept.")
             ForEach(visible) { capsule in
                 card(for: capsule) {
                     CapsuleCard(capsule: capsule, now: now)
                 }
             }
-            if capsules.count > limit {
+            if isTruncatable, let showsAll {
                 Button {
-                    withAnimation(.smooth(duration: 0.45)) { showsAllOpened.toggle() }
+                    withAnimation(.smooth(duration: 0.45)) { showsAll.wrappedValue.toggle() }
                 } label: {
-                    openedToggleLabel(total: capsules.count)
+                    toggleLabel(isExpanded: isExpanded, total: capsules.count)
                 }
                 .buttonStyle(.themedGhost)
                 .frame(maxWidth: .infinity)
@@ -151,8 +155,8 @@ struct VaultView: View {
         }
     }
 
-    private func openedToggleLabel(total: Int) -> Text {
-        showsAllOpened ? Text("Show fewer") : Text("Show all \(total)")
+    private func toggleLabel(isExpanded: Bool, total: Int) -> Text {
+        isExpanded ? Text("Show fewer") : Text("Show all \(total)")
     }
 
     /// Wraps a card in a tappable, pressable button with a delete context menu
@@ -217,6 +221,7 @@ struct VaultView: View {
 // MARK: - Sections model
 
 private enum VaultLayout {
+    static let travellingPreviewCount = 5
     static let openedPreviewCount = 3
 }
 

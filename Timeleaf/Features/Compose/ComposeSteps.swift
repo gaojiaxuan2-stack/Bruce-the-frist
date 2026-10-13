@@ -25,6 +25,8 @@ struct ComposeRecipientStep: View {
             .padding(.horizontal, 24)
             .padding(.top, 14)
             .padding(.bottom, 32)
+            .frame(maxWidth: ComposeLayout.readableWidth)
+            .frame(maxWidth: .infinity)
         }
         .scrollIndicators(.hidden)
         .scrollDismissesKeyboard(.interactively)
@@ -204,6 +206,8 @@ struct ComposeWriteStep: View {
                 .padding(.horizontal, 24)
                 .padding(.top, isEditingLetter ? 4 : 14)
                 .padding(.bottom, isEditingLetter ? 8 : 32)
+                .frame(maxWidth: ComposeLayout.readableWidth)
+                .frame(maxWidth: .infinity)
             }
             .scrollIndicators(.hidden)
             // While writing, the paper exactly fills the page, so only the editor scrolls.
@@ -311,7 +315,8 @@ struct ComposeWriteStep: View {
                 }
                 .scaleEffect(isSelected ? 1.12 : 1)
                 .opacity(isDimmed ? 0.5 : 1)
-                .contentShape(Circle())
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text(mood.caption))
@@ -373,9 +378,12 @@ struct ComposeWriteStep: View {
                 .symbolEffect(.bounce, value: promptIndex)
                 .frame(width: 34, height: 34)
                 .background { Circle().fill(theme.ink.opacity(0.06)) }
-                .contentShape(Circle())
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // A 44 pt target that still takes the 34 pt circle's place in the row.
+        .padding(-5)
         .accessibilityLabel(Text("Another prompt"))
     }
 
@@ -425,7 +433,7 @@ struct ComposeWriteStep: View {
     }
 
     private func letterPaper(height: CGFloat) -> some View {
-        let shape = RoundedRectangle(cornerRadius: max(theme.cornerRadius, 14), style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous)
         return ZStack(alignment: .topLeading) {
             StationeryView()
             if draft.message.isEmpty {
@@ -455,7 +463,9 @@ struct ComposeWriteStep: View {
         .overlay {
             shape.strokeBorder(theme.surfaceStroke, lineWidth: 0.5)
         }
-        .overlay(alignment: .bottomTrailing) {
+        // Lower left: clear of Ink Wash's chop, Blossom's pressed petals and Monolith's stamp
+        // (all lower right), and inside Parchment's margin rules.
+        .overlay(alignment: .bottomLeading) {
             wordCountLabel
         }
         .shadow(color: Color.black.opacity(0.14), radius: 22, y: 12)
@@ -469,8 +479,14 @@ struct ComposeWriteStep: View {
                 .font(theme.label(11))
                 .monospacedDigit()
                 .foregroundStyle(theme.inkSecondary)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                // A small tab of the style's surface, so the count never sits on a ruling or ornament.
+                .background {
+                    ComposeShapes.pill(for: theme).fill(theme.surface)
+                }
+                .padding(.leading, 25)
+                .padding(.bottom, 11)
                 .allowsHitTesting(false)
         }
     }
@@ -554,7 +570,8 @@ private struct ComposeSparkAction: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        let shape = ComposeShapes.pill(for: theme)
+        return Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: symbol)
                     .font(.system(size: 11, weight: .semibold))
@@ -565,12 +582,12 @@ private struct ComposeSparkAction: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background {
-                Capsule().fill(isActive ? theme.accent : theme.ink.opacity(0.06))
+                shape.fill(isActive ? theme.accent : theme.ink.opacity(0.06))
             }
             .overlay {
-                Capsule().strokeBorder(theme.surfaceStroke, lineWidth: isActive ? 0 : 0.75)
+                shape.stroke(isActive ? Color.clear : theme.surfaceStroke, lineWidth: 0.75)
             }
-            .contentShape(Capsule())
+            .contentShape(shape)
         }
         .buttonStyle(.plain)
     }
@@ -605,6 +622,8 @@ struct ComposeMemoriesStep: View {
             .padding(.horizontal, 24)
             .padding(.top, 14)
             .padding(.bottom, 32)
+            .frame(maxWidth: ComposeLayout.readableWidth)
+            .frame(maxWidth: .infinity)
         }
         .scrollIndicators(.hidden)
         .onChange(of: pickerItems) { _, items in
@@ -692,9 +711,14 @@ struct ComposeMemoriesStep: View {
                 .foregroundStyle(theme.inkSecondary)
                 .transition(.opacity)
             }
+            if draft.isTooLargeToSend {
+                ComposeShareLimitNote(recipient: draft.displayRecipient)
+                    .transition(.opacity.combined(with: .offset(y: 6)))
+            }
         }
         .animation(.smooth(duration: 0.35), value: draft.media)
         .animation(.smooth(duration: 0.3), value: draft.importFailures)
+        .animation(.smooth(duration: 0.35), value: draft.isTooLargeToSend)
     }
 
     private var galleryHeader: some View {
@@ -779,8 +803,9 @@ private struct ComposeMediaTile: View {
     let url: URL?
     let onRemove: () -> Void
 
+    /// Never rounder than 14 pt, and as sharp as the style itself (6 pt in Monolith and Ink Wash).
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
+        RoundedRectangle(cornerRadius: min(theme.cornerRadius, 14), style: .continuous)
     }
 
     var body: some View {
@@ -811,7 +836,7 @@ private struct ComposeMediaTile: View {
                 .foregroundStyle(Color.white)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
-                .background { Capsule().fill(Color.black.opacity(0.45)) }
+                .background { ComposeShapes.pill(for: theme).fill(Color.black.opacity(0.45)) }
                 .padding(6)
                 .allowsHitTesting(false)
         }
@@ -827,6 +852,8 @@ private struct ComposeMediaTile: View {
                     .frame(width: 22, height: 22)
                     .background { Circle().fill(Color.black.opacity(0.5)) }
                     .padding(6)
+                    // The badge stays small in the corner; the target is a full 44 pt.
+                    .frame(width: 44, height: 44, alignment: .topTrailing)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -890,21 +917,23 @@ private struct ComposeVoiceNoteSheet: View {
         ZStack {
             ThemeBackground()
             VStack(spacing: 0) {
+                // The 36 pt circle keeps its place 28 pt in and 20 pt down; its target is 44 pt.
                 topRow
-                header
-                    .padding(.top, 4)
-                Spacer(minLength: 20)
-                clock
-                ComposeWaveform(levels: recorder.levels, isLive: recorder.isRecording)
-                    .frame(height: 110)
-                    .padding(.top, 24)
-                Spacer(minLength: 20)
-                controls
-                    .frame(minHeight: 190, alignment: .top)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 16)
+                // On small phones or at large text sizes the page scrolls rather than
+                // pushing the record button off the bottom of the sheet.
+                GeometryReader { proxy in
+                    ScrollView {
+                        page(waveformHeight: proxy.size.height < 600 ? 80 : 110)
+                            .padding(.horizontal, 28)
+                            .padding(.bottom, 16)
+                            .frame(maxWidth: .infinity, minHeight: proxy.size.height)
+                    }
+                    .scrollIndicators(.hidden)
+                    .scrollBounceBehavior(.basedOnSize)
+                }
             }
-            .padding(.horizontal, 28)
-            .padding(.top, 20)
-            .padding(.bottom, 16)
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
@@ -923,6 +952,21 @@ private struct ComposeVoiceNoteSheet: View {
         .onDisappear(perform: cleanUp)
     }
 
+    private func page(waveformHeight: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            header
+                .padding(.top, 4)
+            Spacer(minLength: 20)
+            clock
+            ComposeWaveform(levels: recorder.levels, isLive: recorder.isRecording)
+                .frame(height: waveformHeight)
+                .padding(.top, 24)
+            Spacer(minLength: 20)
+            controls
+                .frame(minHeight: 190, alignment: .top)
+        }
+    }
+
     private var topRow: some View {
         HStack {
             Spacer()
@@ -934,7 +978,8 @@ private struct ComposeVoiceNoteSheet: View {
                     .foregroundStyle(theme.ink)
                     .frame(width: 36, height: 36)
                     .background { Circle().fill(theme.ink.opacity(0.07)) }
-                    .contentShape(Circle())
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(recorder.isRecording)
@@ -1216,6 +1261,8 @@ struct ComposeWhenStep: View {
             }
             .padding(.top, 14)
             .padding(.bottom, 32)
+            .frame(maxWidth: ComposeLayout.readableWidth)
+            .frame(maxWidth: .infinity)
         }
         .scrollIndicators(.hidden)
     }
@@ -1235,6 +1282,7 @@ struct ComposeWhenStep: View {
     private func presetChip(_ preset: ComposeArrivalPreset) -> some View {
         let target = preset.date(from: .now, keepingTimeOf: draft.unlockDate)
         let isSelected = Calendar.current.isDate(target, inSameDayAs: draft.unlockDate)
+        let shape = ComposeShapes.pill(for: theme)
         return Button {
             choose(target)
         } label: {
@@ -1244,12 +1292,12 @@ struct ComposeWhenStep: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
                 .background {
-                    Capsule().fill(isSelected ? theme.accent : theme.surface)
+                    shape.fill(isSelected ? theme.accent : theme.surface)
                 }
                 .overlay {
-                    Capsule().strokeBorder(isSelected ? Color.clear : theme.surfaceStroke, lineWidth: 0.75)
+                    shape.stroke(isSelected ? Color.clear : theme.surfaceStroke, lineWidth: 0.75)
                 }
-                .contentShape(Capsule())
+                .contentShape(shape)
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -1398,6 +1446,9 @@ struct ComposeStyleStep: View {
                 )
                 .padding(.horizontal, 24)
                 .padding(.top, 14)
+                // Only the words keep to the column; the carousel stays full-bleed.
+                .frame(maxWidth: ComposeLayout.readableWidth)
+                .frame(maxWidth: .infinity)
                 Spacer(minLength: 16)
                 carousel(in: proxy.size)
                 Spacer(minLength: 16)
@@ -1506,8 +1557,9 @@ private struct ComposeStylePreviewFace: View {
     let monogram: String
     let isSelected: Bool
 
+    /// Follows the style: soft in Aurora and Blossom, crisp in Monolith and Ink Wash.
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 30, style: .continuous)
+        RoundedRectangle(cornerRadius: min(max(theme.cornerRadius + 6, 12), 30), style: .continuous)
     }
 
     var body: some View {
@@ -1532,7 +1584,13 @@ private struct ComposeStylePreviewFace: View {
         .overlay(alignment: .topTrailing) {
             selectedMark
         }
-        .shadow(color: Color.black.opacity(0.2), radius: 22, y: 12)
+        // The shadow falls from a still shape behind the card, so the live background
+        // is never re-rendered offscreen for it on every frame.
+        .background {
+            shape
+                .fill(theme.background)
+                .shadow(color: Color.black.opacity(0.2), radius: 22, y: 12)
+        }
         .contentShape(shape)
     }
 
@@ -1571,6 +1629,53 @@ private struct ComposeStylePreviewFace: View {
 }
 
 // MARK: - Shared pieces
+
+private enum ComposeLayout {
+    /// Pages keep to a comfortable column on iPad, as the vault and the reader do.
+    static let readableWidth: CGFloat = 640
+}
+
+private enum ComposeShapes {
+    /// The rule `ThemedButtonStyle` follows: pills in the rounded styles, the style's own
+    /// crisp corners where it is sharp (Monolith, Ink Wash, Parchment).
+    static func pill(for theme: Theme) -> AnyShape {
+        if theme.cornerRadius >= 16 {
+            return AnyShape(Capsule(style: .continuous))
+        }
+        return AnyShape(RoundedRectangle(cornerRadius: theme.cornerRadius, style: .continuous))
+    }
+}
+
+/// A gentle word when a letter to someone carries more media than one shared file may hold.
+/// It can still be sealed (as a keepsake); it just can't be sent.
+private struct ComposeShareLimitNote: View {
+    @Environment(\.theme) private var theme
+    let recipient: String
+
+    private var limit: String {
+        ByteCountFormatStyle(style: .memory).format(Int64(CapsulePackage.maxShareBytes))
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "shippingbox")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(theme.accent)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Too large to send as a file")
+                    .font(theme.label(13, weight: .semibold))
+                    .foregroundStyle(theme.ink)
+                Text("Together these memories are over \(limit), so this letter can't be sent to \(recipient). You can still seal it as a keepsake, or leave out a long video to send it.")
+                    .font(theme.label(12))
+                    .foregroundStyle(theme.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .themedCard(padding: 16)
+        .accessibilityElement(children: .combine)
+    }
+}
 
 private struct ComposeStepHeader: View {
     @Environment(\.theme) private var theme

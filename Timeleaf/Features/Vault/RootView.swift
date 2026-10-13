@@ -338,7 +338,20 @@ private struct RootWriteButton: View {
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// At most one letter: enough to know whether the vault is still empty.
+    @Query(RootWriteButton.firstLetterDescriptor) private var firstLetter: [TimeCapsule]
+
     let action: () -> Void
+
+    init(action: @escaping () -> Void) {
+        self.action = action
+    }
+
+    private static var firstLetterDescriptor: FetchDescriptor<TimeCapsule> {
+        var descriptor = FetchDescriptor<TimeCapsule>()
+        descriptor.fetchLimit = 1
+        return descriptor
+    }
 
     var body: some View {
         Button(action: action) {
@@ -351,7 +364,7 @@ private struct RootWriteButton: View {
         }
         .buttonStyle(RootPressStyle())
         .background {
-            RootWriteHalo(color: theme.glow, isAnimated: !reduceMotion)
+            RootWriteHalo(color: theme.glow, isAnimated: !reduceMotion, keepsInviting: firstLetter.isEmpty)
         }
         .accessibilityLabel(Text("Write a letter"))
         .accessibilityHint(Text("Begins a new letter to the future"))
@@ -379,9 +392,18 @@ private struct RootWriteButton: View {
 }
 
 /// A soft glow with a slow ring that drifts outward, like breath on cold glass.
+/// It breathes a few times when the app appears, then rests; only an empty vault
+/// keeps inviting the first letter. Still under Reduce Motion.
 private struct RootWriteHalo: View {
     let color: Color
     let isAnimated: Bool
+    let keepsInviting: Bool
+
+    @State private var breath = 0
+
+    private static let settlingBreaths = 3
+    /// One full breath (in, out, rest) plus a pause before the next.
+    private static let breathPeriod: Double = 4.6
 
     var body: some View {
         ZStack {
@@ -401,17 +423,34 @@ private struct RootWriteHalo: View {
             .strokeBorder(color.opacity(0.75), lineWidth: 1)
             .frame(width: RootMetrics.writeDiameter, height: RootMetrics.writeDiameter)
         if isAnimated {
-            circle.phaseAnimator([0, 1, 2]) { content, phase in
+            circle.phaseAnimator([0, 1, 2], trigger: breath) { content, phase in
                 content
                     .scaleEffect(phase == 2 ? 1.45 : 1.0)
                     .opacity(phase == 1 ? 0.9 : 0)
             } animation: { phase in
                 RootWriteHalo.animation(for: phase)
             }
+            .task(id: keepsInviting) {
+                await breathe()
+            }
         } else {
             circle
                 .scaleEffect(1.14)
                 .opacity(0.4)
+        }
+    }
+
+    /// Each change of `breath` plays the ring once through all of its phases.
+    private func breathe() async {
+        var remaining = keepsInviting ? Int.max : RootWriteHalo.settlingBreaths
+        while remaining > 0 {
+            breath += 1
+            remaining -= 1
+            do {
+                try await Task.sleep(for: .seconds(RootWriteHalo.breathPeriod))
+            } catch {
+                return
+            }
         }
     }
 

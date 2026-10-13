@@ -59,7 +59,7 @@ enum CapsulePackageError: LocalizedError {
         case .missingPackage:
             return String(localized: "The sealed letter can no longer be found on this device. Ask the sender to share it with you again.")
         case .tooLarge:
-            return String(localized: "This letter is too large to share — try removing a long video.")
+            return String(localized: "This letter is too large to send as a file (over 300 MB).")
         }
     }
 }
@@ -95,67 +95,15 @@ enum CapsulePackage {
 
     /// Seals the capsule's contents into an encrypted `.timeleaf` file in a fresh temporary folder,
     /// named after the letter so the share sheet shows something lovely.
+    ///
+    /// The letter is read on the main actor; measuring, key derivation, sealing and writing the
+    /// file happen off it, so the interface stays responsive even for long videos.
     @MainActor
-    static func export(_ capsule: TimeCapsule, passphrase: String?, hint: String) throws -> URL {
-        // Measure before reading a single byte of media.
-        guard totalMediaByteCount(of: capsule) <= maxShareBytes else {
-            throw CapsulePackageError.tooLarge
-        }
-        let secretWord = normalizedPassphrase(passphrase)
-        let salt = makeRandomData(size: .bits128)
-
-        let key: SymmetricKey
-        let embeddedKey: Data?
-        if let secretWord {
-            key = try deriveKey(from: secretWord, salt: salt)
-            embeddedKey = nil
-        } else {
-            let randomKey = SymmetricKey(size: .bits256)
-            key = randomKey
-            embeddedKey = randomKey.withUnsafeBytes { Data(Array($0)) }
-        }
-
-        let header = PackageHeader(
-            version: formatVersion,
-            capsuleID: capsule.id,
-            title: capsule.title,
-            senderName: exportSenderName(for: capsule),
-            recipientName: capsule.recipientName,
-            unlockDate: capsule.unlockDate,
-            sealedAt: capsule.sealedAt ?? .now,
-            themeRaw: capsule.themeRaw,
-            requiresPassphrase: secretWord != nil,
-            passphraseHint: secretWord != nil ? hint.trimmingCharacters(in: .whitespacesAndNewlines) : "",
-            salt: salt,
-            embeddedKey: embeddedKey
-        )
-        let headerData = try encodeJSON(header)
-        guard headerData.count <= maxHeaderLength,
-              let headerByteCount = UInt32(exactly: headerData.count) else {
-            throw CapsulePackageError.corrupted
-        }
-
-        let payload = try makePayload(for: capsule)
-        let sealedBox: AES.GCM.SealedBox
-        do {
-            sealedBox = try AES.GCM.seal(payload, using: key, nonce: AES.GCM.Nonce(), authenticating: headerData)
-        } catch {
-            throw CapsulePackageError.corrupted
-        }
-        guard let combined = sealedBox.combined else { throw CapsulePackageError.corrupted }
-        // Whatever we send must also be accepted on the other side.
-        guard preambleLength + headerData.count + combined.count <= maxPackageBytes else {
-            throw CapsulePackageError.tooLarge
-        }
-
-        var preamble = CapsulePackageByteWriter()
-        preamble.appendBytes(magic)
-        preamble.appendUInt32(headerByteCount)
-        preamble.appendBytes(headerData)
-
-        let fileURL = try makeExportURL(title: capsule.title)
-        try writeFile(preamble: preamble.data, sealedBox: combined, to: fileURL)
-        return fileURL
+    static func export(_ capsule: TimeCapsule, passphrase: String?, hint: String) async throws -> URL {
+        let draft = exportDraft(of: capsule, passphrase: passphrase, hint: hint)
+        return try await Task.detached(priority: .userInitiated) {
+            try CapsulePackage.writePackage(for: draft)
+        }.value
     }
 
     // MARK: Reading
@@ -202,16 +150,21 @@ enum CapsulePackage {
         let destination = MediaStore.inboxURL.appending(component: packageFileName, directoryHint: .notDirectory)
 
         if let existing = existingCapsule(id: capsuleID, in: context) {
-            // A letter that still waits to be opened takes the freshly received package: it may
-            // repair a lost or damaged copy, or carry a different secret word.
-            if existing.isIncoming, existing.packageFileName != nil {
-                try replacePackage(at: destination, with: url)
-                existing.packageFileName = packageFileName
-                refresh(existing, from: header)
-                try? context.save()
-                discardSystemInboxCopy(at: url, wasSecurityScoped: isScoped)
-                scheduleArrivalReminder(for: existing)
-                return existing
+            // A letter that still waits to be opened may take a freshly received package (to
+            // repair a lost or damaged copy, or to carry a new secret word) — but only one that
+            // is proven whole, so a damaged or tampered copy never displaces a good one.
+            if existing.isIncoming, let storedName = existing.packageFileName {
+                let stored = MediaStore.inboxURL.appending(component: storedName, directoryHint: .notDirectory)
+                if let newHeader = try replacementHeader(forStoredPackage: stored, incoming: url) {
+                    try replacePackage(at: destination, with: url)
+                    if stored.standardizedFileURL != destination.standardizedFileURL {
+                        try? FileManager.default.removeItem(at: stored)
+                    }
+                    existing.packageFileName = packageFileName
+                    refresh(existing, from: newHeader)
+                    try? context.save()
+                    scheduleArrivalReminder(for: existing)
+                }
             }
             discardSystemInboxCopy(at: url, wasSecurityScoped: isScoped)
             return existing
@@ -253,41 +206,47 @@ enum CapsulePackage {
 
     /// Breaks the seal of an incoming capsule: decrypts the package, writes its media into the
     /// capsule's folder, fills in the letter and removes the package.
+    ///
+    /// Key derivation, decryption and writing the media happen off the main actor; the model is
+    /// only read and changed on it.
     @MainActor
-    static func unpack(_ capsule: TimeCapsule, passphrase: String?, in context: ModelContext) throws {
+    static func unpack(_ capsule: TimeCapsule, passphrase: String?, in context: ModelContext) async throws {
         guard let packageFileName = capsule.packageFileName else {
             throw CapsulePackageError.missingPackage
         }
-        let now = Date.now
-        guard now >= capsule.unlockDate else { throw CapsulePackageError.stillSealed }
+        guard Date.now >= capsule.unlockDate else { throw CapsulePackageError.stillSealed }
 
+        let capsuleID = capsule.id
         let packageURL = MediaStore.inboxURL.appending(component: packageFileName, directoryHint: .notDirectory)
-        guard isWithinPackageLimit(packageURL) else { throw CapsulePackageError.invalidFile }
-        let fileData: Data
-        do {
-            fileData = try Data(contentsOf: packageURL, options: .mappedIfSafe)
-        } catch {
+        let opened = try await Task.detached(priority: .userInitiated) {
+            try CapsulePackage.openPackage(at: packageURL, capsuleID: capsuleID, passphrase: passphrase)
+        }.value
+
+        // Meanwhile the letter may have been deleted, or opened in another window.
+        guard !capsule.isDeleted, capsule.modelContext != nil else {
+            discardStoredMedia(opened.media, capsuleID: capsuleID)
             throw CapsulePackageError.missingPackage
         }
+        guard capsule.packageFileName == packageFileName else {
+            discardStoredMedia(opened.media, capsuleID: capsuleID)
+            return
+        }
 
-        let parsed = try parsePackage(fileData)
-        guard parsed.header.capsuleID == capsule.id else { throw CapsulePackageError.corrupted }
-        // The header is authenticated, so its date is the one the sender truly chose.
-        guard now >= parsed.header.unlockDate else { throw CapsulePackageError.stillSealed }
-
-        let key = try decryptionKey(for: parsed.header, passphrase: passphrase)
-        let payload = try decryptPayload(parsed, using: key)
-        let contents = try readPayload(payload)
-        let newMedia = try storeMedia(contents.blobs, capsuleID: capsule.id)
-
-        let manifest = contents.manifest
+        let manifest = opened.manifest
         if !manifest.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             capsule.title = manifest.title
         }
         capsule.message = manifest.message
         capsule.mood = manifest.mood
         capsule.prompt = manifest.prompt
-        for media in newMedia {
+        for stored in opened.media {
+            let media = CapsuleMedia(
+                kind: stored.kind,
+                fileName: stored.fileName,
+                sortIndex: stored.sortIndex,
+                duration: stored.duration,
+                caption: stored.caption
+            )
             context.insert(media)
             capsule.media.append(media)
         }
@@ -322,18 +281,120 @@ enum CapsulePackage {
 // MARK: - Private: building the payload
 
 extension CapsulePackage {
+    /// Everything export needs from the model, captured on the main actor.
     @MainActor
-    private static func makePayload(for capsule: TimeCapsule) throws -> Data {
+    private static func exportDraft(of capsule: TimeCapsule, passphrase: String?, hint: String) -> CapsulePackageExportDraft {
+        let media = capsule.sortedMedia.compactMap { item -> CapsulePackageExportMedia? in
+            guard let url = MediaStore.url(for: item) else { return nil }
+            return CapsulePackageExportMedia(
+                url: url,
+                kind: item.kind,
+                duration: item.duration,
+                caption: item.caption,
+                sortIndex: item.sortIndex
+            )
+        }
+        return CapsulePackageExportDraft(
+            capsuleID: capsule.id,
+            title: capsule.title,
+            message: capsule.message,
+            mood: capsule.mood,
+            prompt: capsule.prompt,
+            senderName: exportSenderName(for: capsule),
+            recipientName: capsule.recipientName,
+            unlockDate: capsule.unlockDate,
+            sealedAt: capsule.sealedAt ?? .now,
+            themeRaw: capsule.themeRaw,
+            passphrase: passphrase,
+            hint: hint,
+            media: media
+        )
+    }
+
+    /// Seals a captured letter into a new export file. Runs off the main actor.
+    private static func writePackage(for draft: CapsulePackageExportDraft) throws -> URL {
+        // Measure before reading a single byte of media.
+        guard totalByteCount(of: draft.media) <= maxShareBytes else {
+            throw CapsulePackageError.tooLarge
+        }
+        let secretWord = normalizedPassphrase(draft.passphrase)
+        let salt = makeRandomData(size: .bits128)
+
+        let key: SymmetricKey
+        let embeddedKey: Data?
+        if let secretWord {
+            key = try deriveKey(from: secretWord, salt: salt)
+            embeddedKey = nil
+        } else {
+            let randomKey = SymmetricKey(size: .bits256)
+            key = randomKey
+            embeddedKey = randomKey.withUnsafeBytes { Data(Array($0)) }
+        }
+
+        let header = PackageHeader(
+            version: formatVersion,
+            capsuleID: draft.capsuleID,
+            title: draft.title,
+            senderName: draft.senderName,
+            recipientName: draft.recipientName,
+            unlockDate: draft.unlockDate,
+            sealedAt: draft.sealedAt,
+            themeRaw: draft.themeRaw,
+            requiresPassphrase: secretWord != nil,
+            passphraseHint: secretWord != nil ? draft.hint.trimmingCharacters(in: .whitespacesAndNewlines) : "",
+            salt: salt,
+            embeddedKey: embeddedKey
+        )
+        let headerData = try encodeJSON(header)
+        guard headerData.count <= maxHeaderLength,
+              let headerByteCount = UInt32(exactly: headerData.count) else {
+            throw CapsulePackageError.corrupted
+        }
+
+        let combined = try sealPayload(of: draft, using: key, authenticating: headerData)
+        // Whatever we send must also be accepted on the other side.
+        guard preambleLength + headerData.count + combined.count <= maxPackageBytes else {
+            throw CapsulePackageError.tooLarge
+        }
+
+        var preamble = CapsulePackageByteWriter()
+        preamble.appendBytes(magic)
+        preamble.appendUInt32(headerByteCount)
+        preamble.appendBytes(headerData)
+
+        let fileURL = try makeExportURL(title: draft.title)
+        try writeFile(preamble: preamble.data, sealedBox: combined, to: fileURL)
+        return fileURL
+    }
+
+    /// Builds the payload and seals it. The plaintext is released as soon as this returns,
+    /// so it never sits in memory next to the file being written.
+    private static func sealPayload(
+        of draft: CapsulePackageExportDraft,
+        using key: SymmetricKey,
+        authenticating headerData: Data
+    ) throws -> Data {
+        let payload = try makePayload(for: draft)
+        let sealedBox: AES.GCM.SealedBox
+        do {
+            sealedBox = try AES.GCM.seal(payload, using: key, nonce: AES.GCM.Nonce(), authenticating: headerData)
+        } catch {
+            throw CapsulePackageError.corrupted
+        }
+        guard let combined = sealedBox.combined else { throw CapsulePackageError.corrupted }
+        return combined
+    }
+
+    private static func makePayload(for draft: CapsulePackageExportDraft) throws -> Data {
         var entries: [CapsulePackageMediaEntry] = []
         var blobs: [Data] = []
 
-        for item in capsule.sortedMedia {
-            guard let url = MediaStore.url(for: item),
-                  let bytes = try? Data(contentsOf: url, options: .mappedIfSafe) else { continue }
+        for item in draft.media {
+            guard let bytes = try? Data(contentsOf: item.url, options: .mappedIfSafe) else { continue }
             entries.append(
                 CapsulePackageMediaEntry(
                     kind: item.kind.rawValue,
-                    fileExtension: mediaExtension(url.pathExtension, kind: item.kind),
+                    fileExtension: mediaExtension(item.url.pathExtension, kind: item.kind),
                     duration: item.duration,
                     caption: item.caption,
                     sortIndex: item.sortIndex,
@@ -344,10 +405,10 @@ extension CapsulePackage {
         }
 
         let manifest = CapsulePackageManifest(
-            title: capsule.title,
-            message: capsule.message,
-            mood: capsule.mood,
-            prompt: capsule.prompt,
+            title: draft.title,
+            message: draft.message,
+            mood: draft.mood,
+            prompt: draft.prompt,
             media: entries
         )
         let manifestData = try encodeJSON(manifest)
@@ -367,12 +428,10 @@ extension CapsulePackage {
     }
 
     /// Sum of the media file sizes on disk, read from file metadata only.
-    @MainActor
-    private static func totalMediaByteCount(of capsule: TimeCapsule) -> Int {
+    private static func totalByteCount(of media: [CapsulePackageExportMedia]) -> Int {
         var total = 0
-        for item in capsule.media {
-            guard let url = MediaStore.url(for: item),
-                  let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else { continue }
+        for item in media {
+            guard let size = try? item.url.resourceValues(forKeys: [.fileSizeKey]).fileSize else { continue }
             total += size
         }
         return total
@@ -536,10 +595,33 @@ extension CapsulePackage {
         return CapsulePackageContents(manifest: manifest, blobs: blobs)
     }
 
-    @MainActor
-    private static func storeMedia(_ blobs: [CapsulePackageBlob], capsuleID: UUID) throws -> [CapsuleMedia] {
-        var created: [CapsuleMedia] = []
-        var writtenFiles: [String] = []
+    /// Reads, checks and decrypts a stored package and writes its media into the capsule's
+    /// folder. Touches no model object, so it runs off the main actor.
+    private static func openPackage(at packageURL: URL, capsuleID: UUID, passphrase: String?) throws -> CapsulePackageOpened {
+        let now = Date.now
+        guard isWithinPackageLimit(packageURL) else { throw CapsulePackageError.invalidFile }
+        let fileData: Data
+        do {
+            fileData = try Data(contentsOf: packageURL, options: .mappedIfSafe)
+        } catch {
+            throw CapsulePackageError.missingPackage
+        }
+
+        let parsed = try parsePackage(fileData)
+        guard parsed.header.capsuleID == capsuleID else { throw CapsulePackageError.corrupted }
+        // The header is authenticated, so its date is the one the sender truly chose.
+        guard now >= parsed.header.unlockDate else { throw CapsulePackageError.stillSealed }
+
+        let key = try decryptionKey(for: parsed.header, passphrase: passphrase)
+        let payload = try decryptPayload(parsed, using: key)
+        let contents = try readPayload(payload)
+        let media = try storeMedia(contents.blobs, capsuleID: capsuleID)
+        return CapsulePackageOpened(manifest: contents.manifest, media: media)
+    }
+
+    /// Writes every blob as a media file; on any failure, removes what it already wrote.
+    private static func storeMedia(_ blobs: [CapsulePackageBlob], capsuleID: UUID) throws -> [CapsulePackageStoredMedia] {
+        var stored: [CapsulePackageStoredMedia] = []
         do {
             for blob in blobs {
                 guard let kind = MediaKind(rawValue: blob.entry.kind) else { continue }
@@ -548,10 +630,9 @@ extension CapsulePackage {
                     capsuleID: capsuleID,
                     fileExtension: mediaExtension(blob.entry.fileExtension, kind: kind)
                 )
-                writtenFiles.append(fileName)
                 let duration = blob.entry.duration.isFinite ? max(0, blob.entry.duration) : 0
-                created.append(
-                    CapsuleMedia(
+                stored.append(
+                    CapsulePackageStoredMedia(
                         kind: kind,
                         fileName: fileName,
                         sortIndex: blob.entry.sortIndex,
@@ -561,12 +642,36 @@ extension CapsulePackage {
                 )
             }
         } catch {
-            for fileName in writtenFiles {
-                MediaStore.delete(fileName: fileName, capsuleID: capsuleID)
-            }
+            discardStoredMedia(stored, capsuleID: capsuleID)
             throw error
         }
-        return created
+        return stored
+    }
+
+    private static func discardStoredMedia(_ media: [CapsulePackageStoredMedia], capsuleID: UUID) {
+        for item in media {
+            MediaStore.delete(fileName: item.fileName, capsuleID: capsuleID)
+        }
+    }
+
+    /// Reads and parses a whole package file without decrypting it.
+    private static func loadPackage(at url: URL) throws -> CapsulePackageParsed {
+        guard isWithinPackageLimit(url) else { throw CapsulePackageError.invalidFile }
+        let fileData: Data
+        do {
+            fileData = try Data(contentsOf: url, options: .mappedIfSafe)
+        } catch {
+            throw CapsulePackageError.invalidFile
+        }
+        return try parsePackage(fileData)
+    }
+
+    /// Proves that a package without a secret word is whole: opens it in memory with its own
+    /// key (the header is the authenticated data) and throws the plaintext away unread.
+    private static func verifySeal(of parsed: CapsulePackageParsed) throws {
+        let key = try decryptionKey(for: parsed.header, passphrase: nil)
+        let payload = try decryptPayload(parsed, using: key)
+        _ = try readPayload(payload)
     }
 }
 
@@ -593,6 +698,34 @@ extension CapsulePackage {
         } catch {
             throw CapsulePackageError.invalidFile
         }
+    }
+
+    /// Decides whether a newly received copy of a letter that still waits to be opened replaces
+    /// the stored package, and returns the header to take over (nil keeps the stored package).
+    ///
+    /// - A copy without a secret word is opened in memory first; only a whole, untampered copy
+    ///   replaces anything, and its authenticated header refreshes the envelope.
+    /// - A secret-word copy cannot be checked before its day, so it only stands in for a stored
+    ///   package that is missing or unreadable.
+    /// - A damaged copy is ignored while the stored package is readable; otherwise its error is thrown.
+    private static func replacementHeader(forStoredPackage stored: URL, incoming: URL) throws -> PackageHeader? {
+        func storedIsReadable() -> Bool {
+            (try? loadPackage(at: stored)) != nil
+        }
+        let candidate: CapsulePackageParsed
+        do {
+            candidate = try loadPackage(at: incoming)
+            if !candidate.header.requiresPassphrase {
+                try verifySeal(of: candidate)
+            }
+        } catch {
+            if storedIsReadable() { return nil }
+            throw error
+        }
+        if candidate.header.requiresPassphrase, storedIsReadable() {
+            return nil
+        }
+        return candidate.header
     }
 
     /// Swaps a newly received package in for the stored one in a single step, so a failure
@@ -754,7 +887,7 @@ extension CapsulePackage {
 
 // MARK: - Private types
 
-private struct CapsulePackageManifest: Codable {
+private struct CapsulePackageManifest: Codable, Sendable {
     var title: String
     var message: String
     var mood: String
@@ -762,13 +895,53 @@ private struct CapsulePackageManifest: Codable {
     var media: [CapsulePackageMediaEntry]
 }
 
-private struct CapsulePackageMediaEntry: Codable {
+private struct CapsulePackageMediaEntry: Codable, Sendable {
     var kind: String
     var fileExtension: String
     var duration: Double
     var caption: String
     var sortIndex: Int
     var byteCount: Int
+}
+
+/// A letter captured from the model on the main actor, ready to be sealed off it.
+private struct CapsulePackageExportDraft: Sendable {
+    let capsuleID: UUID
+    let title: String
+    let message: String
+    let mood: String
+    let prompt: String
+    let senderName: String
+    let recipientName: String
+    let unlockDate: Date
+    let sealedAt: Date
+    let themeRaw: String
+    let passphrase: String?
+    let hint: String
+    let media: [CapsulePackageExportMedia]
+}
+
+private struct CapsulePackageExportMedia: Sendable {
+    let url: URL
+    let kind: MediaKind
+    let duration: Double
+    let caption: String
+    let sortIndex: Int
+}
+
+/// A media file written while unpacking, waiting for its `CapsuleMedia` on the main actor.
+private struct CapsulePackageStoredMedia: Sendable {
+    let kind: MediaKind
+    let fileName: String
+    let sortIndex: Int
+    let duration: Double
+    let caption: String
+}
+
+/// What unpacking hands back to the main actor.
+private struct CapsulePackageOpened: Sendable {
+    let manifest: CapsulePackageManifest
+    let media: [CapsulePackageStoredMedia]
 }
 
 private struct CapsulePackageParsed {

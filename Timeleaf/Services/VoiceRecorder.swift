@@ -47,6 +47,8 @@ final class VoiceRecorder {
         elapsed = 0
         levels = []
 
+        // A voice note playing nearby would end up in the recording.
+        AudioPlayback.stopAll()
         guard activateSession() else { return }
 
         let destination = FileManager.default.temporaryDirectory
@@ -191,9 +193,22 @@ final class VoiceRecorder {
 // MARK: - AudioPlayback
 
 /// Plays a single voice note with observable progress, for a quiet, elegant audio row.
+///
+/// Only one note is audible at a time: starting one pauses whichever was playing, and
+/// `stopAll()` silences them all (e.g. before a video starts).
 @MainActor
 @Observable
 final class AudioPlayback {
+    /// The instance that is currently audible, if any.
+    private static weak var audible: AudioPlayback?
+
+    /// Silences every voice note that is playing. Each keeps its position.
+    static func stopAll() {
+        guard let current = audible else { return }
+        audible = nil
+        current.silence()
+    }
+
     /// `true` while audio is audible.
     private(set) var isPlaying = false
     /// Playback position, 0...1.
@@ -252,6 +267,11 @@ final class AudioPlayback {
     // MARK: Private
 
     private func play(_ player: AVAudioPlayer) {
+        // Never two voices at once: quiet the other note before taking the session.
+        if let other = Self.audible, other !== self {
+            Self.audible = nil
+            other.silence()
+        }
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playback, mode: .default, options: [])
@@ -268,7 +288,14 @@ final class AudioPlayback {
             return
         }
         isPlaying = true
+        Self.audible = self
         startProgressUpdates()
+    }
+
+    /// Pauses if playing (another note started, or `stopAll()`).
+    private func silence() {
+        guard let player, isPlaying || player.isPlaying else { return }
+        pause(player)
     }
 
     private func pause(_ player: AVAudioPlayer) {

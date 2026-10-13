@@ -51,6 +51,8 @@ struct ComposeSealCeremonyView: View {
             .padding(.horizontal, 28)
             .padding(.top, 8)
             .padding(.bottom, 16)
+            // A comfortable column on iPad (the envelope itself is capped at 340 pt).
+            .frame(maxWidth: 640)
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
         .task {
@@ -270,7 +272,7 @@ struct ComposeSealCeremonyView: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.bottom, 8)
-            if draft.recipientKind == .someone {
+            if draft.recipientKind == .someone && !draft.isTooLargeToSend {
                 Button {
                     Haptics.tap()
                     showsShare = true
@@ -281,6 +283,19 @@ struct ComposeSealCeremonyView: View {
                 Button("Done", action: finish)
                     .buttonStyle(.themedSecondary)
             } else {
+                if draft.isTooLargeToSend {
+                    // Its memories are more than one shared file may carry, so sharing could only fail.
+                    Label {
+                        Text("Too large to send as a file, so it stays with you as a keepsake.")
+                    } icon: {
+                        Image(systemName: "shippingbox")
+                    }
+                    .font(theme.label(12))
+                    .foregroundStyle(theme.inkSecondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 4)
+                }
                 Button("Done", action: finish)
                     .buttonStyle(.themedPrimary)
             }

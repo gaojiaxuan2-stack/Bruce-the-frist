@@ -55,8 +55,9 @@ private struct HorizonRiver: View {
         }
     }
 
+    /// Lazy, so a long river only builds the stretch that is on screen.
     private func river(_ model: HorizonModel) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(model.rows) { row in
                 HorizonRowView(row: row, now: now, onOpen: presentCapsule, onWrite: startWriting)
                     .id(row.id)
@@ -290,7 +291,7 @@ private struct HorizonStopRow: View {
                 .font(theme.label(10.5, weight: .semibold))
                 .tracking(1.2)
                 .textCase(.uppercase)
-                .foregroundStyle(stop.era == .arrived ? theme.accent : theme.inkSecondary)
+                .foregroundStyle(stop.era == .arrived ? theme.accent : detailInk)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
             Text(horizonTitle(stop.capsule))
@@ -300,10 +301,17 @@ private struct HorizonStopRow: View {
                 .multilineTextAlignment(.leading)
             Text("\(TimePhrase.longDate(stop.capsule.unlockDate)) · \(addressee)")
                 .font(theme.label(12))
-                .foregroundStyle(theme.inkSecondary)
+                .foregroundStyle(detailInk)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
         }
+    }
+
+    /// Rows sit straight on the backdrop, with no card behind them. On light paper
+    /// (Ink Wash's mountains in particular) the small lines take a deeper ink so
+    /// they stay legible over the darker washes.
+    private var detailInk: Color {
+        theme.colorScheme == .light ? theme.ink.opacity(0.72) : theme.inkSecondary
     }
 
     private var caption: Text {
@@ -395,10 +403,11 @@ private struct HorizonYearMark: View {
                 .fill(theme.accent.opacity(0.75))
                 .frame(width: 14, height: 1.5)
                 .frame(width: HorizonMetrics.railWidth)
+            // Quiet, but still the river's landmarks: at least 3:1 in every style.
             Text(verbatim: String(year))
-                .font(theme.display(46, weight: .ultraLight))
+                .font(theme.display(46, weight: .light))
                 .monospacedDigit()
-                .foregroundStyle(theme.ink.opacity(0.36))
+                .foregroundStyle(theme.inkSecondary.opacity(0.75))
             Rectangle()
                 .fill(theme.ink.opacity(0.08))
                 .frame(height: 0.5)

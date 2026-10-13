@@ -14,6 +14,7 @@ struct StylesView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(AppRouter.self) private var router
 
     @AppStorage(SettingsKey.theme) private var themeRaw = ThemeID.aurora.rawValue
@@ -40,6 +41,9 @@ struct StylesView: View {
             }
             .padding(.top, 20)
             .padding(.bottom, 120)
+            // A comfortable column on iPad, centred like the Vault and Horizon.
+            .frame(maxWidth: StylesMetrics.columnWidth)
+            .frame(maxWidth: .infinity)
         }
         .scrollIndicators(.hidden)
         .scrollDismissesKeyboard(.interactively)
@@ -96,18 +100,22 @@ struct StylesView: View {
     }
 
     private var carousel: some View {
-        ScrollView(.horizontal) {
+        // Reduce Motion keeps the scale and fade of the carousel, never the 3D swing.
+        let swingDegrees: Double = reduceMotion ? 0 : -14
+        return ScrollView(.horizontal) {
             LazyHStack(spacing: 18) {
                 ForEach(ThemeID.allCases, id: \.self) { id in
                     StylesCard(id: id, monogram: monogram, isSelected: id == selectedID) {
                         select(id)
                     }
-                    .containerRelativeFrame(.horizontal) { length, _ in length * 0.8 }
+                    .containerRelativeFrame(.horizontal) { length, _ in
+                        min(length * 0.8, StylesMetrics.maxCardWidth)
+                    }
                     .scrollTransition(.interactive, axis: .horizontal) { content, phase in
                         content
                             .scaleEffect(phase.isIdentity ? 1 : 0.9)
                             .rotation3DEffect(
-                                .degrees(phase.value * -14),
+                                .degrees(phase.value * swingDegrees),
                                 axis: (x: 0, y: 1, z: 0),
                                 perspective: 0.6
                             )
@@ -360,6 +368,8 @@ struct StylesView: View {
 
 private enum StylesMetrics {
     static let cardHeight: CGFloat = 372
+    static let maxCardWidth: CGFloat = 420
+    static let columnWidth: CGFloat = 640
 }
 
 private enum StylesImportOutcome {
@@ -424,8 +434,16 @@ private struct StylesCardFace: View {
         .background { backdrop }
         .clipShape(shape)
         .overlay { border }
-        .shadow(color: shadowColor, radius: isSelected ? 26 : 16, x: 0, y: isSelected ? 16 : 10)
+        .background { shadowPlate }
         .animation(.smooth(duration: 0.5), value: isSelected)
+    }
+
+    /// The card's drop shadow, cast by a plain shape behind it. A shadow on the card
+    /// itself would re-render it offscreen every time its live backdrop ticks.
+    private var shadowPlate: some View {
+        shape
+            .fill(theme.background)
+            .shadow(color: shadowColor, radius: isSelected ? 26 : 16, x: 0, y: isSelected ? 16 : 10)
     }
 
     private var topRow: some View {
