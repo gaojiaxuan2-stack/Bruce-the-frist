@@ -16,6 +16,9 @@ struct ShareCapsuleSheet: View {
     @State private var preparedURL: URL?
     @State private var isPreparing = false
     @State private var errorMessage: String?
+    /// Bumped whenever the choices change, so an export that was started with
+    /// older choices (e.g. before a secret word was added) is never offered.
+    @State private var exportGeneration = 0
     @FocusState private var focusedField: ShareCapsuleField?
 
     init(capsule: TimeCapsule) {
@@ -52,6 +55,11 @@ struct ShareCapsuleSheet: View {
         .onChange(of: usesSecretWord) { invalidate() }
         .onChange(of: secretWord) { invalidate() }
         .onChange(of: hint) { invalidate() }
+        .onDisappear {
+            // The share sheet has closed with this one; the temporary file is no longer needed.
+            exportGeneration += 1
+            discardPreparedFile()
+        }
         .screenTheme(theme)
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
@@ -193,8 +201,8 @@ struct ShareCapsuleSheet: View {
                     }
                 }
                 .buttonStyle(.themedPrimary)
-                .disabled(!canPrepare || isPreparing)
-                .opacity(canPrepare ? 1 : 0.5)
+                // Stays fully visible while preparing; `prepare()` ignores repeated taps.
+                .disabled(!canPrepare)
                 .transition(.opacity)
             }
 
@@ -214,14 +222,24 @@ struct ShareCapsuleSheet: View {
 
     private var footnote: some View {
         Label {
-            Text("Encrypted on this device. Timeleaf keeps it closed until the day arrives.")
+            footnoteText
         } icon: {
-            Image(systemName: "lock")
+            Image(systemName: usesSecretWord ? "lock.fill" : "lock.open")
         }
         .font(theme.label(12))
         .foregroundStyle(theme.inkSecondary)
         .multilineTextAlignment(.center)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Honest about what keeps the letter closed: without a secret word the file carries
+    /// its own key, so it is Timeleaf (not the encryption) that holds it until the day.
+    private var footnoteText: Text {
+        if usesSecretWord {
+            let date = TimePhrase.longDate(capsule.unlockDate)
+            return Text("Locked with your secret word: only someone who knows it can open the letter, and Timeleaf keeps it closed until \(date).")
+        }
+        return Text("Without a secret word, it's Timeleaf — not the encryption — that keeps the date. Add one to lock it for real.")
     }
 
     private var closeButton: some View {
@@ -251,8 +269,15 @@ struct ShareCapsuleSheet: View {
     }
 
     private func invalidate() {
-        preparedURL = nil
+        exportGeneration += 1
+        discardPreparedFile()
         errorMessage = nil
+    }
+
+    private func discardPreparedFile() {
+        guard let url = preparedURL else { return }
+        preparedURL = nil
+        ShareCapsuleExportFiles.remove(url)
     }
 
     private func prepare() {
@@ -262,19 +287,36 @@ struct ShareCapsuleSheet: View {
         isPreparing = true
         let passphrase: String? = usesSecretWord ? trimmedSecret : nil
         let hintText = usesSecretWord ? hint.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let generation = exportGeneration
         Task { @MainActor in
             // Let the button show its progress before the key derivation runs.
             try? await Task.sleep(for: .milliseconds(120))
             do {
                 let url = try CapsulePackage.export(capsule, passphrase: passphrase, hint: hintText)
-                preparedURL = url
-                Haptics.success()
+                if generation == exportGeneration {
+                    preparedURL = url
+                    Haptics.success()
+                } else {
+                    // The choices changed while sealing; never offer a file made with old ones.
+                    ShareCapsuleExportFiles.remove(url)
+                }
             } catch {
-                errorMessage = error.localizedDescription
-                Haptics.warning()
+                if generation == exportGeneration {
+                    errorMessage = error.localizedDescription
+                    Haptics.warning()
+                }
             }
             isPreparing = false
         }
+    }
+}
+
+/// `CapsulePackage.export` writes each file into its own folder under `tmp/TimeleafExports`.
+private enum ShareCapsuleExportFiles {
+    static func remove(_ fileURL: URL) {
+        let folder = fileURL.deletingLastPathComponent()
+        let isExportFolder = folder.deletingLastPathComponent().lastPathComponent == "TimeleafExports"
+        try? FileManager.default.removeItem(at: isExportFolder ? folder : fileURL)
     }
 }
 

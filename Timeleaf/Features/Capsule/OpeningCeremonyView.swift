@@ -564,6 +564,9 @@ struct CapsuleCeremonyScreen: View {
         }
 
         try? await Task.sleep(for: .milliseconds(620))
+        // The cover may have been closed mid-ceremony and the letter deleted since;
+        // never touch a model that is gone.
+        guard !capsule.isDeleted, capsule.modelContext != nil else { return }
         CapsuleActions.markOpened(capsule, in: modelContext)
         onFinish()
     }

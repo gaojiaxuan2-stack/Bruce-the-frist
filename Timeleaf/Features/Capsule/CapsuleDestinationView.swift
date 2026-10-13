@@ -14,6 +14,7 @@ struct CapsuleDestinationView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(AppRouter.self) private var router
 
     /// The hold completed and the ceremony is playing; keep it on screen even
     /// though the capsule is about to be marked as opened.
@@ -38,6 +39,8 @@ struct CapsuleDestinationView: View {
             closeButton
         }
         .screenTheme(theme)
+        // Only the topmost presentation can show an alert.
+        .routerAlert(router)
     }
 
     // MARK: Routing

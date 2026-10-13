@@ -215,6 +215,12 @@ struct ComposeWriteStep: View {
         .onChange(of: focus) { _, newValue in
             isEditingLetter = newValue == .letter
         }
+        .onAppear {
+            // Coming back to this page: show the prompt that was kept, not a new one.
+            if let kept = ComposeSpark.prompts.firstIndex(of: draft.prompt) {
+                promptIndex = kept
+            }
+        }
         .onDisappear {
             isEditingLetter = false
         }
@@ -1402,6 +1408,15 @@ struct ComposeStyleStep: View {
         }
         .task(id: focusedStyle) {
             await commit(focusedStyle)
+        }
+        .onDisappear {
+            // Leaving the page cancels the settle delay above; the style the carousel
+            // rests on is still the one the letter is sealed with.
+            if let focusedStyle, focusedStyle != draft.themeID {
+                withAnimation(.smooth(duration: 0.8)) {
+                    draft.themeID = focusedStyle
+                }
+            }
         }
     }
 

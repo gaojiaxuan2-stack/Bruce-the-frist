@@ -290,6 +290,7 @@ struct StylesView: View {
     // MARK: Actions
 
     private func refreshNotificationState() async {
+        let context = modelContext
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         let state: StylesNotificationState
         switch settings.authorizationStatus {
@@ -302,7 +303,12 @@ struct StylesView: View {
         @unknown default:
             state = .unknown
         }
+        let becameAllowed = state == .allowed && notificationState != .allowed
         withAnimation(.smooth(duration: 0.4)) { notificationState = state }
+        if becameAllowed {
+            // Letters sealed while notifications were off still deserve their arrival call.
+            Task { await CapsuleActions.rescheduleNotifications(in: context) }
+        }
     }
 
     private func requestNotifications() {
@@ -319,19 +325,33 @@ struct StylesView: View {
     }
 
     private func handleImport(_ result: Result<URL, Error>) {
+        let outcome: StylesImportOutcome
         switch result {
         case .success(let url):
             do {
                 let capsule = try CapsulePackage.importPackage(from: url, into: modelContext)
                 Haptics.success()
-                router.selectedTab = .vault
-                router.presentedCapsuleID = capsule.id
+                outcome = .open(capsule.id)
             } catch {
                 Haptics.warning()
-                router.alertMessage = error.localizedDescription
+                outcome = .failed(error.localizedDescription)
             }
         case .failure(let error):
-            router.alertMessage = error.localizedDescription
+            outcome = .failed(error.localizedDescription)
+        }
+        // Route only once the document picker has finished sliding away: UIKit refuses
+        // to present the letter's cover (or an alert) while a dismissal is in flight.
+        // The router is captured now, while this view is still installed.
+        let router = router
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(650))
+            switch outcome {
+            case .open(let id):
+                router.selectedTab = .vault
+                router.presentedCapsuleID = id
+            case .failed(let message):
+                router.alertMessage = message
+            }
         }
     }
 }
@@ -340,6 +360,11 @@ struct StylesView: View {
 
 private enum StylesMetrics {
     static let cardHeight: CGFloat = 372
+}
+
+private enum StylesImportOutcome {
+    case open(UUID)
+    case failed(String)
 }
 
 private enum StylesNotificationState: Equatable {

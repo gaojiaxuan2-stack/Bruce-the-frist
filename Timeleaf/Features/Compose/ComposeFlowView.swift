@@ -24,6 +24,7 @@ struct ComposeFlowView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(AppRouter.self) private var router
 
     init(onFinish: @escaping (TimeCapsule?) -> Void) {
         self.onFinish = onFinish
@@ -68,6 +69,8 @@ struct ComposeFlowView: View {
             }
         }
         .screenTheme(theme)
+        // Only the topmost presentation can show an alert.
+        .routerAlert(router)
     }
 
     // MARK: Chrome
@@ -122,7 +125,6 @@ struct ComposeFlowView: View {
         }
         .buttonStyle(.themedPrimary)
         .disabled(!canContinue)
-        .opacity(canContinue ? 1 : 0.5)
         .animation(.smooth(duration: 0.25), value: canContinue)
     }
 
