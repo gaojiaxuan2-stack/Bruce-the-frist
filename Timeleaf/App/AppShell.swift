@@ -38,7 +38,7 @@ struct AppShell: View {
         .onOpenURL { url in
             handleIncoming(url)
         }
-        .onChange(of: scenePhase) { _, phase in
+        .onChange(of: scenePhase, initial: true) { _, phase in
             switch phase {
             case .background:
                 appLock.lockIfNeeded()
