@@ -622,24 +622,21 @@ private struct ParchmentSealArt: View {
     }
 }
 
-/// An irregular pool of wax: fourteen soft lobes around a circle.
+/// An irregular pool of wax: soft, unevenly squeezed lobes around a slightly lopsided circle.
 private struct ParchmentWaxShape: Shape {
     func path(in rect: CGRect) -> Path {
         let cx = Double(rect.midX)
         let cy = Double(rect.midY)
         let radius = Double(min(rect.width, rect.height)) / 2
-        let lobes = 14
+        let count = 22
         var points: [CGPoint] = []
-        points.reserveCapacity(lobes * 2)
-        for index in 0..<(lobes * 2) {
-            let jitter = (parchmentRandom(index, 31) - 0.5) * 0.3
-            let angle = (Double(index) + jitter) / Double(lobes * 2) * 2 * Double.pi
-            let reach: Double
-            if index % 2 == 0 {
-                reach = 0.86 + 0.08 * parchmentRandom(index, 32)
-            } else {
-                reach = 0.8 + 0.05 * parchmentRandom(index, 33)
-            }
+        points.reserveCapacity(count)
+        for index in 0..<count {
+            let jitter = (parchmentRandom(index, 31) - 0.5) * 0.5
+            let angle = (Double(index) + jitter) / Double(count) * 2 * Double.pi
+            let bias: Double = index % 2 == 0 ? 0.025 : -0.025
+            let swell = 0.03 * sin(2 * angle + 1.3) + 0.02 * sin(3 * angle + 0.4)
+            let reach = 0.83 + 0.07 * parchmentRandom(index, 32) + bias + swell
             points.append(CGPoint(x: cx + cos(angle) * radius * reach, y: cy + sin(angle) * radius * reach))
         }
         return parchmentSmoothPath(points)

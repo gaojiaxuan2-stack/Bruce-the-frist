@@ -139,8 +139,8 @@ private struct AuroraMesh: View {
         let pulse = 0.5 + 0.5 * sin(time * 2 * .pi / 22 + 1.3)
         let night = AuroraPalette.night
         let deep = Color(hex: 0x0A1128)
-        let mintCore = Color(hex: 0x1C8A78, opacity: 0.55 + 0.35 * breath)
-        let violetCore = Color(hex: 0x4A3BA0, opacity: 0.45 + 0.35 * pulse)
+        let mintCore = Color(hex: 0x1C8A78, opacity: 0.5 + 0.3 * breath)
+        let violetCore = Color(hex: 0x4A3BA0, opacity: 0.4 + 0.3 * pulse)
         let row0: [Color] = [night, Color(hex: 0x1A1645), Color(hex: 0x0B2A3C), night]
         let row1: [Color] = [Color(hex: 0x0E4B52, opacity: 0.9), mintCore, violetCore, Color(hex: 0x0F3A4C)]
         let row2: [Color] = [deep, Color(hex: 0x0B2D35, opacity: 0.85), Color(hex: 0x17134A, opacity: 0.85), deep]
@@ -584,8 +584,7 @@ private enum AuroraBurstPainter {
         veil.stroke(path, with: shading, style: StrokeStyle(lineWidth: ribbon.width, lineCap: .round))
 
         var core = context
-        core.opacity = envelope * 0.9
-        core.addFilter(.blur(radius: 2))
+        core.opacity = envelope * 0.8
         core.stroke(
             path,
             with: .color(Color.white.opacity(0.55)),
@@ -653,7 +652,9 @@ struct AuroraStationery: View {
             AuroraSheetSparkles()
         }
         .clipShape(shape)
-        .overlay(shape.strokeBorder(AuroraSheetStyle.stroke, lineWidth: 0.75))
+        .overlay {
+            shape.strokeBorder(AuroraSheetStyle.stroke, lineWidth: 0.75)
+        }
     }
 }
 
