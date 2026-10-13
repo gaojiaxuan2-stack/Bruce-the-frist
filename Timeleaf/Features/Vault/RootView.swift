@@ -270,6 +270,7 @@ private struct RootTabBar: View {
                 }
         }
         .buttonStyle(RootPressStyle())
+        .accessibilityLabel(Text(title))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 

@@ -6,18 +6,18 @@ extension View {
     /// Surface fill (layered over `.ultraThinMaterial` when the style asks for it),
     /// a hairline stroke, the style's corner radius and a soft, scheme-aware shadow.
     func themedCard(padding: CGFloat = 20) -> some View {
-        modifier(ThemedCardModifier(padding: padding))
+        modifier(ChromeCardModifier(padding: padding))
     }
 
     /// A gentle breathing halo in `theme.glow` while `active` is true.
     /// Static when Reduce Motion is on. Never changes the identity of the content.
     func themedGlow(_ active: Bool) -> some View {
-        modifier(ThemedGlowModifier(active: active))
+        modifier(ChromeGlowModifier(active: active))
     }
 
     /// Styling for `TextField` / `TextEditor` containers.
     func themedField() -> some View {
-        modifier(ThemedFieldModifier())
+        modifier(ChromeFieldModifier())
     }
 }
 
@@ -33,7 +33,7 @@ struct ThemedButtonStyle: ButtonStyle {
     var kind: Kind
 
     func makeBody(configuration: Configuration) -> some View {
-        ThemedButtonBody(configuration: configuration, kind: kind)
+        ChromeButtonBody(configuration: configuration, kind: kind)
     }
 }
 
@@ -48,7 +48,7 @@ extension ButtonStyle where Self == ThemedButtonStyle {
 
 // MARK: - Card
 
-private struct ThemedCardModifier: ViewModifier {
+private struct ChromeCardModifier: ViewModifier {
     @Environment(\.theme) private var theme
     let padding: CGFloat
 
@@ -56,18 +56,21 @@ private struct ThemedCardModifier: ViewModifier {
         content
             .padding(padding)
             .background {
-                ThemedSurface(theme: theme, cornerRadius: theme.cornerRadius, depth: 1)
+                ChromeSurface(theme: theme, cornerRadius: theme.cornerRadius, depth: 1)
             }
     }
 }
 
 /// The shared "sheet of the style" used by cards and fields.
 /// Only the bottom-most layer carries the shadow, so translucent surfaces stay clean.
-private struct ThemedSurface: View {
+private struct ChromeSurface: View {
     let theme: Theme
     let cornerRadius: CGFloat
     /// 0 = flat (fields), 1 = lifted card.
     let depth: Double
+
+    private var shadowRadius: CGFloat { CGFloat(18 * depth) }
+    private var shadowOffset: CGFloat { CGFloat(10 * depth) }
 
     private var isDark: Bool { theme.colorScheme == .dark }
 
@@ -116,13 +119,13 @@ private struct ThemedSurface: View {
         if theme.usesMaterial {
             shape
                 .fill(.ultraThinMaterial)
-                .shadow(color: ambientShadow, radius: 18 * depth, x: 0, y: 10 * depth)
+                .shadow(color: ambientShadow, radius: shadowRadius, x: 0, y: shadowOffset)
                 .shadow(color: contactShadow, radius: 1.5, x: 0, y: 1)
             shape.fill(theme.surface)
         } else {
             shape
                 .fill(theme.surface)
-                .shadow(color: ambientShadow, radius: 18 * depth, x: 0, y: 10 * depth)
+                .shadow(color: ambientShadow, radius: shadowRadius, x: 0, y: shadowOffset)
                 .shadow(color: contactShadow, radius: 1.5, x: 0, y: 1)
         }
     }
@@ -130,7 +133,7 @@ private struct ThemedSurface: View {
 
 // MARK: - Glow
 
-private struct ThemedGlowModifier: ViewModifier {
+private struct ChromeGlowModifier: ViewModifier {
     @Environment(\.theme) private var theme
     let active: Bool
 
@@ -139,7 +142,7 @@ private struct ThemedGlowModifier: ViewModifier {
             .background {
                 ZStack {
                     if active {
-                        ThemedGlowHalo(color: theme.glow, cornerRadius: theme.cornerRadius)
+                        ChromeGlowHalo(color: theme.glow, cornerRadius: theme.cornerRadius)
                             .transition(.opacity)
                     }
                 }
@@ -149,17 +152,17 @@ private struct ThemedGlowModifier: ViewModifier {
 }
 
 /// A halo drawn *behind* the content; breathes slowly unless Reduce Motion is on.
-private struct ThemedGlowHalo: View {
+private struct ChromeGlowHalo: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let color: Color
     let cornerRadius: CGFloat
 
     var body: some View {
         if reduceMotion {
-            ThemedGlowLayers(color: color, cornerRadius: cornerRadius)
+            ChromeGlowLayers(color: color, cornerRadius: cornerRadius)
                 .opacity(0.8)
         } else {
-            ThemedGlowLayers(color: color, cornerRadius: cornerRadius)
+            ChromeGlowLayers(color: color, cornerRadius: cornerRadius)
                 .phaseAnimator([false, true]) { layers, bloom in
                     layers
                         .opacity(bloom ? 1 : 0.5)
@@ -171,7 +174,7 @@ private struct ThemedGlowHalo: View {
     }
 }
 
-private struct ThemedGlowLayers: View {
+private struct ChromeGlowLayers: View {
     let color: Color
     let cornerRadius: CGFloat
 
@@ -197,7 +200,7 @@ private struct ThemedGlowLayers: View {
 
 // MARK: - Field
 
-private struct ThemedFieldModifier: ViewModifier {
+private struct ChromeFieldModifier: ViewModifier {
     @Environment(\.theme) private var theme
 
     private var radius: CGFloat { min(theme.cornerRadius * 0.7, 18) }
@@ -210,14 +213,14 @@ private struct ThemedFieldModifier: ViewModifier {
             .tint(theme.accent)
             .scrollContentBackground(.hidden)
             .background {
-                ThemedSurface(theme: theme, cornerRadius: radius, depth: 0)
+                ChromeSurface(theme: theme, cornerRadius: radius, depth: 0)
             }
     }
 }
 
 // MARK: - Button body
 
-private struct ThemedButtonBody: View {
+private struct ChromeButtonBody: View {
     @Environment(\.theme) private var theme
     @Environment(\.isEnabled) private var isEnabled
 
@@ -301,17 +304,17 @@ private struct ThemedButtonBody: View {
 // MARK: - Previews
 
 #Preview("Themed styles") {
-    ThemedStylesPreviewGallery()
+    ChromePreviewGallery()
 }
 
-private struct ThemedStylesPreviewGallery: View {
+private struct ChromePreviewGallery: View {
     @State private var title = "To the one who survived senior year"
 
     var body: some View {
         ScrollView {
             VStack(spacing: 28) {
                 ForEach(ThemeID.allCases) { id in
-                    ThemedStylesPreviewSample(title: $title)
+                    ChromePreviewSample(title: $title)
                         .padding(20)
                         .background { ThemeBackground() }
                         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
@@ -323,7 +326,7 @@ private struct ThemedStylesPreviewGallery: View {
     }
 }
 
-private struct ThemedStylesPreviewSample: View {
+private struct ChromePreviewSample: View {
     @Environment(\.theme) private var theme
     @Binding var title: String
 

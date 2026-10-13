@@ -11,6 +11,7 @@ struct AppShell: View {
 
     @AppStorage(SettingsKey.theme) private var themeRaw = ThemeID.aurora.rawValue
     @AppStorage(SettingsKey.onboarded) private var onboarded = false
+    @State private var lockWindow = LockWindowController()
 
     private var theme: Theme { (ThemeID(rawValue: themeRaw) ?? .aurora).theme }
 
@@ -26,6 +27,7 @@ struct AppShell: View {
                 .transition(.opacity)
             }
 
+            // Fallback; normally the lock window (above every cover) hides this.
             if appLock.isLocked {
                 LockScreenView()
                     .transition(.opacity)
@@ -35,6 +37,9 @@ struct AppShell: View {
         .animation(.smooth(duration: 0.35), value: appLock.isLocked)
         .animation(.smooth(duration: 0.6), value: themeRaw)
         .screenTheme(theme)
+        .onChange(of: appLock.isLocked, initial: true) { _, isLocked in
+            lockWindow.update(isLocked: isLocked, appLock: appLock, theme: theme)
+        }
         .onOpenURL { url in
             handleIncoming(url)
         }
