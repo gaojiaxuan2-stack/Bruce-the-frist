@@ -10,7 +10,7 @@ extension Theme {
         id: .blossom,
         name: "Blossom",
         nativeName: "花信",
-        tagline: "News of spring, pressed between pages.",
+        tagline: String(localized: "News of spring, pressed between pages."),
         colorScheme: .light,
         background: Color(hex: 0xFCEFF1),
         surface: Color(hex: 0xFFFAFA, opacity: 0.84),

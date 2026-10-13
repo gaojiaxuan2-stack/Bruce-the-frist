@@ -11,7 +11,7 @@ extension Theme {
         id: .celestial,
         name: "Celestial",
         nativeName: "星河",
-        tagline: "Written in the stars, opened in their time.",
+        tagline: String(localized: "Written in the stars, opened in their time."),
         colorScheme: .dark,
         background: Color(hex: 0x05060F),
         surface: Color(hex: 0x0E1431, opacity: 0.88),

@@ -11,7 +11,7 @@ extension Theme {
         id: .aurora,
         name: "Aurora",
         nativeName: "极光",
-        tagline: "Your words, held in drifting northern light.",
+        tagline: String(localized: "Your words, held in drifting northern light."),
         colorScheme: .dark,
         background: Color(hex: 0x070B1A),
         surface: Color(hex: 0x111A33, opacity: 0.66),

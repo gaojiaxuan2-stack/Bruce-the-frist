@@ -10,7 +10,7 @@ extension Theme {
         id: .inkwash,
         name: "Ink Wash",
         nativeName: "水墨",
-        tagline: "Where the brush rests, the mist begins.",
+        tagline: String(localized: "Where the brush rests, the mist begins."),
         colorScheme: .light,
         background: Color(hex: 0xF5F1E8),
         surface: Color(hex: 0xFBF8F1, opacity: 0.95),

@@ -10,7 +10,7 @@ extension Theme {
         id: .parchment,
         name: "Parchment",
         nativeName: "信笺",
-        tagline: "Sealed in wax, kept by time.",
+        tagline: String(localized: "Sealed in wax, kept by time."),
         colorScheme: .light,
         background: Color(hex: 0xF3E9D7),
         surface: Color(hex: 0xFBF6EC, opacity: 0.96),

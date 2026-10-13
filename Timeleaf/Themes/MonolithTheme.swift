@@ -10,7 +10,7 @@ extension Theme {
         id: .monolith,
         name: "Monolith",
         nativeName: "极简",
-        tagline: "Precise as a clock. Quiet as a promise.",
+        tagline: String(localized: "Precise as a clock. Quiet as a promise."),
         colorScheme: .dark,
         background: Color(hex: 0x0A0A0A),
         surface: Color(hex: 0x151515),
