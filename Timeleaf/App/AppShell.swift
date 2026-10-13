@@ -44,14 +44,25 @@ struct AppShell: View {
             handleIncoming(url)
         }
         .onChange(of: scenePhase, initial: true) { _, phase in
+            let lockEnabled = UserDefaults.standard.bool(forKey: SettingsKey.appLock)
             switch phase {
+            case .inactive:
+                // Privacy cover for the App Switcher; it doesn't require authentication
+                // (the Face ID sheet itself makes the scene inactive).
+                if lockEnabled {
+                    lockWindow.update(isLocked: true, appLock: appLock, theme: theme)
+                }
             case .background:
                 appLock.lockIfNeeded()
+                // Synchronously, so the cover exists before the system snapshot.
+                lockWindow.update(isLocked: appLock.isLocked || lockEnabled, appLock: appLock, theme: theme)
             case .active:
                 if appLock.isLocked {
                     Task { await appLock.unlock() }
+                } else {
+                    lockWindow.update(isLocked: false, appLock: appLock, theme: theme)
                 }
-            default:
+            @unknown default:
                 break
             }
         }
