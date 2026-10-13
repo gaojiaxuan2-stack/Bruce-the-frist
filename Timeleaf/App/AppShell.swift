@@ -63,6 +63,8 @@ struct AppShell: View {
                 }
                 // Letters sealed while notifications were off still deserve their knock.
                 Task { await CapsuleActions.rescheduleNotifications(in: modelContext) }
+            case .inactive:
+                break
             @unknown default:
                 break
             }

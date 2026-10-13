@@ -221,7 +221,7 @@ final class AudioPlayback {
         duration = 0
         guard let newPlayer = try? AVAudioPlayer(contentsOf: url) else { return }
         newPlayer.delegate = finishRelay
-        newPlayer.prepareToPlay()
+        _ = newPlayer.prepareToPlay()
         player = newPlayer
         let length = newPlayer.duration
         duration = length.isFinite ? max(length, 0) : 0
