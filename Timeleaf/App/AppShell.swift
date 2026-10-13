@@ -44,18 +44,13 @@ struct AppShell: View {
             handleIncoming(url)
         }
         .onChange(of: scenePhase, initial: true) { _, phase in
-            let lockEnabled = UserDefaults.standard.bool(forKey: SettingsKey.appLock)
+            // No cover on .inactive: system prompts (microphone, camera, notifications)
+            // make the scene inactive mid-flow and must not flash the lock screen.
             switch phase {
-            case .inactive:
-                // Privacy cover for the App Switcher; it doesn't require authentication
-                // (the Face ID sheet itself makes the scene inactive).
-                if lockEnabled {
-                    lockWindow.update(isLocked: true, appLock: appLock, theme: theme)
-                }
             case .background:
                 appLock.lockIfNeeded()
-                // Synchronously, so the cover exists before the system snapshot.
-                lockWindow.update(isLocked: appLock.isLocked || lockEnabled, appLock: appLock, theme: theme)
+                // Synchronously, so the cover exists before the App Switcher snapshot.
+                lockWindow.update(isLocked: appLock.isLocked, appLock: appLock, theme: theme)
             case .active:
                 if appLock.isLocked {
                     Task { await appLock.unlock() }
@@ -66,17 +61,7 @@ struct AppShell: View {
                 break
             }
         }
-        .alert(
-            "Timeleaf",
-            isPresented: Binding(
-                get: { router.alertMessage != nil },
-                set: { if !$0 { router.alertMessage = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(router.alertMessage ?? "")
-        }
+        .routerAlert(router)
     }
 
     private func handleIncoming(_ url: URL) {

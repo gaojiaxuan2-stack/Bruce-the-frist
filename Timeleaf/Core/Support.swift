@@ -37,6 +37,24 @@ final class AppRouter {
     var alertMessage: String?
 }
 
+extension View {
+    /// Shows `router.alertMessage` as an alert. Attach it at the app root AND at the root of
+    /// every full-screen cover: only the topmost presentation can show an alert.
+    func routerAlert(_ router: AppRouter) -> some View {
+        alert(
+            "Timeleaf",
+            isPresented: Binding(
+                get: { router.alertMessage != nil },
+                set: { if !$0 { router.alertMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(router.alertMessage ?? "")
+        }
+    }
+}
+
 // MARK: - Color helpers
 
 extension Color {

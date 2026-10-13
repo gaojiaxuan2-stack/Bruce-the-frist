@@ -71,7 +71,7 @@ Timeleaf/Features/Onboarding/  OnboardingView
 - `Core/Support.swift`: `SettingsKey` (`theme`, `userName`, `appLock`, `haptics`, `onboarded`),
   `AppTab` (`vault/horizon/styles`), `AppRouter` (@Observable: `selectedTab`,
   `presentedCapsuleID: UUID?`, `isComposing`, `alertMessage: String?`),
-  `Color(hex:opacity:)`, `Date.adding(_:_:)`.
+  `Color(hex:opacity:)`, `Date.adding(_:_:)`, `View.routerAlert(_ router: AppRouter)` (attach at the root of every full-screen cover).
 - `Core/PreviewData.swift`: `PreviewData.container` (in-memory, sample capsules).
 - `App/AppShell.swift`: applies `screenTheme`, gates `OnboardingView`, overlays
   `LockScreenView` when `AppLock.isLocked`, imports `.timeleaf` URLs via `onOpenURL`.
