@@ -12,7 +12,10 @@ final class LockWindowController {
         /// Nothing in front of the app.
         case hidden
         /// A calm, opaque backdrop for the moments the scene is merely inactive (App Switcher,
-        /// Control Center, system prompts). Never takes the keyboard and asks for nothing.
+        /// Control Center, system prompts), or in the background while another window of the
+        /// app is still in use. Never takes the keyboard and asks for nothing. Deliberate
+        /// trade-off: a keyboard that was up (QuickType bar included) stays above the veil,
+        /// because ending editing would also take the focus from under a system prompt.
         case veil
         /// `LockScreenView`: becomes the key window and dismisses the keyboard.
         case locked
@@ -46,6 +49,21 @@ final class LockWindowController {
     func update(_ cover: Cover, appLock: AppLock, theme: Theme) {
         request = (cover, appLock, theme)
         render()
+    }
+
+    /// `true` while another of the app's windows is still on screen (iPad Split View, Stage
+    /// Manager), so the app as a whole has not gone to the background.
+    var isAnotherSceneInForeground: Bool {
+        let ownScene = targetScene
+        return UIApplication.shared.connectedScenes.contains { other in
+            guard other !== ownScene else { return false }
+            switch other.activationState {
+            case .foregroundActive, .foregroundInactive:
+                return true
+            default:
+                return false
+            }
+        }
     }
 
     // MARK: Private
@@ -82,9 +100,12 @@ final class LockWindowController {
         window.isHidden = false
 
         guard cover == .locked, !window.isKeyWindow else { return }
-        // Dismiss the keyboard so neither it nor the QuickType bar (which can echo the
+        // Dismiss this scene's keyboard so neither it nor the QuickType bar (which can echo the
         // letter being written) floats above the lock, and stop typing into hidden fields.
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        // Only this scene: another iPad window may be in use.
+        for sceneWindow in scene.windows where sceneWindow !== window {
+            _ = sceneWindow.endEditing(true)
+        }
         if previousKeyWindow == nil {
             previousKeyWindow = scene.windows.first { $0.isKeyWindow && $0 !== window }
         }

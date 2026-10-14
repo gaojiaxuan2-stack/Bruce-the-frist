@@ -55,9 +55,10 @@ private struct HorizonRiver: View {
         }
     }
 
-    /// Lazy, so a long river only builds the stretch that is on screen.
+    /// Eager (the rows are light), so every row is measured and `scrollTo(nowID)`
+    /// lands on *Now* exactly instead of on estimated heights.
     private func river(_ model: HorizonModel) -> some View {
-        LazyVStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             ForEach(model.rows) { row in
                 HorizonRowView(row: row, now: now, onOpen: presentCapsule, onWrite: startWriting)
                     .id(row.id)

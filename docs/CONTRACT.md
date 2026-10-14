@@ -81,10 +81,15 @@ Timeleaf/Features/Onboarding/  OnboardingView
 - `Core/PreviewData.swift`: `PreviewData.container` (in-memory, sample capsules).
 - `App/AppShell.swift`: applies `screenTheme` and caps Dynamic Type at `...DynamicTypeSize.accessibility2`,
   gates `OnboardingView`, overlays `LockScreenView` when `AppLock.isLocked`, imports `.timeleaf` URLs via
-  `onOpenURL`. Each AppShell binds a `LockWindowController` (`App/LockWindowController.swift`) to its own
-  `UIWindowScene`; that window sits above every sheet and cover and shows `.veil` (style backdrop + seal; never
-  key, never touches the keyboard) while the scene is `.inactive` with the lock setting on, `.locked`
-  (`LockScreenView`, key, dismisses the keyboard) from `.background` while `AppLock.isLocked`, and `.hidden` otherwise.
+  `onOpenURL` (in a `Task`, since `importPackage` is async). Each AppShell binds a `LockWindowController`
+  (`App/LockWindowController.swift`) to its own `UIWindowScene`; that window sits above every sheet and cover and
+  shows `.veil` (style backdrop + seal; never key, never touches the keyboard) while the scene is `.inactive` with
+  the lock setting on, `.locked` (`LockScreenView`, key, ends editing in its own scene only) while `AppLock.isLocked`,
+  and `.hidden` otherwise. A scene entering `.background` engages the app-wide lock (`lockIfNeeded()`) only when no
+  other connected scene is still in the foreground (iPad Split View / Stage Manager); until then it only veils
+  itself (lock setting on). A window that is `.active` when the lock engages asks to unlock at once.
+  Deliberate trade-off: the veil leaves a keyboard that was up (QuickType bar included) above it, because ending
+  editing would also take the focus from under system permission prompts.
 - `Themes/ThemeViews.swift`: dispatchers `ThemeBackground()`, `SealView(monogram:)`,
   `CeremonyBurst()`, `StationeryView()` — they switch on `theme.id` to the per-style views below.
 
@@ -209,9 +214,10 @@ enum CapsulePackage {
     static let fileExtension: String           // "timeleaf"
     static let contentType: UTType             // UTType(exportedAs: "com.timeleaf.capsule")
     static let maxShareBytes: Int              // 300 MB – the most media one shared letter may carry
-    @MainActor static func export(_ capsule: TimeCapsule, passphrase: String?, hint: String) async throws -> URL  // temp file "<Title>.timeleaf"; .tooLarge over maxShareBytes
+    @MainActor static func export(_ capsule: TimeCapsule, passphrase: String?, hint: String) async throws -> URL  // temp file "<Title>.timeleaf"; .tooLarge over maxShareBytes; CancellationError when cancelled
+    @MainActor static func canShare(_ capsule: TimeCapsule) -> Bool   // media total ≤ maxShareBytes, measured as export does (file metadata only)
     static func readHeader(from url: URL) throws -> PackageHeader
-    @MainActor static func importPackage(from url: URL, into context: ModelContext) throws -> TimeCapsule
+    @MainActor static func importPackage(from url: URL, into context: ModelContext) async throws -> TimeCapsule
     @MainActor static func unpack(_ capsule: TimeCapsule, passphrase: String?, in context: ModelContext) async throws
     static func removeTemporaryFiles()         // leftover export copies + half-swapped inbox files; launch only
 }
@@ -228,16 +234,25 @@ salt 16 B, 210 000 rounds, 32 B) via CommonCrypto, or a random 256-bit key store
 inserts an incoming `TimeCapsule` (`isIncoming = true`, `sealedAt`/`unlockDate`/theme/names from
 the header, `recipientKind = .someone`, empty message, `packageFileName` set) and saves; if a capsule with the
 same id already exists it returns that one. If that one is still waiting to be unpacked, a new file without a
-secret word is first opened in memory (header as authenticated data, plaintext discarded) and, only if whole,
+secret word is first opened in memory (header as authenticated data, plaintext discarded) and, only if it opens,
 atomically replaces the stored package and refreshes the header fields (title, names, dates, theme, secret-word
-flag and hint) and arrival reminder; a secret-word file replaces it only when the stored package is missing or
-unreadable. A damaged new file is ignored while the stored package is readable (otherwise its error is thrown).
-`export` and `unpack` read and change the model on the main actor and do key derivation, sealing/decryption
-and file reading/writing in a detached task (callers use `try await`). `export` sums the media file sizes before reading any media and throws
+flag and hint) and arrival reminder. A secret-word file cannot be opened before its day: it replaces the stored
+package when its header salt differs from the stored one's (a new share, perhaps with a new word and hint) or the
+stored package is missing or unreadable; the same share received twice (same salt) keeps the stored file. A damaged
+new file is ignored while the stored package is readable (otherwise its error is thrown). Opening a copy in memory
+only detects accidental damage — it is no protection against tampering, since headers (embedded key included) are
+unauthenticated until `unpack`. Callers wrap `importPackage` in a `Task { do { try await … } catch { … } }`.
+`export`, `importPackage` and `unpack` read and change the model on the main actor and do key derivation,
+sealing/decryption, validation and file copying/reading/writing in a detached task (callers use `try await`).
+`export` honours cooperative cancellation: cancelling the calling task stops the detached work between stages,
+deletes its temp output and throws `CancellationError` (callers cancel when their UI goes away and ignore that
+error). `export` sums the media file sizes before reading any media and throws
 `.tooLarge` above `maxShareBytes`; `readHeader`/`importPackage`/`unpack` reject files larger than
 `maxShareBytes` + 16 MB with `.invalidFile` before reading them. `unpack` throws `.stillSealed` before `unlockDate`,
 `.wrongPassphrase` on authentication failure; on success fills message/mood/prompt, writes media via
-`MediaStore`, creates `CapsuleMedia`, deletes the package file, clears `packageFileName`, saves.
+`MediaStore`, creates `CapsuleMedia`, deletes the package file, clears `packageFileName`, saves. An incoming capsule
+that was already unpacked (e.g. in another window: no package, opened or holding its letter) returns successfully;
+`.missingPackage` means there is no package to open (file gone, or the letter deleted meanwhile).
 
 ### `Services/NotificationScheduler.swift`
 ```swift

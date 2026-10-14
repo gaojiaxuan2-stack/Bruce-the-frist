@@ -48,6 +48,11 @@ struct AppShell: View {
         .onChange(of: appLock.isLocked, initial: true) { _, isLocked in
             if isLocked {
                 lockWindow.update(.locked, appLock: appLock, theme: theme)
+                // Locked while this window is in use (another window went away at the same
+                // moment): its scene phase will not change, so ask for Face ID right here.
+                if scenePhase == .active {
+                    Task { await appLock.unlock() }
+                }
             } else if scenePhase != .background {
                 // Unlocked in the foreground (perhaps in another iPad window). A window still
                 // in the background keeps its cover until it returns (veil, then nothing).
@@ -82,12 +87,24 @@ struct AppShell: View {
     private func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .background:
-            appLock.lockIfNeeded()
-            lockWindow.update(appLock.isLocked ? .locked : .hidden, appLock: appLock, theme: theme)
+            // On iPad another window of the app may still be in use; the app-wide lock waits
+            // until the last one leaves, and meanwhile this window only veils itself.
+            if !lockWindow.isAnotherSceneInForeground {
+                appLock.lockIfNeeded()
+            }
+            if appLock.isLocked {
+                lockWindow.update(.locked, appLock: appLock, theme: theme)
+            } else if lockEnabled {
+                lockWindow.update(.veil, appLock: appLock, theme: theme)
+            } else {
+                lockWindow.update(.hidden, appLock: appLock, theme: theme)
+            }
         case .inactive:
             // The App Switcher shows a live card while the scene is only inactive. A veil hides
             // the letters without taking the keyboard or asking for Face ID, so system prompts
-            // (microphone, camera, notifications) simply rest on a calm backdrop.
+            // (microphone, camera, notifications) simply rest on a calm backdrop. The trade-off,
+            // by design: a keyboard that was up stays above the veil, QuickType bar included,
+            // because dismissing it would also take the focus from under a system prompt.
             if appLock.isLocked {
                 lockWindow.update(.locked, appLock: appLock, theme: theme)
             } else if lockEnabled, !appLock.isAuthenticating {
@@ -108,12 +125,17 @@ struct AppShell: View {
 
     private func handleIncoming(_ url: URL) {
         guard url.pathExtension.lowercased() == CapsulePackage.fileExtension else { return }
-        do {
-            let capsule = try CapsulePackage.importPackage(from: url, into: modelContext)
-            router.selectedTab = .vault
-            router.presentedCapsuleID = capsule.id
-        } catch {
-            router.alertMessage = error.localizedDescription
+        // Captured now; copying and checking a large letter happen off the main thread.
+        let router = router
+        let context = modelContext
+        Task { @MainActor in
+            do {
+                let capsule = try await CapsulePackage.importPackage(from: url, into: context)
+                router.selectedTab = .vault
+                router.presentedCapsuleID = capsule.id
+            } catch {
+                router.alertMessage = error.localizedDescription
+            }
         }
     }
 }

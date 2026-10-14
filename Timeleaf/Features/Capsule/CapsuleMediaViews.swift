@@ -319,6 +319,8 @@ private struct CapsuleMediaFrame: View {
 
     @Environment(\.theme) private var theme
     @State private var naturalAspect: CGFloat?
+    /// The picture decoded by `prepare()`, drawn as is (no second decode, no placeholder flash).
+    @State private var image: UIImage?
     @State private var isPrepared = false
 
     private var shape: RoundedRectangle {
@@ -340,6 +342,12 @@ private struct CapsuleMediaFrame: View {
             .overlay {
                 thumbnail
             }
+            .overlay {
+                if media.kind == .video && image != nil {
+                    CapsuleMediaPlayBadge()
+                        .transition(.opacity)
+                }
+            }
             .clipShape(shape)
             .overlay {
                 shape.strokeBorder(theme.surfaceStroke, lineWidth: 0.5)
@@ -352,15 +360,16 @@ private struct CapsuleMediaFrame: View {
 
     @ViewBuilder
     private var thumbnail: some View {
-        if let url {
-            if !isPrepared {
-                theme.surface
-            } else if let whole = wholeAspect {
-                wholePicture(url: url, aspect: whole)
+        if url != nil && !isPrepared {
+            theme.surface
+        } else if let image {
+            if let whole = wholeAspect {
+                wholePicture(image, aspect: whole)
             } else {
-                picture(url: url)
+                picture(image)
             }
         } else {
+            // No file, or one that could not be decoded.
             ZStack {
                 theme.surface
                 Image(systemName: media.kind.symbolName)
@@ -377,37 +386,64 @@ private struct CapsuleMediaFrame: View {
         return ratio < 0.92 || ratio > 1.08 ? naturalAspect : nil
     }
 
-    private func picture(url: URL) -> MediaThumbnailView {
-        MediaThumbnailView(url: url, kind: media.kind, maxPixelSize: CapsuleMediaLayout.posterPixels)
+    /// Fills (and is clipped to) the frame.
+    private func picture(_ image: UIImage) -> some View {
+        Color.clear
+            .overlay {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            }
+            .clipped()
     }
 
-    private func wholePicture(url: URL, aspect: CGFloat) -> some View {
+    private func wholePicture(_ image: UIImage, aspect: CGFloat) -> some View {
         ZStack {
-            picture(url: url)
+            picture(image)
                 .blur(radius: 28, opaque: true)
                 .overlay {
                     theme.background.opacity(0.22)
                 }
                 .accessibilityHidden(true)
-            picture(url: url)
+            Image(uiImage: image)
+                .resizable()
                 .aspectRatio(aspect, contentMode: .fit)
         }
     }
 
-    /// Decodes the picture once (the thumbnail view then reads it from the cache)
-    /// and learns its proportions.
+    /// Decodes the picture once (through the shared thumbnail cache), learns its
+    /// proportions and keeps it to draw.
     private func prepare() async {
         guard let url else { return }
-        let image = await MediaStore.thumbnail(for: url, kind: media.kind, maxPixelSize: CapsuleMediaLayout.posterPixels)
+        let decoded = await MediaStore.thumbnail(for: url, kind: media.kind, maxPixelSize: CapsuleMediaLayout.posterPixels)
         guard !Task.isCancelled else { return }
         var measured: CGFloat?
-        if let size = image?.size, size.width > 0, size.height > 0 {
+        if let size = decoded?.size, size.width > 0, size.height > 0 {
             measured = size.width / size.height
         }
         withAnimation(.smooth(duration: 0.4)) {
+            image = decoded
             naturalAspect = measured
             isPrepared = true
         }
+    }
+}
+
+/// The small play mark on a video poster.
+private struct CapsuleMediaPlayBadge: View {
+    var body: some View {
+        Image(systemName: "play.fill")
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(Color.white)
+            .offset(x: 1)
+            .frame(width: 32, height: 32)
+            .background(.ultraThinMaterial, in: Circle())
+            .overlay {
+                Circle().strokeBorder(Color.white.opacity(0.3), lineWidth: 0.5)
+            }
+            .environment(\.colorScheme, .dark)
+            .shadow(color: Color.black.opacity(0.25), radius: 6, x: 0, y: 2)
+            .accessibilityHidden(true)
     }
 }
 

@@ -85,8 +85,10 @@ enum CapsulePackage {
     private static var preambleLength: Int { magic.count + 4 }
     /// Largest `.timeleaf` file we accept: the media cap plus room for the letter, header and seal.
     private static let maxPackageBytes = maxShareBytes + 16 * 1024 * 1024
-    /// Suffix of a package being swapped into the inbox (see `removeTemporaryFiles`).
+    /// Suffix of a package being copied or swapped into the inbox (see `removeTemporaryFiles`).
     private static let stagingSuffix = ".partial"
+    /// Prefix of this launch's staging files, so launch cleanup never removes a copy in progress.
+    private static let launchToken = UUID().uuidString
     private static var exportRootURL: URL {
         FileManager.default.temporaryDirectory.appending(component: "TimeleafExports", directoryHint: .isDirectory)
     }
@@ -98,12 +100,35 @@ enum CapsulePackage {
     ///
     /// The letter is read on the main actor; measuring, key derivation, sealing and writing the
     /// file happen off it, so the interface stays responsive even for long videos.
+    ///
+    /// Cancelling the calling task stops the work between stages, removes anything already
+    /// written and throws `CancellationError` (callers cancel when their sheet goes away).
     @MainActor
     static func export(_ capsule: TimeCapsule, passphrase: String?, hint: String) async throws -> URL {
+        try Task.checkCancellation()
         let draft = exportDraft(of: capsule, passphrase: passphrase, hint: hint)
-        return try await Task.detached(priority: .userInitiated) {
+        // A detached task does not inherit cancellation, so forward it by hand.
+        let work = Task.detached(priority: .userInitiated) {
             try CapsulePackage.writePackage(for: draft)
-        }.value
+        }
+        let fileURL = try await withTaskCancellationHandler {
+            try await work.value
+        } onCancel: {
+            work.cancel()
+        }
+        // Cancelled just as the file was finished: nobody is waiting for it any more.
+        if Task.isCancelled {
+            removeExport(at: fileURL)
+            throw CancellationError()
+        }
+        return fileURL
+    }
+
+    /// `true` when the letter's media fit in one shared file (at most `maxShareBytes`),
+    /// measured exactly as `export` measures it. Reads file metadata only, never the media.
+    @MainActor
+    static func canShare(_ capsule: TimeCapsule) -> Bool {
+        totalByteCount(of: exportMedia(of: capsule)) <= maxShareBytes
     }
 
     // MARK: Reading
@@ -139,8 +164,11 @@ enum CapsulePackage {
 
     /// Receives a `.timeleaf` file: keeps the still-encrypted package in the inbox and adds an
     /// incoming, sealed capsule to the vault. Returns the existing capsule if it was received before.
+    ///
+    /// Copying and checking the file happen off the main actor (a letter may be 300 MB); the
+    /// model is only read and changed on it.
     @MainActor
-    static func importPackage(from url: URL, into context: ModelContext) throws -> TimeCapsule {
+    static func importPackage(from url: URL, into context: ModelContext) async throws -> TimeCapsule {
         let isScoped = url.startAccessingSecurityScopedResource()
         defer { if isScoped { url.stopAccessingSecurityScopedResource() } }
 
@@ -150,27 +178,24 @@ enum CapsulePackage {
         let destination = MediaStore.inboxURL.appending(component: packageFileName, directoryHint: .notDirectory)
 
         if let existing = existingCapsule(id: capsuleID, in: context) {
-            // A letter that still waits to be opened may take a freshly received package (to
-            // repair a lost or damaged copy, or to carry a new secret word) — but only one that
-            // is proven whole, so a damaged or tampered copy never displaces a good one.
-            if existing.isIncoming, let storedName = existing.packageFileName {
-                let stored = MediaStore.inboxURL.appending(component: storedName, directoryHint: .notDirectory)
-                if let newHeader = try replacementHeader(forStoredPackage: stored, incoming: url) {
-                    try replacePackage(at: destination, with: url)
-                    if stored.standardizedFileURL != destination.standardizedFileURL {
-                        try? FileManager.default.removeItem(at: stored)
-                    }
-                    existing.packageFileName = packageFileName
-                    refresh(existing, from: newHeader)
-                    try? context.save()
-                    scheduleArrivalReminder(for: existing)
-                }
+            try await receiveAgain(url, for: existing, packageFileName: packageFileName, destination: destination, in: context)
+            if !existing.isDeleted, existing.modelContext != nil {
+                discardSystemInboxCopy(at: url, wasSecurityScoped: isScoped)
+                return existing
             }
+            // Deleted while the new copy was being checked: receive it as a new letter.
+        }
+
+        let staged = try await Task.detached(priority: .userInitiated) {
+            try CapsulePackage.stagePackage(from: url)
+        }.value
+        // Another import of the same letter (another window) may have finished meanwhile.
+        if let existing = existingCapsule(id: capsuleID, in: context) {
+            try? FileManager.default.removeItem(at: staged)
             discardSystemInboxCopy(at: url, wasSecurityScoped: isScoped)
             return existing
         }
-
-        try copyPackage(from: url, to: destination)
+        try installPackage(staged, at: destination)
 
         let capsule = TimeCapsule(
             id: capsuleID,
@@ -212,6 +237,8 @@ enum CapsulePackage {
     @MainActor
     static func unpack(_ capsule: TimeCapsule, passphrase: String?, in context: ModelContext) async throws {
         guard let packageFileName = capsule.packageFileName else {
+            // Already opened, perhaps in another window: the letter is here to be read.
+            if isAlreadyUnpacked(capsule), Date.now >= capsule.unlockDate { return }
             throw CapsulePackageError.missingPackage
         }
         guard Date.now >= capsule.unlockDate else { throw CapsulePackageError.stillSealed }
@@ -263,8 +290,8 @@ enum CapsulePackage {
 
     // MARK: Housekeeping
 
-    /// Removes exported copies left in the temporary folder and half-swapped inbox packages.
-    /// Call only when no share sheet can be open (at launch).
+    /// Removes exported copies left in the temporary folder and half-swapped inbox packages of
+    /// earlier launches. Call only when no share sheet can be open (at launch).
     static func removeTemporaryFiles() {
         let fileManager = FileManager.default
         try? fileManager.removeItem(at: exportRootURL)
@@ -272,7 +299,10 @@ enum CapsulePackage {
             at: MediaStore.inboxURL,
             includingPropertiesForKeys: nil
         ) else { return }
-        for item in items where item.lastPathComponent.hasSuffix(stagingSuffix) {
+        for item in items {
+            let name = item.lastPathComponent
+            // A file arriving right now (e.g. "Open in Timeleaf" at launch) is still being copied.
+            guard name.hasSuffix(stagingSuffix), !name.hasPrefix(launchToken) else { continue }
             try? fileManager.removeItem(at: item)
         }
     }
@@ -284,16 +314,7 @@ extension CapsulePackage {
     /// Everything export needs from the model, captured on the main actor.
     @MainActor
     private static func exportDraft(of capsule: TimeCapsule, passphrase: String?, hint: String) -> CapsulePackageExportDraft {
-        let media = capsule.sortedMedia.compactMap { item -> CapsulePackageExportMedia? in
-            guard let url = MediaStore.url(for: item) else { return nil }
-            return CapsulePackageExportMedia(
-                url: url,
-                kind: item.kind,
-                duration: item.duration,
-                caption: item.caption,
-                sortIndex: item.sortIndex
-            )
-        }
+        let media = exportMedia(of: capsule)
         return CapsulePackageExportDraft(
             capsuleID: capsule.id,
             title: capsule.title,
@@ -311,12 +332,29 @@ extension CapsulePackage {
         )
     }
 
-    /// Seals a captured letter into a new export file. Runs off the main actor.
+    /// The media files a shared letter carries, in the author's order.
+    @MainActor
+    private static func exportMedia(of capsule: TimeCapsule) -> [CapsulePackageExportMedia] {
+        capsule.sortedMedia.compactMap { item -> CapsulePackageExportMedia? in
+            guard let url = MediaStore.url(for: item) else { return nil }
+            return CapsulePackageExportMedia(
+                url: url,
+                kind: item.kind,
+                duration: item.duration,
+                caption: item.caption,
+                sortIndex: item.sortIndex
+            )
+        }
+    }
+
+    /// Seals a captured letter into a new export file. Runs off the main actor and stops with
+    /// `CancellationError` between stages once its task is cancelled.
     private static func writePackage(for draft: CapsulePackageExportDraft) throws -> URL {
         // Measure before reading a single byte of media.
         guard totalByteCount(of: draft.media) <= maxShareBytes else {
             throw CapsulePackageError.tooLarge
         }
+        try Task.checkCancellation()
         let secretWord = normalizedPassphrase(draft.passphrase)
         let salt = makeRandomData(size: .bits128)
 
@@ -350,12 +388,14 @@ extension CapsulePackage {
               let headerByteCount = UInt32(exactly: headerData.count) else {
             throw CapsulePackageError.corrupted
         }
+        try Task.checkCancellation()
 
         let combined = try sealPayload(of: draft, using: key, authenticating: headerData)
         // Whatever we send must also be accepted on the other side.
         guard preambleLength + headerData.count + combined.count <= maxPackageBytes else {
             throw CapsulePackageError.tooLarge
         }
+        try Task.checkCancellation()
 
         var preamble = CapsulePackageByteWriter()
         preamble.appendBytes(magic)
@@ -363,8 +403,21 @@ extension CapsulePackage {
         preamble.appendBytes(headerData)
 
         let fileURL = try makeExportURL(title: draft.title)
-        try writeFile(preamble: preamble.data, sealedBox: combined, to: fileURL)
+        do {
+            try writeFile(preamble: preamble.data, sealedBox: combined, to: fileURL)
+            try Task.checkCancellation()
+        } catch {
+            removeExport(at: fileURL)
+            throw error
+        }
         return fileURL
+    }
+
+    /// Deletes an export file together with the folder `makeExportURL` made for it.
+    private static func removeExport(at fileURL: URL) {
+        let folder = fileURL.deletingLastPathComponent()
+        let isOwnFolder = folder.deletingLastPathComponent().lastPathComponent == exportRootURL.lastPathComponent
+        try? FileManager.default.removeItem(at: isOwnFolder ? folder : fileURL)
     }
 
     /// Builds the payload and seals it. The plaintext is released as soon as this returns,
@@ -390,6 +443,7 @@ extension CapsulePackage {
         var blobs: [Data] = []
 
         for item in draft.media {
+            try Task.checkCancellation()
             guard let bytes = try? Data(contentsOf: item.url, options: .mappedIfSafe) else { continue }
             entries.append(
                 CapsulePackageMediaEntry(
@@ -422,6 +476,7 @@ extension CapsulePackage {
         writer.appendUInt32(manifestLength)
         writer.appendBytes(manifestData)
         for blob in blobs {
+            try Task.checkCancellation()
             writer.appendBytes(blob)
         }
         return writer.data
@@ -666,8 +721,11 @@ extension CapsulePackage {
         return try parsePackage(fileData)
     }
 
-    /// Proves that a package without a secret word is whole: opens it in memory with its own
-    /// key (the header is the authenticated data) and throws the plaintext away unread.
+    /// Checks that a package without a secret word arrived undamaged: opens it in memory with
+    /// its own key (the header is the authenticated data) and throws the plaintext away unread.
+    /// This detects accidental damage only. It is no protection against tampering: the header,
+    /// embedded key included, is unauthenticated until the letter is unpacked, so anyone can
+    /// build a package that passes. Reads the whole file, so call it off the main actor.
     private static func verifySeal(of parsed: CapsulePackageParsed) throws {
         let key = try decryptionKey(for: parsed.header, passphrase: nil)
         let payload = try decryptPayload(parsed, using: key)
@@ -678,6 +736,19 @@ extension CapsulePackage {
 // MARK: - Private: import helpers
 
 extension CapsulePackage {
+    /// An incoming letter whose package was already opened (its package is gone and the letter
+    /// has been read or holds what the package carried), e.g. by another iPad window.
+    @MainActor
+    private static func isAlreadyUnpacked(_ capsule: TimeCapsule) -> Bool {
+        guard capsule.isIncoming, capsule.packageFileName == nil,
+              !capsule.isDeleted, capsule.modelContext != nil else { return false }
+        return capsule.openedAt != nil
+            || !capsule.message.isEmpty
+            || !capsule.media.isEmpty
+            || !capsule.mood.isEmpty
+            || !capsule.prompt.isEmpty
+    }
+
     @MainActor
     private static func existingCapsule(id capsuleID: UUID, in context: ModelContext) -> TimeCapsule? {
         var descriptor = FetchDescriptor<TimeCapsule>(
@@ -687,31 +758,56 @@ extension CapsulePackage {
         return (try? context.fetch(descriptor))?.first
     }
 
-    private static func copyPackage(from source: URL, to destination: URL) throws {
-        if source.standardizedFileURL == destination.standardizedFileURL { return }
-        let fileManager = FileManager.default
-        do {
-            if fileManager.fileExists(atPath: destination.path(percentEncoded: false)) {
-                try fileManager.removeItem(at: destination)
+    /// A letter received before. While it still waits to be opened, a newer copy may take the
+    /// place of its package (see `replacementHeader`); checking and copying run off the main actor.
+    @MainActor
+    private static func receiveAgain(
+        _ url: URL,
+        for existing: TimeCapsule,
+        packageFileName: String,
+        destination: URL,
+        in context: ModelContext
+    ) async throws {
+        guard existing.isIncoming, let storedName = existing.packageFileName else { return }
+        let stored = MediaStore.inboxURL.appending(component: storedName, directoryHint: .notDirectory)
+        let replacement = try await Task.detached(priority: .userInitiated) { () throws -> CapsulePackageReplacement? in
+            guard let header = try CapsulePackage.replacementHeader(forStoredPackage: stored, incoming: url) else {
+                return nil
             }
-            try fileManager.copyItem(at: source, to: destination)
-        } catch {
-            throw CapsulePackageError.invalidFile
+            let staged = try CapsulePackage.stagePackage(from: url)
+            return CapsulePackageReplacement(header: header, staged: staged)
+        }.value
+        guard let replacement else { return }
+
+        // Meanwhile the letter may have been opened or deleted (perhaps in another window).
+        guard !existing.isDeleted, existing.modelContext != nil, existing.packageFileName == storedName else {
+            try? FileManager.default.removeItem(at: replacement.staged)
+            return
         }
+        try installPackage(replacement.staged, at: destination)
+        if stored.standardizedFileURL != destination.standardizedFileURL {
+            try? FileManager.default.removeItem(at: stored)
+        }
+        existing.packageFileName = packageFileName
+        refresh(existing, from: replacement.header)
+        try? context.save()
+        scheduleArrivalReminder(for: existing)
     }
 
     /// Decides whether a newly received copy of a letter that still waits to be opened replaces
     /// the stored package, and returns the header to take over (nil keeps the stored package).
+    /// Reads whole files, so it runs off the main actor.
     ///
-    /// - A copy without a secret word is opened in memory first; only a whole, untampered copy
-    ///   replaces anything, and its authenticated header refreshes the envelope.
-    /// - A secret-word copy cannot be checked before its day, so it only stands in for a stored
-    ///   package that is missing or unreadable.
+    /// - A copy without a secret word is opened in memory first and replaces the stored package
+    ///   only if it opens. That catches a copy damaged on its way, not a forged one: the header
+    ///   (embedded key included) is authenticated by nothing the recipient already holds.
+    /// - A secret-word copy cannot be opened before its day. One with a new salt is a fresh
+    ///   share (the sender may have chosen a new word and hint), so it replaces the stored
+    ///   package; the same share received twice (same salt) keeps the stored file.
     /// - A damaged copy is ignored while the stored package is readable; otherwise its error is thrown.
     private static func replacementHeader(forStoredPackage stored: URL, incoming: URL) throws -> PackageHeader? {
-        func storedIsReadable() -> Bool {
-            (try? loadPackage(at: stored)) != nil
-        }
+        // nil when the stored package is missing or unreadable.
+        let storedHeader = (try? loadPackage(at: stored))?.header
         let candidate: CapsulePackageParsed
         do {
             candidate = try loadPackage(at: incoming)
@@ -719,31 +815,41 @@ extension CapsulePackage {
                 try verifySeal(of: candidate)
             }
         } catch {
-            if storedIsReadable() { return nil }
+            if storedHeader != nil { return nil }
             throw error
         }
-        if candidate.header.requiresPassphrase, storedIsReadable() {
+        if candidate.header.requiresPassphrase, let storedHeader, storedHeader.salt == candidate.header.salt {
             return nil
         }
         return candidate.header
     }
 
-    /// Swaps a newly received package in for the stored one in a single step, so a failure
-    /// leaves the previous package untouched.
-    private static func replacePackage(at destination: URL, with source: URL) throws {
-        if source.standardizedFileURL == destination.standardizedFileURL { return }
+    /// Copies a received file into a fresh staging file in the inbox. Runs off the main actor.
+    private static func stagePackage(from source: URL) throws -> URL {
         let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: destination.path(percentEncoded: false)) else {
-            try copyPackage(from: source, to: destination)
-            return
-        }
         let staging = MediaStore.inboxURL.appending(
-            component: "\(UUID().uuidString)\(stagingSuffix)",
+            component: "\(launchToken)-\(UUID().uuidString)\(stagingSuffix)",
             directoryHint: .notDirectory
         )
         do {
             try fileManager.copyItem(at: source, to: staging)
-            _ = try fileManager.replaceItemAt(destination, withItemAt: staging)
+        } catch {
+            try? fileManager.removeItem(at: staging)
+            throw CapsulePackageError.invalidFile
+        }
+        return staging
+    }
+
+    /// Moves a staged package into place in a single step (a rename within the inbox), so a
+    /// failure leaves any previous package untouched.
+    private static func installPackage(_ staging: URL, at destination: URL) throws {
+        let fileManager = FileManager.default
+        do {
+            if fileManager.fileExists(atPath: destination.path(percentEncoded: false)) {
+                _ = try fileManager.replaceItemAt(destination, withItemAt: staging)
+            } else {
+                try fileManager.moveItem(at: staging, to: destination)
+            }
         } catch {
             try? fileManager.removeItem(at: staging)
             throw CapsulePackageError.invalidFile
@@ -936,6 +1042,12 @@ private struct CapsulePackageStoredMedia: Sendable {
     let sortIndex: Int
     let duration: Double
     let caption: String
+}
+
+/// A newer copy of a received letter, checked and staged off the main actor.
+private struct CapsulePackageReplacement: Sendable {
+    let header: PackageHeader
+    let staged: URL
 }
 
 /// What unpacking hands back to the main actor.

@@ -18,6 +18,9 @@ struct CapsuleSealedScreen: View {
     @State private var whisperToken = 0
     @State private var showsShare = false
     @State private var confirmsDelete = false
+    /// Whether the letter's memories fit in one shared file; measured once, on appear
+    /// (the screen is rebuilt every second, so never in `body`).
+    @State private var fitsInOneFile: Bool?
 
     private let envelopeWidth: CGFloat = 280
 
@@ -34,6 +37,7 @@ struct CapsuleSealedScreen: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             actions
         }
+        .onAppear(perform: measureShareSize)
         .sheet(isPresented: $showsShare) {
             ShareCapsuleSheet(capsule: capsule)
                 .theme(theme)
@@ -174,8 +178,18 @@ struct CapsuleSealedScreen: View {
 
     // MARK: Bottom actions
 
-    private var canShare: Bool {
+    /// An outgoing letter to someone dear; only these can travel as a file.
+    private var isForSomeone: Bool {
         !capsule.isIncoming && capsule.recipientKind == .someone
+    }
+
+    private var canShare: Bool {
+        isForSomeone && fitsInOneFile == true
+    }
+
+    /// Sealed with more memories than one shared file may carry, so sharing could only fail.
+    private var isKeepsake: Bool {
+        isForSomeone && fitsInOneFile == false
     }
 
     private var actions: some View {
@@ -188,6 +202,12 @@ struct CapsuleSealedScreen: View {
                     Label("Share the letter", systemImage: "square.and.arrow.up")
                 }
                 .buttonStyle(.themedSecondary)
+            } else if isKeepsake {
+                keepsakeNote
+                Spacer(minLength: 0)
+            } else if isForSomeone {
+                // Not measured yet (only for the moment before the screen appears).
+                Spacer(minLength: 0)
             } else {
                 Text("Kept safe until it arrives.")
                     .font(theme.label(12))
@@ -208,6 +228,24 @@ struct CapsuleSealedScreen: View {
             .ignoresSafeArea()
             .allowsHitTesting(false)
         }
+    }
+
+    /// The same gentle note the seal ceremony shows for a letter too large to send.
+    private var keepsakeNote: some View {
+        Label {
+            Text("Too large to send as a file, so it stays with you as a keepsake.")
+        } icon: {
+            Image(systemName: "shippingbox")
+        }
+        .font(theme.label(12))
+        .foregroundStyle(theme.inkSecondary)
+        .multilineTextAlignment(.leading)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func measureShareSize() {
+        guard isForSomeone, fitsInOneFile == nil else { return }
+        fitsInOneFile = CapsulePackage.canShare(capsule)
     }
 
     private var moreMenu: some View {

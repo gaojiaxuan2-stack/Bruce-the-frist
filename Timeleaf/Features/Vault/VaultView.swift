@@ -87,7 +87,9 @@ struct VaultView: View {
                 title: "In transit",
                 subtitle: "Still on their way — soonest first.",
                 previewCount: VaultLayout.travellingPreviewCount,
-                showsAll: $showsAllTravelling
+                showsAll: $showsAllTravelling,
+                // A letter just sealed is always in view, wherever its date falls.
+                alwaysShows: { VaultLayout.isRecentlySealed($0, now: now) }
             )
         }
         if !sections.received.isEmpty {
@@ -123,19 +125,23 @@ struct VaultView: View {
     }
 
     /// A chapter of plain cards. With `showsAll`, only the first `previewCount`
-    /// are shown until the reader asks for the rest, so one long chapter never
-    /// buries the ones below it.
+    /// (plus any that `alwaysShows` keeps in view) are shown until the reader asks
+    /// for the rest, so one long chapter never buries the ones below it.
     private func listSection(
         _ capsules: [TimeCapsule],
         now: Date,
         title: LocalizedStringKey,
         subtitle: LocalizedStringKey,
         previewCount: Int = Int.max,
-        showsAll: Binding<Bool>? = nil
+        showsAll: Binding<Bool>? = nil,
+        alwaysShows: (TimeCapsule) -> Bool = { _ in false }
     ) -> some View {
-        let isTruncatable = showsAll != nil && capsules.count > previewCount
+        let preview = capsules.enumerated()
+            .filter { $0.offset < previewCount || alwaysShows($0.element) }
+            .map(\.element)
+        let isTruncatable = showsAll != nil && preview.count < capsules.count
         let isExpanded = showsAll?.wrappedValue ?? true
-        let visible = isTruncatable && !isExpanded ? Array(capsules.prefix(previewCount)) : capsules
+        let visible = isTruncatable && !isExpanded ? preview : capsules
         return LazyVStack(alignment: .leading, spacing: 14) {
             SectionHeader(title, subtitle: subtitle)
             ForEach(visible) { capsule in
@@ -223,6 +229,13 @@ struct VaultView: View {
 private enum VaultLayout {
     static let travellingPreviewCount = 5
     static let openedPreviewCount = 3
+    /// How long a newly sealed letter stays in view in a collapsed "In transit".
+    static let recentlySealedWindow: TimeInterval = 60 * 60
+
+    static func isRecentlySealed(_ capsule: TimeCapsule, now: Date) -> Bool {
+        guard let sealedAt = capsule.sealedAt else { return false }
+        return now.timeIntervalSince(sealedAt) < recentlySealedWindow
+    }
 }
 
 /// Splits the vault into its emotional chapters at a given moment.

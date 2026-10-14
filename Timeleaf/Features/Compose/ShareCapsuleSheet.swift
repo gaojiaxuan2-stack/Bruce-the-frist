@@ -9,6 +9,26 @@ import SwiftData
 struct ShareCapsuleSheet: View {
     let capsule: TimeCapsule
 
+    init(capsule: TimeCapsule) {
+        self.capsule = capsule
+    }
+
+    var body: some View {
+        // The content reads its fonts from the environment, where `screenTheme` has
+        // scaled the capsule's style for the current Dynamic Type size.
+        ShareCapsuleSheetContent(capsule: capsule)
+            .screenTheme(capsule.theme.theme)
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+    }
+}
+
+// MARK: - Content
+
+private struct ShareCapsuleSheetContent: View {
+    let capsule: TimeCapsule
+
+    @Environment(\.theme) private var theme
     @Environment(\.dismiss) private var dismiss
     @State private var usesSecretWord = false
     @State private var secretWord = ""
@@ -19,13 +39,9 @@ struct ShareCapsuleSheet: View {
     /// Bumped whenever the choices change, so an export that was started with
     /// older choices (e.g. before a secret word was added) is never offered.
     @State private var exportGeneration = 0
+    /// The export in flight; cancelled when the choices change or the sheet closes.
+    @State private var exportTask: Task<Void, Never>?
     @FocusState private var focusedField: ShareCapsuleField?
-
-    init(capsule: TimeCapsule) {
-        self.capsule = capsule
-    }
-
-    private var theme: Theme { capsule.theme.theme }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -59,13 +75,12 @@ struct ShareCapsuleSheet: View {
         .onChange(of: secretWord) { invalidate() }
         .onChange(of: hint) { invalidate() }
         .onDisappear {
-            // The share sheet has closed with this one; the temporary file is no longer needed.
+            // The share sheet has closed with this one: stop any export still being packed,
+            // and the temporary file is no longer needed.
             exportGeneration += 1
+            cancelExport()
             discardPreparedFile()
         }
-        .screenTheme(theme)
-        .presentationDetents([.large])
-        .presentationDragIndicator(.visible)
     }
 
     // MARK: Sections
@@ -279,8 +294,17 @@ struct ShareCapsuleSheet: View {
 
     private func invalidate() {
         exportGeneration += 1
+        cancelExport()
         discardPreparedFile()
         errorMessage = nil
+    }
+
+    /// Stops the export in flight (it deletes its own partial file) and frees the button
+    /// at once; a new export queues behind it until it has wound down.
+    private func cancelExport() {
+        exportTask?.cancel()
+        exportTask = nil
+        isPreparing = false
     }
 
     private func discardPreparedFile() {
@@ -297,25 +321,31 @@ struct ShareCapsuleSheet: View {
         let passphrase: String? = usesSecretWord ? trimmedSecret : nil
         let hintText = usesSecretWord ? hint.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         let generation = exportGeneration
-        Task { @MainActor in
+        let capsule = capsule
+        exportTask = ShareCapsuleExportQueue.enqueue {
             // The key derivation, sealing and writing run off the main thread inside `export`,
             // so the sheet stays responsive (and dismissible) while a long video is packed.
             do {
                 let url = try await CapsulePackage.export(capsule, passphrase: passphrase, hint: hintText)
-                if generation == exportGeneration {
+                if generation == exportGeneration && !Task.isCancelled {
                     preparedURL = url
                     Haptics.success()
                 } else {
                     // The choices changed while sealing; never offer a file made with old ones.
                     ShareCapsuleExportFiles.remove(url)
                 }
+            } catch is CancellationError {
+                // Cancelled because the choices changed or the sheet closed; nothing to say.
             } catch CapsulePackageError.tooLarge {
                 // Media can't be removed from a sealed letter, so don't suggest it.
                 showError(String(localized: "This letter is too large to send as a file. It stays safe in your vault."), generation: generation)
             } catch {
                 showError(error.localizedDescription, generation: generation)
             }
+            // A newer export (after the choices changed) owns the button now.
+            guard generation == exportGeneration else { return }
             isPreparing = false
+            exportTask = nil
         }
     }
 
@@ -323,6 +353,26 @@ struct ShareCapsuleSheet: View {
         guard generation == exportGeneration else { return }
         errorMessage = message
         Haptics.warning()
+    }
+}
+
+/// Packs one letter at a time. An export someone walked away from is cancelled, and the next
+/// one (from this sheet or a reopened one) waits for it to wind down first, so two copies of a
+/// large letter are never held in memory together.
+@MainActor
+private enum ShareCapsuleExportQueue {
+    private static var tail: Task<Void, Never>?
+
+    static func enqueue(_ work: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
+        let previous = tail
+        let task = Task { @MainActor in
+            await previous?.value
+            // Cancelled while waiting its turn: whoever cancelled it has already reset the sheet.
+            guard !Task.isCancelled else { return }
+            await work()
+        }
+        tail = task
+        return task
     }
 }
 

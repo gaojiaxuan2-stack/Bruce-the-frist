@@ -99,7 +99,7 @@ struct ComposeFlowView: View {
     private var bottomBar: some View {
         VStack(spacing: 10) {
             if step == .style && draft.isTooLargeToSend {
-                shareLimitCaption
+                ComposeFlowShareLimitCaption()
                     .transition(.opacity)
             }
             HStack(spacing: 14) {
@@ -119,20 +119,6 @@ struct ComposeFlowView: View {
         .padding(.bottom, 12)
         .frame(maxWidth: 640)
         .animation(.smooth(duration: 0.3), value: step)
-    }
-
-    /// Said once more just before "Ready to seal": the memories are too large to travel as a file.
-    private var shareLimitCaption: some View {
-        Label {
-            Text("Too large to send as a file — it will be sealed as a keepsake.")
-        } icon: {
-            Image(systemName: "shippingbox")
-        }
-        .font(theme.label(12))
-        .foregroundStyle(theme.inkSecondary)
-        .multilineTextAlignment(.center)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity)
     }
 
     private var continueButton: some View {
@@ -331,6 +317,25 @@ private struct ComposeFlowStepIndicator: View {
             }
         }
         .frame(height: 3)
+    }
+}
+
+/// Said once more just before "Ready to seal": the memories are too large to travel as a file.
+/// Reads the environment's theme, which `screenTheme` has scaled for Dynamic Type.
+private struct ComposeFlowShareLimitCaption: View {
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Label {
+            Text("Too large to send as a file — it will be sealed as a keepsake.")
+        } icon: {
+            Image(systemName: "shippingbox")
+        }
+        .font(theme.label(12))
+        .foregroundStyle(theme.inkSecondary)
+        .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity)
     }
 }
 

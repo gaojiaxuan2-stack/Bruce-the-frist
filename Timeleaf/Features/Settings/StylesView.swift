@@ -333,26 +333,15 @@ struct StylesView: View {
     }
 
     private func handleImport(_ result: Result<URL, Error>) {
-        let outcome: StylesImportOutcome
-        switch result {
-        case .success(let url):
-            do {
-                let capsule = try CapsulePackage.importPackage(from: url, into: modelContext)
-                Haptics.success()
-                outcome = .open(capsule.id)
-            } catch {
-                Haptics.warning()
-                outcome = .failed(error.localizedDescription)
-            }
-        case .failure(let error):
-            outcome = .failed(error.localizedDescription)
-        }
+        // Captured now, while this view is still installed.
+        let router = router
+        let context = modelContext
         // Route only once the document picker has finished sliding away: UIKit refuses
         // to present the letter's cover (or an alert) while a dismissal is in flight.
-        // The router is captured now, while this view is still installed.
-        let router = router
+        let pickerHasClosed = ContinuousClock.now.advanced(by: .milliseconds(650))
         Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(650))
+            let outcome = await StylesView.importOutcome(of: result, into: context)
+            try? await Task.sleep(until: pickerHasClosed, clock: .continuous)
             switch outcome {
             case .open(let id):
                 router.selectedTab = .vault
@@ -360,6 +349,24 @@ struct StylesView: View {
             case .failed(let message):
                 router.alertMessage = message
             }
+        }
+    }
+
+    /// Receives the chosen file; the package is checked off the main thread.
+    @MainActor
+    private static func importOutcome(of result: Result<URL, Error>, into context: ModelContext) async -> StylesImportOutcome {
+        switch result {
+        case .success(let url):
+            do {
+                let capsule = try await CapsulePackage.importPackage(from: url, into: context)
+                Haptics.success()
+                return .open(capsule.id)
+            } catch {
+                Haptics.warning()
+                return .failed(error.localizedDescription)
+            }
+        case .failure(let error):
+            return .failed(error.localizedDescription)
         }
     }
 }
