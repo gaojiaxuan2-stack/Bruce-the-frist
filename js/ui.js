@@ -27,6 +27,8 @@ export class UI {
     this.pointers = [];
     this.lastHandsAt = 0;
     this.accent = '#38f9ff';
+    this._bands = null;
+    this._bandsAt = -1;
 
     for (const m of modes) {
       const b = chip({ kind: 'mode', id: m.id, label: m.name, short: m.short || m.name, icon: m.icon });
@@ -45,9 +47,16 @@ export class UI {
     this.accent = m.accent || '#38f9ff';
     for (const b of this.$modes.children) b.classList.toggle('active', b.dataset.id === m.id);
     this.$options.innerHTML = '';
-    for (const o of m.options || []) {
+    const opts = m.options || [];
+    // Many options: on phones only the current one shows, between ◀ ▶ chips
+    // (a scrolling row can't be scrolled without touching the screen).
+    this.$options.classList.toggle('many', opts.length > 5);
+    if (opts.length > 5) this.$options.appendChild(chip({ kind: 'action', id: 'opt-prev', label: '◀', short: '◀' }));
+    for (const o of opts) {
       this.$options.appendChild(chip({ kind: 'option', id: o.id, label: o.label, short: o.short || o.label, icon: o.icon }));
     }
+    if (opts.length > 5) this.$options.appendChild(chip({ kind: 'action', id: 'opt-next', label: '▶', short: '▶' }));
+    this._bandsAt = -1;
     this.setOption(m.option);
     this.setHint(m.hint || '');
     this.$guide.innerHTML = (m.guide || []).map(([g, text]) => `<div class="g"><span class="gi">${g}</span><span>${text}</span></div>`).join('')
@@ -59,7 +68,27 @@ export class UI {
     for (const b of this.$options.children) b.classList.toggle('active', b.dataset.id === id);
   }
 
-  setHint(text) { this.$hint.innerHTML = text; this.$hint.classList.toggle('empty', !text); }
+  setHint(text) { this.$hint.innerHTML = text; this.$hint.classList.toggle('empty', !text); this._bandsAt = -1; }
+
+  // Screen bands (CSS px) covered by the HUD: effects should keep busy
+  // graphics out of y < top and y > bottom. Measured, cached for 0.5 s.
+  bands() {
+    const now = performance.now();
+    if (this._bands && now - this._bandsAt < 500) return this._bands;
+    const H = window.innerHeight;
+    let top = 0, bottom = H;
+    for (const el of [this.$modes, document.querySelector('#hud .status')]) {
+      const r = el?.getBoundingClientRect();
+      if (r && r.height) top = Math.max(top, r.bottom);
+    }
+    for (const el of [this.$hint, this.$options]) {
+      const r = el?.getBoundingClientRect();
+      if (r && r.height && !el.classList.contains('empty')) bottom = Math.min(bottom, r.top);
+    }
+    this._bands = { top: top + 8, bottom: bottom - 8 };
+    this._bandsAt = now;
+    return this._bands;
+  }
 
   toast(title, sub = '') {
     const t = this.$toast;

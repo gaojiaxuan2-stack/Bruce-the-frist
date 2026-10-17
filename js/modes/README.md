@@ -64,7 +64,7 @@ corners and the 2D canvas all share this space.
 | `vel`, `speed` | palm velocity px/s |
 | `pointer` | index fingertip |
 | `side` | `left` / `right` half of the screen (as the user sees it) |
-| `handedness` | the user's real hand, `Left` / `Right` |
+| `handedness` | the user's real hand, `Left` / `Right` (best effort — prefer `side`) |
 | `ghost` | `true` for up to 140 ms after the tracker lost the hand |
 | `overUI` | the hand is pointing/pinching at a HUD button — ignore it |
 | `is(pose)` | `pose === x && !ghost` |
@@ -80,7 +80,13 @@ corners and the 2D canvas all share this space.
 
 `app.gfx` (WebGL, below), `app.sfx` (sounds: `play('thwip')`,
 `loop(id, level)`, `stopLoop(id)`), `app.ui` (`toast(title, sub)`,
-`setHint(html)`), `app.W/H`, `app.toScreen(nx, ny)`.
+`setHint(html)`, `bands()` → `{top, bottom}`: keep busy graphics between
+these y values so the HUD bars stay readable), `app.setOption(id)` (switch
+the mode's option from a gesture — updates the chips too), `app.W/H`,
+`app.toScreen(nx, ny)`, `app.params` (URL search params).
+
+URL helpers: `#spider` opens a mode, `?opt=miles` picks its option,
+`?sim=spider:thwip` replaces the camera hands with a scripted scenario.
 
 ## `gfx` (WebGL2)
 

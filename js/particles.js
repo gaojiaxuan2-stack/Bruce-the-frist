@@ -41,19 +41,29 @@ export class Particles {
     if (!this.list.length) return;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
+    // Streaks are batched into one stroke per (colour, width, alpha) bucket —
+    // hundreds of separate stroke() calls are slow on phones.
+    const batches = this._batches || (this._batches = new Map());
+    for (const b of batches.values()) b.n = 0;
     for (const p of this.list) {
       const k = 1 - p.age / p.life;
       const s = p.shrink ? p.size * k : p.size;
-      ctx.globalAlpha = Math.min(1, k * 1.5);
+      const alpha = Math.min(1, k * 1.5);
       if (p.kind === 'spark' || p.kind === 'line') {
-        ctx.strokeStyle = p.color;
-        ctx.lineWidth = Math.max(0.5, s * 0.5);
-        ctx.beginPath();
+        const w = Math.max(0.5, Math.round(s) * 0.5);
+        const a = Math.ceil(alpha * 4) / 4;
+        const key = `${p.color}|${w}|${a}`;
+        let b = batches.get(key);
+        if (!b) { b = { color: p.color, w, a, n: 0, pts: [] }; batches.set(key, b); }
         const tail = p.kind === 'spark' ? 2.2 : 1;
-        ctx.moveTo(p.x, p.y);
-        ctx.lineTo(p.x - (p.x - p.px) * tail, p.y - (p.y - p.py) * tail);
-        ctx.stroke();
-      } else if (p.kind === 'dot') {
+        const i = b.n * 4;
+        b.pts[i] = p.x; b.pts[i + 1] = p.y;
+        b.pts[i + 2] = p.x - (p.x - p.px) * tail; b.pts[i + 3] = p.y - (p.y - p.py) * tail;
+        b.n++;
+        continue;
+      }
+      ctx.globalAlpha = alpha;
+      if (p.kind === 'dot') {
         ctx.fillStyle = p.color;
         ctx.beginPath();
         ctx.arc(p.x, p.y, Math.max(0.3, s), 0, Math.PI * 2);
@@ -62,6 +72,15 @@ export class Particles {
         const img = glowSprite(p.color);
         ctx.drawImage(img, p.x - s * 2, p.y - s * 2, s * 4, s * 4);
       }
+    }
+    for (const [key, b] of batches) {
+      if (!b.n) { batches.delete(key); continue; }
+      ctx.globalAlpha = b.a;
+      ctx.strokeStyle = b.color;
+      ctx.lineWidth = b.w;
+      ctx.beginPath();
+      for (let i = 0; i < b.n * 4; i += 4) { ctx.moveTo(b.pts[i], b.pts[i + 1]); ctx.lineTo(b.pts[i + 2], b.pts[i + 3]); }
+      ctx.stroke();
     }
     ctx.restore();
   }

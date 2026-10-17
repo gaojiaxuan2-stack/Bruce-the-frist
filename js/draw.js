@@ -15,9 +15,14 @@ export function glowSprite(color, size = 128) {
   c.width = c.height = size;
   const g = c.getContext('2d');
   const r = size / 2;
+  // Solid colour, then cut an alpha falloff into it. Fading the colour itself
+  // to transparent black would leave dark halos over bright video.
+  g.fillStyle = color;
+  g.fillRect(0, 0, size, size);
+  g.globalCompositeOperation = 'destination-in';
   const grad = g.createRadialGradient(r, r, 0, r, r, r);
-  grad.addColorStop(0, color);
-  grad.addColorStop(0.25, color);
+  grad.addColorStop(0, '#000');
+  grad.addColorStop(0.25, '#000');
   grad.addColorStop(1, 'rgba(0,0,0,0)');
   g.fillStyle = grad;
   g.fillRect(0, 0, size, size);

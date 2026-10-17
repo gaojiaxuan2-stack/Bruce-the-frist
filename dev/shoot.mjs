@@ -4,7 +4,9 @@
 //   node dev/shoot.mjs --url "index.html?sim=spider:thwip" --shots 1500,3000 --out /tmp/spider
 //   node dev/shoot.mjs --url "index.html#portal" --cam hands.y4m      # fake camera video (.y4m / .mjpeg)
 //
-// Options: --size 1280x720  --mobile (390x844 @3x)  --port 0  --timeout 20000
+// Options: --size 1280x720  --mobile (390x844 @3x)  --ready (wait for the hand model)
+//          --eval "__bv.setOption('miles')"  (run in the page once it has started)
+// Shot times count from when the app starts (that is also sim time 0).
 // Prints window.__bv.state() and every console error as JSON.
 
 import http from 'node:http';
@@ -67,9 +69,11 @@ if (args.click !== undefined || args.cam) {
 const out = args.out || '/tmp/bv';
 fs.mkdirSync(path.dirname(out + 'x'), { recursive: true });
 
+await page.waitForFunction(() => window.__bv?.state().started, null, { timeout: 60000 }).catch(() => logs.push('[harness] app never started'));
 if (args.ready) {
   await page.waitForFunction(() => window.__bv?.state().ready, null, { timeout: Number(args.timeout || 60000) }).catch(() => logs.push('[harness] timed out waiting for ready'));
 }
+if (args.eval) await page.evaluate(args.eval).catch((e) => logs.push(`[harness] eval failed: ${e.message}`));
 const t0 = Date.now();
 const shots = String(args.shots || '2500').split(',').map(Number);
 const states = [];

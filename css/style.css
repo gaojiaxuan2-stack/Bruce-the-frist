@@ -267,6 +267,12 @@ body.ready #progress i { background: #39ff88; box-shadow: 0 0 12px #39ff88; }
   #modes .chip:not(.active) .lbl { display: none; }
   .status { top: calc(66px + var(--safe-t)); }
 }
+#options .chip[data-id^='opt-'] { display: none; }
+@media (max-width: 760px) {
+  /* Long option lists: show ◀ current ▶ instead of wrapping rows. */
+  #options.many .chip[data-kind='option']:not(.active) { display: none; }
+  #options.many .chip[data-id^='opt-'] { display: inline-flex; padding: 0; width: 46px; justify-content: center; }
+}
 @media (max-width: 480px) {
   .chip { min-height: 40px; padding: 0 10px; font-size: 12px; letter-spacing: 0.06em; }
   #modes .chip:not(.active) { width: 42px; }

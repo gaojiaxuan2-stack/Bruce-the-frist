@@ -221,18 +221,21 @@ export class GestureEngine {
     h.curl.thumb = clamp01(1.4 - thumbOut);
     h.ext.thumb = h.ext.thumb ? thumbOut > 0.92 && thumbBend < 1.5 : thumbOut > 1.08 && thumbBend < 1.2;
 
-    // Pinch (thumb tip ↔ index tip), hysteresis, ignored when the index is tucked into a fist.
+    // Pinch (thumb tip ↔ index tip) with hysteresis. In a fist the index tip
+    // is tucked against the palm (short reach, close to the middle knuckle),
+    // which tells it apart from a real pinch held out in front of the palm.
     const pr = dist3(w[4], w[8]) / ref;
     const indexReach = dist3(w[0], w[8]) / ref;
+    const tipFromPalm = dist3(w[8], w[9]) / ref;
     h.pinch = clamp01((0.65 - pr) / 0.4);
     const wasPinching = h.pinching;
     if (wasPinching) {
-      h.pinching = pr < 0.52 && h.curl.index < 0.9;
+      h.pinching = pr < 0.52 && indexReach > 0.8;
       h._pinchFrames = 0;
     } else {
       // Must hold for 2 frames / 50 ms so a hand curling into a fist
       // (thumb sweeping past the index tip) doesn't register as a pinch.
-      const close = pr < 0.34 && indexReach > 0.85 && h.curl.index < 0.8;
+      const close = pr < 0.34 && indexReach > 0.95 && tipFromPalm > 0.5;
       h._pinchFrames = close ? (h._pinchFrames || 0) + 1 : 0;
       if (h._pinchFrames === 1) h._pinchSince = t;
       h.pinching = close && h._pinchFrames >= 2 && t - h._pinchSince >= 50;

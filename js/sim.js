@@ -126,6 +126,9 @@ export class Sim {
     this.lastT = 0;
   }
 
+  // Scenario time 0 = the moment the app starts (not page load).
+  restart() { this.t0 = performance.now(); this.lastT = 0; }
+
   time(now) { return (now - this.t0) / 1000; }
 
   hands(now, view) {

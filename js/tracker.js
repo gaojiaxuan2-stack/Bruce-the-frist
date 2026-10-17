@@ -49,6 +49,8 @@ export class Tracker {
     this.maskBytes = null;
     this.errors = 0;
     this.failStreak = 0;
+    this.faceMiss = 0;
+    this.faceX = null;
     this.recipes = {};  // kind -> { Task, optionsFor } so tasks can be rebuilt on CPU
   }
 
@@ -160,13 +162,20 @@ export class Tracker {
     const both = needs.face && this.face && needs.segment && this.segmenter;
     if (needs.face && this.face && (!both || this.frame % 2 === 0)) {
       try {
-        const r = this.face.detectForVideo(source, ts);
-        const lm = r.faceLandmarks?.[0];
+        const input = this._faceInput(source);
+        const r = this.face.detectForVideo(input.image, ts);
+        let lm = r.faceLandmarks?.[0];
         if (lm) {
+          if (input.map) lm = lm.map(input.map);
           const shapes = {};
           for (const c of r.faceBlendshapes?.[0]?.categories || []) shapes[c.categoryName] = c.score;
           out.face = { landmarks: lm, blendshapes: shapes };
-        } else out.face = null;
+          this.faceX = (lm[234].x + lm[454].x) / 2;
+          this.faceMiss = 0;
+        } else {
+          out.face = null;
+          this.faceMiss = (this.faceMiss || 0) + 1;
+        }
       } catch (e) { this._error(e); }
     }
     if (needs.segment && this.segmenter && (!both || this.frame % 2 === 1)) {
@@ -203,6 +212,33 @@ export class Tracker {
     };
     await Promise.all([rebuild('hand', 'hand'), rebuild('face', 'face'), rebuild('segmenter', 'segment')]);
     this.failStreak = 0;
+  }
+
+  // The face detector is short-range: in a wide 16:9 frame a seated user's
+  // face is often too small for it. So on landscape frames we look at a
+  // square crop around the last face (or the centre) and map points back.
+  // Every few misses we try the full frame in case the face is off to a side.
+  _faceInput(source) {
+    const vw = source.videoWidth || source.width, vh = source.videoHeight || source.height;
+    if (!vw || !vh || vw < vh * 1.2 || (this.faceMiss % 4 === 3)) return { image: source, map: null };
+    const side = vh;
+    const want = (this.faceX ?? 0.5) * vw;
+    // Re-centre only when the face drifts far, so tracking stays steady.
+    if (this.cropX === undefined || Math.abs(want - (this.cropX + side / 2)) > side * 0.22) {
+      this.cropX = Math.round(Math.max(0, Math.min(vw - side, want - side / 2)));
+    }
+    const S = 512;
+    if (!this.cropCanvas) {
+      this.cropCanvas = document.createElement('canvas');
+      this.cropCanvas.width = this.cropCanvas.height = S;
+      this.cropCtx = this.cropCanvas.getContext('2d');
+    }
+    const x0 = this.cropX;
+    this.cropCtx.drawImage(source, x0, 0, side, side, 0, 0, S, S);
+    return {
+      image: this.cropCanvas,
+      map: (p) => ({ x: (x0 + p.x * side) / vw, y: p.y, z: (p.z * side) / vw }),
+    };
   }
 
   _error(e) {

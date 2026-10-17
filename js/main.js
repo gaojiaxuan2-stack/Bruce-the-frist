@@ -53,9 +53,16 @@ const ui = new UI({
   onAction: (id, el) => {
     if (id === 'sound') { sfx.unlock(); sfx.setEnabled(!sfx.enabled); syncSoundChip(); }
     if (id === 'save') saveSnapshot(el.dataset.url);
+    if (id === 'opt-prev' || id === 'opt-next') {
+      const opts = app.mode?.options || [];
+      const i = opts.findIndex((o) => o.id === app.mode.option);
+      if (opts.length) setOption(opts[(i + (id === 'opt-next' ? 1 : -1) + opts.length) % opts.length].id);
+    }
   },
 });
 app.ui = ui;
+app.setMode = (id) => setMode(id);
+app.setOption = (id) => setOption(id);
 
 // ---------------------------------------------------------------------------
 // Modes
@@ -247,6 +254,8 @@ function loop(now) {
     let det = { hands: [] };
     if (app.ready) {
       const n = needs();
+      if (!n.face) app.face = null;
+      if (!n.segment && app.hasMask) { gfx.clearMask(); app.hasMask = false; }
       det = tracker.detect(src, n, { hands: !sim });
       if (lastDetAt) detFps += (1000 / Math.max(1, now - lastDetAt) - detFps) * 0.1;
       lastDetAt = now;
@@ -329,6 +338,7 @@ async function start() {
   btn.textContent = 'STARTING…';
   try {
     if (useCamera) await startCamera();
+    sim?.restart();
     app.started = true;
     resize();
     document.body.classList.add('running');
@@ -357,6 +367,9 @@ async function boot() {
   let saved = null;
   try { saved = localStorage.getItem('bv.mode'); } catch (e) { /* ignore */ }
   setMode((sim && sim.modeId) || fromHash || saved || MODES[0].id);
+  // ?opt=<id> picks the mode's starting option (handy for links and tests).
+  const opt = params.get('opt');
+  if (opt && app.mode.options?.some((o) => o.id === opt)) setOption(opt);
   syncSoundChip();
   requestAnimationFrame(loop);
 
