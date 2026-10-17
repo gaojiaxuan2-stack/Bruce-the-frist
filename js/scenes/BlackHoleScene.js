@@ -1,21 +1,549 @@
-// Placeholder - replaced by the real scene.
+// Black Hole — a Gargantua-style black hole made of particles.
+//
+// A Keplerian accretion disk (all motion computed in the vertex shader from a
+// clock uniform), relativistic Doppler beaming, gravitational lensing that
+// bends the far side of the disk over and under the shadow, a thin photon
+// ring, infalling streams, dust, background stars and optional jets.
+// The hand orbits the camera, a fist feeds the hole, opening the hand
+// releases a shock wave, a victory sign changes the colours.
 import * as THREE from 'three';
 import { BaseScene } from '../core/BaseScene.js';
+import {
+  diskVertex,
+  pointFragment,
+  starVertex,
+  starFragment,
+  dustVertex,
+  jetVertex,
+  billboardVertex,
+  ringFragment,
+  sinkFragment,
+} from './blackhole/shaders.js';
+
+const RS = 1; // event-horizon radius (world units)
+const R_IN = 2.6; // inner edge of the disk
+const R_OUT = 12; // outer edge of the disk
+const RING = 1.5; // photon ring radius
+const ORBIT_K = 7.5; // omega = K * r^-1.5  (inner edge: one turn every ~3.5 s)
+const BASE_DIST = 21;
+
+const DEG = Math.PI / 180;
+const IDLE_INCL = 8 * DEG; // Interstellar: nearly edge-on
+const HAND_MIN_INCL = 2 * DEG;
+const HAND_MAX_INCL = 60 * DEG;
+const MIN_INCL = -40 * DEG;
+const MAX_INCL = 82 * DEG;
+
+const PALETTES = [
+  { name: 'Interstellar gold', colors: ['#e4eeff', '#ffd27a', '#ff8426', '#5c0c03'] },
+  { name: 'Blue-white', colors: ['#ffffff', '#a6d2ff', '#3c74ff', '#170f5c'] },
+  { name: 'Crimson', colors: ['#fff0e8', '#ff7658', '#d0142f', '#36000f'] },
+];
+
+const damp = (k, dt) => 1 - Math.exp(-k * dt);
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+function gauss() {
+  const u = 1 - Math.random();
+  const v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
 
 export default class BlackHoleScene extends BaseScene {
-  static meta = { id: 'blackhole', title: 'Black Hole', subtitle: 'Coming soon', icon: '*', hints: [], bloom: { strength: 0.6, radius: 0.4, threshold: 0 } };
+  static meta = {
+    id: 'blackhole',
+    title: 'Black Hole',
+    subtitle: 'Gargantua — gravity bends the light',
+    icon: '🕳️',
+    hints: [
+      { icon: '☝️', gesture: 'Move hand', text: 'fly around the black hole' },
+      { icon: '🤏', gesture: 'Pinch + drag', text: 'spin the view' },
+      { icon: '↕️', gesture: 'Hand near / far', text: 'zoom in / out' },
+      { icon: '✊', gesture: 'Fist', text: 'feed it — more gravity' },
+      { icon: '✋', gesture: 'Open hand after fist', text: 'release a big flash' },
+      { icon: '✌️', gesture: 'Victory', text: 'change colors' },
+    ],
+    bloom: { strength: 1.25, radius: 0.6, threshold: 0.3 },
+  };
 
   async init() {
-    const g = new THREE.BufferGeometry();
-    const n = 20000;
-    const p = new Float32Array(n * 3);
-    for (let i = 0; i < n * 3; i++) p[i] = (Math.random() - 0.5) * 8;
-    g.setAttribute('position', new THREE.BufferAttribute(p, 3));
-    this.points = new THREE.Points(g, new THREE.PointsMaterial({ size: 0.03, color: 0xffffff }));
-    this.scene.add(this.points);
+    this.settings = {
+      size: 1,
+      brightness: 1,
+      spin: 1,
+      lensing: 1,
+      tilt: 0,
+      jets: false,
+      palette: PALETTES[0].name,
+    };
+    this.paletteIndex = 0;
+
+    this.camera.fov = 45;
+    this.camera.near = 0.1;
+    this.camera.far = 3000;
+    this.camera.updateProjectionMatrix();
+
+    // ---------------------------------------------------------- shared uniforms
+    const pal = PALETTES[0].colors.map((c) => new THREE.Color(c));
+    this.paletteTarget = pal.map((c) => c.clone());
+    this.u = {
+      ...this.app.sharedUniforms,
+      uClock: { value: 0 },
+      uHoleView: { value: new THREE.Vector3(0, 0, -BASE_DIST) },
+      uRing: { value: RING },
+      uRin: { value: R_IN },
+      uRout: { value: R_OUT },
+      uRs: { value: RS },
+      uOrbitK: { value: ORBIT_K },
+      uSize: { value: 7 },
+      uBright: { value: 1 },
+      uFeed: { value: 0 },
+      uLensA: { value: 3 },
+      uLensStar: { value: 5 },
+      uViewGain: { value: 1 },
+      uFlash: { value: 0 },
+      uStreams: { value: 0.5 },
+      uBeam: { value: 1 },
+      uShock: { value: new THREE.Vector4(0, 0, 1, 0) },
+      uCol0: { value: pal[0] },
+      uCol1: { value: pal[1] },
+      uCol2: { value: pal[2] },
+      uCol3: { value: pal[3] },
+      uStarBright: { value: 1 },
+      uDust: { value: 0.11 },
+      uJet: { value: 0 },
+      uJetClock: { value: 0 },
+      uRingBright: { value: 1 },
+      uBeamDir: { value: new THREE.Vector2(1, 0) },
+      uSink: { value: 0 },
+      uBloomTex: { value: null },
+      uScreen: { value: new THREE.Vector2(1, 1) },
+    };
+
+    const additive = (vertexShader, fragmentShader, defines = {}) =>
+      new THREE.ShaderMaterial({
+        uniforms: this.u,
+        vertexShader,
+        fragmentShader,
+        defines,
+        transparent: true,
+        depthWrite: false,
+        depthTest: true,
+        blending: THREE.AdditiveBlending,
+      });
+
+    // ---------------------------------------------------------- event horizon
+    this.horizon = new THREE.Mesh(
+      new THREE.SphereGeometry(RS, 48, 32),
+      new THREE.MeshBasicMaterial({ color: 0x000000 }),
+    );
+    this.horizon.renderOrder = -10;
+    this.scene.add(this.horizon);
+    // The shadow seen from outside is wider than the horizon (light passing closer
+    // than the photon sphere is captured): a camera-facing black disc at the
+    // hole's centre plane hides everything BEHIND the hole inside the photon ring,
+    // while the near side of the disk still passes in front of it.
+    this.shadow = new THREE.Mesh(new THREE.CircleGeometry(1, 128), new THREE.MeshBasicMaterial({ color: 0x000000 }));
+    this.shadow.renderOrder = -9;
+    this.scene.add(this.shadow);
+
+    // ---------------------------------------------------------- accretion disk
+    this.diskGeometry = this.buildDisk(this.count(220000));
+    this.disk = new THREE.Points(this.diskGeometry, additive(diskVertex, pointFragment));
+    this.disk.frustumCulled = false;
+    this.scene.add(this.disk);
+
+    // Secondary (under-the-hole) image: same particles, second draw, half of them.
+    const secondaryGeometry = new THREE.BufferGeometry();
+    for (const [name, attr] of Object.entries(this.diskGeometry.attributes)) secondaryGeometry.setAttribute(name, attr);
+    secondaryGeometry.setDrawRange(0, Math.floor(this.diskGeometry.attributes.position.count * 0.5));
+    this.diskSecondary = new THREE.Points(secondaryGeometry, additive(diskVertex, pointFragment, { SECONDARY: 1 }));
+    this.diskSecondary.frustumCulled = false;
+    this.scene.add(this.diskSecondary);
+
+    // ---------------------------------------------------------- stars, dust, jets
+    this.stars = new THREE.Points(this.buildStars(this.count(15000)), additive(starVertex, starFragment));
+    this.stars.frustumCulled = false;
+    this.scene.add(this.stars);
+
+    this.dust = new THREE.Points(this.buildDust(this.count(26000)), additive(dustVertex, pointFragment));
+    this.dust.frustumCulled = false;
+    this.scene.add(this.dust);
+
+    this.jets = new THREE.Points(this.buildJets(this.count(14000)), additive(jetVertex, pointFragment));
+    this.jets.frustumCulled = false;
+    this.jets.visible = false;
+    this.scene.add(this.jets);
+
+    // ---------------------------------------------------------- photon ring + light sink
+    // Billboards in world units (vP = local xy), big enough for the grown shadow.
+    const quad = new THREE.PlaneGeometry(10, 10);
+    this.ring = new THREE.Mesh(quad, additive(billboardVertex, ringFragment));
+    this.ring.material.depthTest = false;
+    this.ring.renderOrder = 5;
+    this.scene.add(this.ring);
+
+    this.sink = new THREE.Mesh(quad.clone(), additive(billboardVertex, sinkFragment));
+    this.sink.material.depthTest = false;
+    this.sink.renderOrder = 6;
+    this.scene.add(this.sink);
+
+    // ---------------------------------------------------------- state
+    this.cam = {
+      autoAz: 0.9,
+      spinAz: 0,
+      spinVel: 0,
+      dragIncl: 0,
+      inclVel: 0,
+      handAz: 0,
+      handAzTarget: 0,
+      handIncl: IDLE_INCL,
+      handInclTarget: IDLE_INCL,
+      userZoom: 1,
+      depthZoom: 1,
+      roll: 0,
+      az: 0,
+      incl: IDLE_INCL,
+      dist: BASE_DIST,
+      wasActive: false,
+      wasPinching: false,
+    };
+    this.fit = 1;
+    this.clockValue = 0;
+    this.jetClock = 0;
+    this.feed = 0;
+    this.charge = 0;
+    this.sinceFist = 99;
+    this.mass = 1;
+    this.flash = 0;
+    this.jetBurst = 0;
+    this.jetLevel = 0;
+    this.shock = null;
+    this.tmp = new THREE.Vector3();
+    this.tmp2 = new THREE.Vector3();
+    this.updateCamera(0);
   }
 
+  // ---------------------------------------------------------------- geometry
+
+  buildDisk(n) {
+    const nStream = Math.round(n * 0.03);
+    const nPlunge = Math.round(n * 0.006);
+    const orbit = new Float32Array(n * 4);
+    const rand = new Float32Array(n * 4);
+    const rEndDisk = R_IN * 0.86;
+    const STREAMS = 7;
+    const kinds = [];
+    for (let i = 0; i < n; i++) kinds.push(i < nStream ? 1 : i < nStream + nPlunge ? 2 : 0);
+    // shuffle so any prefix (secondary image draw range) is a fair sample
+    for (let i = n - 1; i > 0; i--) {
+      const j = (Math.random() * (i + 1)) | 0;
+      [kinds[i], kinds[j]] = [kinds[j], kinds[i]];
+    }
+    let streamCounter = 0;
+    for (let i = 0; i < n; i++) {
+      const kind = kinds[i];
+      let rOut;
+      let theta0;
+      let speed;
+      let g = gauss();
+      if (kind === 1) {
+        const id = streamCounter++ % STREAMS;
+        rOut = 14.5 + id * 0.8;
+        theta0 = id * ((2 * Math.PI) / STREAMS) + 0.4;
+        speed = (0.5 + 0.12 * (id % 3)) / (rOut - rEndDisk);
+        g = clamp(g, -2.5, 2.5);
+      } else if (kind === 2) {
+        rOut = R_IN * (0.9 + 0.55 * Math.random());
+        theta0 = Math.random() * Math.PI * 2;
+        speed = (0.18 + 0.12 * Math.random()) / (rOut - 1.02);
+      } else {
+        rOut = R_IN + 0.4 + (R_OUT - R_IN - 0.4) * Math.pow(Math.random(), 0.7);
+        theta0 = Math.random() * Math.PI * 2;
+        speed = (0.07 + 0.12 * Math.random()) / (rOut - rEndDisk);
+      }
+      orbit.set([rOut, theta0, Math.random(), speed], i * 4);
+      rand.set([g, Math.random(), Math.random(), kind], i * 4);
+    }
+    const geo = new THREE.BufferGeometry();
+    // position is unused by the shader but three.js needs it for the vertex count
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    geo.setAttribute('aOrbit', new THREE.BufferAttribute(orbit, 4));
+    geo.setAttribute('aRand', new THREE.BufferAttribute(rand, 4));
+    return geo;
+  }
+
+  buildStars(n) {
+    const pos = new Float32Array(n * 3);
+    const star = new Float32Array(n * 4);
+    const band = new THREE.Vector3(0.3, 1, 0.2).normalize();
+    const v = new THREE.Vector3();
+    for (let i = 0; i < n; i++) {
+      v.set(gauss(), gauss(), gauss()).normalize();
+      if (i % 3 === 0) {
+        // a faint Milky-Way band
+        v.addScaledVector(band, -v.dot(band) * (0.85 + Math.random() * 0.15)).normalize();
+      }
+      const r = 320 + Math.random() * 260;
+      pos.set([v.x * r, v.y * r, v.z * r], i * 3);
+      const big = Math.pow(Math.random(), 8);
+      star.set([1.4 + big * 4.5, 0.05 + Math.pow(Math.random(), 3) * 0.9 + big * 0.8, Math.random(), Math.random()], i * 4);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('aStar', new THREE.BufferAttribute(star, 4));
+    return geo;
+  }
+
+  buildDust(n) {
+    const dust = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      const r = 3 + Math.pow(Math.random(), 0.75) * 52;
+      const h = gauss() * (0.25 + r * 0.11);
+      dust.set([r, Math.random() * Math.PI * 2, h, Math.random()], i * 4);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    geo.setAttribute('aDust', new THREE.BufferAttribute(dust, 4));
+    return geo;
+  }
+
+  buildJets(n) {
+    const jet = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      jet.set([i % 2 ? 1 : -1, Math.random(), Math.random() * Math.PI * 2, Math.random()], i * 4);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    geo.setAttribute('aJet', new THREE.BufferAttribute(jet, 4));
+    return geo;
+  }
+
+  // ---------------------------------------------------------------- lifecycle
+
+  enter() {
+    this.cam.wasActive = false;
+    this.cam.wasPinching = false;
+  }
+
+  resize(width, height) {
+    super.resize(width, height);
+    const aspect = width / Math.max(height, 1);
+    // keep the whole disk in view on tall (phone) screens
+    this.fit = aspect < 1.25 ? clamp(1.25 / aspect, 1, 2.3) : 1;
+  }
+
+  setPalette(name, announce = false) {
+    const i = Math.max(0, PALETTES.findIndex((p) => p.name === name));
+    this.paletteIndex = i;
+    this.settings.palette = PALETTES[i].name;
+    PALETTES[i].colors.forEach((c, k) => this.paletteTarget[k].set(c));
+    this.paletteController?.updateDisplay();
+    if (announce) this.app.hud.toast(`✌️ Colors: ${PALETTES[i].name}`);
+  }
+
+  buildGui(folder) {
+    const s = this.settings;
+    folder.add(s, 'size', 0.3, 2.5, 0.01).name('Particle size');
+    folder.add(s, 'brightness', 0.2, 3, 0.01).name('Disk brightness');
+    folder.add(s, 'spin', 0, 3, 0.01).name('Spin speed');
+    folder.add(s, 'lensing', 0, 2, 0.01).name('Lensing strength');
+    folder.add(s, 'tilt', -45, 45, 1).name('Disk tilt (°)');
+    folder.add(s, 'jets').name('Jets');
+    this.paletteController = folder
+      .add(s, 'palette', PALETTES.map((p) => p.name))
+      .name('Colors')
+      .onChange((v) => this.setPalette(v));
+  }
+
+  // ---------------------------------------------------------------- per frame
+
   update(dt, time, input) {
-    this.points.rotation.y += dt * 0.2 + input.dragDelta.x;
+    const c = this.cam;
+    const active = input.active;
+    const ui = input.uiCaptured;
+    const pinching = active && input.pinching && !ui;
+    const fist = active && input.fist && !ui;
+
+    // ------------------------------------------------ camera: hand orbit
+    // Horizontal hand position -> azimuth, vertical -> how high above the disk.
+    const handAz = clamp(input.pointer.x, -1, 1) * 1.3;
+    const py = clamp(input.pointer.y, -1, 1);
+    const handIncl = py >= 0
+      ? IDLE_INCL + py * (HAND_MAX_INCL - IDLE_INCL)
+      : IDLE_INCL + py * (IDLE_INCL - HAND_MIN_INCL);
+
+    const following = active && !ui && !pinching;
+    if (following && (!c.wasActive || c.wasPinching)) {
+      // Hand just appeared or a pinch just ended: re-anchor so the view does not jump.
+      c.spinAz += c.handAz - handAz;
+      c.dragIncl += c.handIncl - handIncl;
+      c.handAz = c.handAzTarget = handAz;
+      c.handIncl = c.handInclTarget = handIncl;
+    }
+    if (following) {
+      c.handAzTarget = handAz;
+      c.handInclTarget = handIncl;
+    } else if (!active) {
+      c.handInclTarget = IDLE_INCL;
+    }
+    c.wasActive = active;
+    c.wasPinching = pinching;
+
+    c.handAz += (c.handAzTarget - c.handAz) * damp(3, dt);
+    c.handIncl += (c.handInclTarget - c.handIncl) * damp(2.5, dt);
+
+    // ------------------------------------------------ camera: pinch + drag with inertia
+    if (pinching) {
+      const dAz = -input.dragDelta.x * 3.2;
+      const dIn = -input.dragDelta.y * 1.8;
+      c.spinAz += dAz;
+      c.dragIncl += dIn;
+      if (dt > 0) {
+        c.spinVel += (dAz / dt - c.spinVel) * damp(14, dt);
+        c.inclVel += (dIn / dt - c.inclVel) * damp(14, dt);
+      }
+    } else {
+      c.spinAz += c.spinVel * dt;
+      c.dragIncl += c.inclVel * dt;
+      c.spinVel *= Math.exp(-1.4 * dt);
+      c.inclVel *= Math.exp(-3 * dt);
+      if (!active) c.dragIncl *= Math.exp(-0.5 * dt);
+    }
+    c.dragIncl = clamp(c.dragIncl, MIN_INCL - c.handIncl, MAX_INCL - c.handIncl);
+
+    // ------------------------------------------------ camera: zoom
+    c.userZoom = clamp(c.userZoom * Math.exp(-input.zoom * 1.2), 0.5, 2.2);
+    const depthTarget = input.source === 'hand' && active ? clamp(Math.exp(-(input.depth - 0.5) * 1.8), 0.6, 1.6) : 1;
+    c.depthZoom += (depthTarget - c.depthZoom) * damp(2.5, dt);
+
+    // idle: slow orbit; with a hand present the orbit almost stops so the hand is in charge
+    c.autoAz += dt * 0.055 * (active ? 0.25 : 1);
+
+    // ------------------------------------------------ feed (fist) and release (open hand)
+    if (fist) {
+      this.charge = Math.min(1, this.charge + dt / 2.2);
+      this.sinceFist = 0;
+    } else {
+      this.sinceFist += dt;
+      if (this.sinceFist > 3) this.charge = Math.max(0, this.charge - dt * 0.6);
+    }
+    this.feed += ((fist ? 1 : 0) - this.feed) * damp(fist ? 2.2 : 1.1, dt);
+    if (!fist && active && !ui && input.open && this.charge > 0.12 && this.sinceFist < 3) this.release(this.charge);
+    if (input.events.has('victorystart') && !ui) {
+      this.setPalette(PALETTES[(this.paletteIndex + 1) % PALETTES.length].name, true);
+    }
+
+    // ------------------------------------------------ simulation clocks
+    const spin = this.settings.spin;
+    this.clockValue += dt * spin * (1 + 3 * this.feed);
+    this.flash *= Math.exp(-4 * dt);
+    this.jetBurst *= Math.exp(-1.1 * dt);
+    this.jetClock += dt * (0.6 + 2.5 * this.jetBurst) * Math.max(spin, 0.2);
+    const jetTarget = (this.settings.jets ? 0.45 : 0) + this.jetBurst * 1.6;
+    this.jetLevel += (jetTarget - this.jetLevel) * damp(4, dt);
+    this.jets.visible = this.jetLevel > 0.004;
+
+    const massTarget = 1 + 0.16 * this.feed + 0.06 * this.charge;
+    this.mass += (massTarget - this.mass) * damp(1.5, dt);
+
+    const shock = this.u.uShock.value;
+    if (this.shock) {
+      const s = this.shock;
+      s.t += dt;
+      const k = Math.min(s.t / 2.6, 1);
+      shock.set(R_IN + 40 * (1 - Math.pow(1 - k, 2.2)), s.power * Math.pow(1 - k, 1.6), 0.7 + s.t * 1.6, 0);
+      if (k >= 1) this.shock = null;
+    } else {
+      shock.set(0, 0, 1, 0);
+    }
+
+    this.updateCamera(dt);
+    this.updateUniforms(dt);
+  }
+
+  release(power) {
+    const p = Math.max(0.45, power);
+    this.shock = { t: 0, power: 1.2 * p };
+    this.flash = Math.max(this.flash, p);
+    this.jetBurst = Math.max(this.jetBurst, p);
+    this.charge = 0;
+    this.sinceFist = 99;
+  }
+
+  updateCamera(dt) {
+    const c = this.cam;
+    const az = c.autoAz + c.spinAz + c.handAz;
+    const incl = clamp(c.handIncl + c.dragIncl, MIN_INCL, MAX_INCL);
+    c.az = az;
+    c.incl = incl;
+    const targetDist = clamp(BASE_DIST * this.fit * c.userZoom * c.depthZoom, 13, 80);
+    c.dist += (targetDist - c.dist) * (dt > 0 ? damp(4, dt) : 1);
+    c.roll += (this.settings.tilt * DEG - c.roll) * (dt > 0 ? damp(4, dt) : 1);
+
+    const d = c.dist;
+    this.camera.position.set(d * Math.cos(incl) * Math.sin(az), d * Math.sin(incl), d * Math.cos(incl) * Math.cos(az));
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(0, 0, 0);
+    this.camera.rotateZ(c.roll);
+    this.camera.updateMatrixWorld();
+  }
+
+  updateUniforms(dt) {
+    const u = this.u;
+    const s = this.settings;
+    const cam = this.camera;
+
+    u.uClock.value = this.clockValue;
+    u.uJetClock.value = this.jetClock;
+    u.uHoleView.value.set(0, 0, 0).applyMatrix4(cam.matrixWorldInverse);
+    u.uFeed.value = this.feed;
+    u.uFlash.value = this.flash;
+    u.uSize.value = 7 * s.size;
+    u.uBright.value = s.brightness;
+    u.uRs.value = RS * this.mass;
+    u.uRing.value = RING * this.mass;
+    u.uLensA.value = 3 * s.lensing * this.mass * this.mass;
+    u.uLensStar.value = 5 * s.lensing;
+    u.uStreams.value = 0.45 + 1.6 * this.feed;
+    u.uJet.value = this.jetLevel;
+    u.uRingBright.value = (0.9 + 0.6 * this.feed + 1.6 * this.flash) * Math.sqrt(s.brightness);
+
+    // Edge-on, the disk piles up along the line of sight: tone it down a bit.
+    const sinI = Math.abs(Math.sin(this.cam.incl));
+    u.uViewGain.value = 0.27 + 0.73 * THREE.MathUtils.smoothstep(sinI, 0.02, 0.8);
+
+    // Side of the disk that moves toward us (for the photon ring's Doppler tint).
+    const az = this.cam.az;
+    this.tmp.set(Math.cos(az), 0, -Math.sin(az)).transformDirection(cam.matrixWorldInverse);
+    u.uBeamDir.value.set(this.tmp.x, this.tmp.y);
+    if (u.uBeamDir.value.lengthSq() > 1e-6) u.uBeamDir.value.normalize();
+
+    // Palette cross-fade.
+    const k = damp(3, dt);
+    [u.uCol0, u.uCol1, u.uCol2, u.uCol3].forEach((uc, i) => uc.value.lerp(this.paletteTarget[i], k));
+
+    // Light sink: cancel last frame's bloom inside the shadow so it stays pure black.
+    const bloom = this.app.bloomPass;
+    const bloomTex = bloom?.renderTargetsHorizontal?.[0]?.texture;
+    const target = this.app.composer?.renderTarget1;
+    if (bloom && bloom.enabled && bloomTex && target) {
+      u.uBloomTex.value = bloomTex;
+      u.uScreen.value.set(target.width, target.height);
+      u.uSink.value = 1;
+    } else {
+      u.uSink.value = 0;
+    }
+    this.sink.visible = u.uSink.value > 0;
+
+    // Billboards (photon ring, sink) face the camera; horizon grows with the mass.
+    for (const m of [this.ring, this.sink, this.shadow]) m.quaternion.copy(cam.quaternion);
+    this.shadow.scale.setScalar(RING * this.mass * 0.985);
+    this.horizon.scale.setScalar(this.mass);
+  }
+
+  dispose() {
+    super.dispose();
+    this.diskSecondary.geometry.dispose();
   }
 }
