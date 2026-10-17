@@ -1,0 +1,90 @@
+name: iOS build & test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build & test on iOS Simulator
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show default Xcode
+        run: xcodebuild -version
+
+      - name: Pick Xcode and iPhone simulator
+        id: simulator
+        # Keep going so the compile step below still reports errors if no simulator is available.
+        continue-on-error: true
+        run: .github/scripts/pick-simulator.sh
+
+      - name: Compile app and tests
+        run: |
+          set +e
+          xcodebuild -version
+          xcodebuild build-for-testing \
+            -project Unhook.xcodeproj \
+            -scheme Unhook \
+            -destination "generic/platform=iOS Simulator" \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee xcodebuild-compile.log | grep -E "error:|warning:|\*\* (BUILD|TEST BUILD)"
+          status=${PIPESTATUS[0]}
+          exit "$status"
+
+      - name: Run unit tests
+        if: steps.simulator.outputs.id != ''
+        run: |
+          set +e
+          xcodebuild test \
+            -project Unhook.xcodeproj \
+            -scheme Unhook \
+            -destination "id=${{ steps.simulator.outputs.id }}" \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee xcodebuild-test.log | grep -E "error:|Test (Suite|Case|case|run)|✔|✘|\*\* TEST"
+          # grep only trims the log; the step's result is xcodebuild's exit status.
+          status=${PIPESTATUS[0]}
+          exit "$status"
+
+      - name: Fail if tests could not run
+        if: steps.simulator.outputs.id == ''
+        run: |
+          echo "No iPhone simulator was available, so the unit tests did not run." >&2
+          exit 1
+
+      - name: Build for device with the runner's default Xcode (Release)
+        if: ${{ !cancelled() }}
+        env:
+          DEFAULT_DEVELOPER_DIR: ${{ steps.simulator.outputs.default_developer_dir }}
+        run: |
+          set +e
+          if [ -n "$DEFAULT_DEVELOPER_DIR" ]; then export DEVELOPER_DIR="$DEFAULT_DEVELOPER_DIR"; fi
+          xcodebuild -version
+          xcodebuild build \
+            -project Unhook.xcodeproj \
+            -scheme Unhook \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee xcodebuild-release.log | grep -E "error:|warning:|\*\* BUILD"
+          status=${PIPESTATUS[0]}
+          exit "$status"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-logs
+          path: |
+            xcodebuild-*.log
+            TestResults.xcresult
+          if-no-files-found: ignore
