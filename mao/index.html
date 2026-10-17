@@ -13,7 +13,7 @@
     --stone-hi: #ece6dc;
     --stone-lo: #c9bfb1;
     --ink: #2b2420;
-    --muted: #6d6158;
+    --muted: #5a4f47;
     --lacquer: #9c3226;
     --panel: rgba(248, 244, 237, 0.82);
     --rule: rgba(43, 36, 32, 0.16);
@@ -54,14 +54,22 @@
   }
   #stage { position: fixed; inset: 0; }
   #stage canvas { display: block; width: 100%; height: 100%; touch-action: none; outline: none; }
+  #stage canvas:focus-visible { outline: 2px solid var(--lacquer); outline-offset: -4px; }
 
   .label {
     position: fixed;
     top: calc(env(safe-area-inset-top, 0px) + 20px);
     left: max(16px, env(safe-area-inset-left, 0px));
     max-width: min(320px, calc(100vw - 32px));
+    box-sizing: border-box;
     display: grid;
     gap: 6px;
+    padding: 12px 14px;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     pointer-events: none;
   }
   .label h1 {
@@ -148,13 +156,22 @@
   .loader p { margin: 0; font: 12px/1.4 var(--mono); color: var(--muted); letter-spacing: 0.04em; }
   .bar { height: 3px; background: var(--rule); border-radius: 2px; overflow: hidden; }
   .bar i { display: block; height: 100%; width: 0; background: var(--lacquer); transition: width 0.25s ease; }
+  #loading.failed .bar { display: none; }
+  #loading.failed p { color: var(--ink); font-size: 13px; line-height: 1.5; }
 
   @media (max-width: 640px) {
     .label .zh { font-size: 30px; }
     .label .en { font-size: 15px; }
-    .label .spec { display: none; }
+    .label .spec { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     .stats { display: none; }
     .dock button { padding: 8px 9px; font-size: 12px; }
+  }
+  @media (max-height: 520px) {
+    .label .spec { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  }
+  @media (forced-colors: active) {
+    .dock button { border: 1px solid ButtonText; }
+    .dock button[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; }
   }
   @media (prefers-reduced-motion: reduce) {
     .bar i { transition: none; }
@@ -175,7 +192,7 @@
 <header class="label">
   <h1><span class="zh" lang="zh-Hans">毛泽东</span><span class="en">Mao Zedong</span></h1>
   <p class="dates">1893 – 1976</p>
-  <p class="spec">Standing figure in a Zhongshan suit, right hand raised. Life size, 1.80 m. Drag to orbit, scroll or pinch to zoom.</p>
+  <p class="spec" id="spec">Standing figure in a Zhongshan suit, right hand raised. Life size, 1.80 m. Drag to orbit, scroll or pinch to zoom; with the keyboard, focus the statue and use the arrow keys, + and −.</p>
 </header>
 
 <p class="stats" id="stats"></p>
@@ -201,7 +218,7 @@
   </div>
 </div>
 
-<script type="module">
+<script type="module" id="app">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
@@ -472,18 +489,20 @@ function polygonize(field, bmin, bmax, h) {
           if (v0 < 0) continue;
           const I = bx * B + i, J = by * B + j, K = bz * B + k;
           const base = i + P * j + P2 * k;
+          // Each quad faces from the inside corner of its crossing edge to the outside.
+          // (v0, a, b, c) faces +x, -y and +z for the x, y and z edges respectively.
           const s0 = arr[base] < 0;
           if ((arr[base + 1] < 0) !== s0) {
             const a = getV(I, J - 1, K), b = getV(I, J - 1, K - 1), c = getV(I, J, K - 1);
-            if (a >= 0 && b >= 0 && c >= 0) pushQuad(v0, a, b, c);
+            if (a >= 0 && b >= 0 && c >= 0) { if (s0) pushQuad(v0, a, b, c); else pushQuad(v0, c, b, a); }
           }
           if ((arr[base + P] < 0) !== s0) {
             const a = getV(I - 1, J, K), b = getV(I - 1, J, K - 1), c = getV(I, J, K - 1);
-            if (a >= 0 && b >= 0 && c >= 0) pushQuad(v0, a, b, c);
+            if (a >= 0 && b >= 0 && c >= 0) { if (s0) pushQuad(v0, c, b, a); else pushQuad(v0, a, b, c); }
           }
           if ((arr[base + P2] < 0) !== s0) {
             const a = getV(I - 1, J, K), b = getV(I - 1, J - 1, K), c = getV(I, J - 1, K);
-            if (a >= 0 && b >= 0 && c >= 0) pushQuad(v0, a, b, c);
+            if (a >= 0 && b >= 0 && c >= 0) { if (s0) pushQuad(v0, a, b, c); else pushQuad(v0, c, b, a); }
           }
         }
   }
@@ -514,16 +533,13 @@ function finishMesh(field, raw, h, aoStep, aoGain = 1.35) {
     A[3 * i] = A[3 * i + 1] = A[3 * i + 2] = ao;
     M[i] = out.m;
   }
-  // Orient quads with the SDF normals, split along the short diagonal, bucket by material.
+  // Split quads along the short diagonal (keeping their winding) and bucket by material.
   const Q = raw.quads, buckets = [[], [], [], [], [], []];
   const px = (v, k) => P[3 * v + k];
   for (let q = 0; q < Q.length; q += 4) {
-    let a = Q[q], b = Q[q + 1], c = Q[q + 2], d = Q[q + 3];
+    const a = Q[q], b = Q[q + 1], c = Q[q + 2], d = Q[q + 3];
     const d1 = [px(c, 0) - px(a, 0), px(c, 1) - px(a, 1), px(c, 2) - px(a, 2)];
     const d2 = [px(d, 0) - px(b, 0), px(d, 1) - px(b, 1), px(d, 2) - px(b, 2)];
-    const fn = cross(d1, d2);
-    const ns = [N[3 * a] + N[3 * b] + N[3 * c] + N[3 * d], N[3 * a + 1] + N[3 * b + 1] + N[3 * c + 1] + N[3 * d + 1], N[3 * a + 2] + N[3 * b + 2] + N[3 * c + 2] + N[3 * d + 2]];
-    if (dot(fn, ns) < 0) { const t = b; b = d; d = t; }
     const tris = dot(d1, d1) < dot(d2, d2) ? [a, b, c, a, c, d] : [a, b, d, b, c, d];
     for (let t = 0; t < 6; t += 3) {
       const u = tris[t], v = tris[t + 1], wv = tris[t + 2];
@@ -1015,36 +1031,46 @@ function buildPart(name, detail = 1) {
 return { buildPart, partNames: Object.keys(PARTS) };
 }
 
-// Sculpt all parts in parallel workers; fall back to the main thread.
+// Sculpt all parts in parallel workers; if workers are unavailable or one
+// fails, stop them and build whatever is still missing on the main thread.
 async function sculpt(detail, onProgress) {
   const t0 = performance.now();
   const names = ['head', 'body', 'handR', 'handL'];
-  let done = 0;
-  const finished = (r) => { onProgress(++done / names.length, r.name); return r; };
-  let results;
+  const byName = {};
+  const finished = (r) => {
+    if (byName[r.name]) return;
+    byName[r.name] = r;
+    onProgress(Object.keys(byName).length / names.length, r.name);
+  };
+  const workers = [];
+  let url = null;
   try {
     const src = `const K = (${sculptKit.toString()})();
 self.onmessage = (e) => {
   const r = K.buildPart(e.data.name, e.data.detail);
   self.postMessage(r, [r.position.buffer, r.normal.buffer, r.color.buffer, r.ao.buffer, r.index.buffer]);
 };`;
-    const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
-    results = await Promise.all(names.map((name) => new Promise((resolve, reject) => {
+    url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    await Promise.all(names.map((name) => new Promise((resolve, reject) => {
       const w = new Worker(url);
-      w.onmessage = (e) => { w.terminate(); resolve(finished(e.data)); };
-      w.onerror = (e) => { w.terminate(); reject(e); };
+      workers.push(w);
+      w.onmessage = (e) => { w.terminate(); finished(e.data); resolve(); };
+      // preventDefault keeps a worker failure from surfacing as a page error.
+      w.onerror = (e) => { e.preventDefault(); reject(new Error(e.message || `worker for ${name} failed`)); };
       w.postMessage({ name, detail });
     })));
-    URL.revokeObjectURL(url);
   } catch (err) {
+    for (const w of workers) w.terminate();
     const K = sculptKit();
-    results = [];
-    done = 0;
     for (const name of names) {
+      if (byName[name]) continue;
       await new Promise((r) => setTimeout(r, 16));
-      results.push(finished(K.buildPart(name, detail)));
+      finished(K.buildPart(name, detail));
     }
+  } finally {
+    if (url) URL.revokeObjectURL(url);
   }
+  const results = names.map((n) => byName[n]);
   const tris = results.reduce((s, r) => s + r.index.length / 3, 0);
   const primitives = results.reduce((s, r) => s + r.primitives, 0);
   return { results, tris, primitives, ms: performance.now() - t0 };
@@ -1054,23 +1080,36 @@ self.onmessage = (e) => {
  * Viewer
  * ===================================================================== */
 const stage = document.getElementById('stage');
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+// The stage can be 0x0 when the page loads hidden; never divide by zero.
+const viewport = () => [stage.clientWidth || 1, stage.clientHeight || 1];
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+} catch (err) {
+  window.__maoFail('This viewer needs WebGL, which is turned off or unavailable in this browser.');
+  throw err;
+}
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(stage.clientWidth, stage.clientHeight);
+renderer.setSize(...viewport());
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 stage.appendChild(renderer.domElement);
+const canvas = renderer.domElement;
+canvas.tabIndex = 0;
+canvas.setAttribute('role', 'application');
+canvas.setAttribute('aria-roledescription', '3D viewer');
+canvas.setAttribute('aria-label', 'Statue of Mao Zedong in a Zhongshan suit, right hand raised, on a granite plinth');
+canvas.setAttribute('aria-describedby', 'spec');
 
 const scene = new THREE.Scene();
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
-scene.environmentIntensity = 0.55;
 
 const PED_H = 0.42;
-const camera = new THREE.PerspectiveCamera(30, stage.clientWidth / stage.clientHeight, 0.05, 60);
+const camera = new THREE.PerspectiveCamera(30, viewport()[0] / viewport()[1], 0.05, 60);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
@@ -1119,7 +1158,12 @@ for (const m of [tierLow, tierHigh]) { m.castShadow = true; m.receiveShadow = tr
 scene.add(plinth);
 
 async function addInscription() {
-  try { await Promise.race([document.fonts.load('900 150px "Noto Serif SC"', '毛泽东'), new Promise((r) => setTimeout(r, 2500))]); } catch (e) { /* fall back to a system face */ }
+  try {
+    await Promise.race([
+      Promise.all([document.fonts.load('900 150px "Noto Serif SC"', '毛泽东'), document.fonts.load('500 40px "IBM Plex Mono"', '1893 — 1976')]),
+      new Promise((r) => setTimeout(r, 2500)),
+    ]);
+  } catch (e) { /* fall back to system faces */ }
   const cv = document.createElement('canvas');
   cv.width = 1024; cv.height = 256;
   const g = cv.getContext('2d');
@@ -1208,7 +1252,8 @@ const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').match
 const VIEWS = {
   full: () => {
     // Far enough to fit the 1.4 m-wide plinth across narrow portrait screens.
-    const aspect = stage.clientWidth / stage.clientHeight;
+    const [vw, vh] = viewport();
+    const aspect = vw / vh;
     const portrait = aspect < 0.8;
     const dist = Math.max(6.0, (portrait ? 1.6 : 1.45) / (2 * Math.tan(THREE.MathUtils.degToRad(15)) * aspect));
     return { target: new THREE.Vector3(0, portrait ? 1.2 : 1.36, 0), pos: new THREE.Vector3(1.55, portrait ? 1.6 : 1.75, dist) };
@@ -1225,11 +1270,17 @@ function setView(name, instant = false) {
   tween = { t: 0, fromPos: camera.position.clone(), fromTarget: controls.target.clone(), ...v };
 }
 
+// If the page was framed while hidden, frame it again once it has a real size.
+let framedBlind = !stage.clientWidth || !stage.clientHeight;
 function resize() {
-  const w = stage.clientWidth, h = stage.clientHeight;
+  const [w, h] = viewport();
   renderer.setSize(w, h);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
+  if (framedBlind && stage.clientWidth && stage.clientHeight) {
+    framedBlind = false;
+    setView('full', true);
+  }
 }
 window.addEventListener('resize', resize);
 
@@ -1255,6 +1306,29 @@ turntable.addEventListener('click', () => {
   turntable.setAttribute('aria-pressed', String(controls.autoRotate));
 });
 
+// Keyboard: arrows orbit around the target, + and − zoom.
+canvas.addEventListener('keydown', (e) => {
+  const sph = new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target));
+  const step = THREE.MathUtils.degToRad(10);
+  switch (e.key) {
+    case 'ArrowLeft': sph.theta -= step; break;
+    case 'ArrowRight': sph.theta += step; break;
+    case 'ArrowUp': sph.phi -= step * 0.6; break;
+    case 'ArrowDown': sph.phi += step * 0.6; break;
+    case '+': case '=': sph.radius *= 0.85; break;
+    case '-': case '_': sph.radius /= 0.85; break;
+    default: return;
+  }
+  e.preventDefault();
+  tween = null;
+  controls.autoRotate = false;
+  turntable.setAttribute('aria-pressed', 'false');
+  sph.radius = THREE.MathUtils.clamp(sph.radius, controls.minDistance, controls.maxDistance);
+  sph.phi = THREE.MathUtils.clamp(sph.phi, 0.05, controls.maxPolarAngle);
+  camera.position.copy(controls.target).add(new THREE.Vector3().setFromSpherical(sph));
+  controls.update();
+});
+
 const loadingText = document.getElementById('loading-text');
 const loadingBar = document.getElementById('loading-bar');
 addInscription();
@@ -1272,6 +1346,25 @@ if (!reduceMotion) { controls.autoRotate = true; turntable.setAttribute('aria-pr
 
 window.__mao = { THREE, scene, camera, controls, renderer, figure, plinth, setFinish, setView, built };
 window.__maoReady = true;
+</script>
+<script>
+  // Replaces the loading message if the viewer cannot start: three.js blocked,
+  // no WebGL, or any script error before the statue is ready. First message wins.
+  (function () {
+    let failed = false;
+    window.__maoFail = function (message) {
+      if (failed || window.__maoReady) return;
+      failed = true;
+      document.getElementById('loading-text').textContent = message;
+      document.getElementById('loading').classList.add('failed');
+    };
+    document.getElementById('app').addEventListener('error', function () {
+      window.__maoFail('The viewer could not load three.js from cdn.jsdelivr.net. Check the connection and reload.');
+    });
+    window.addEventListener('error', function (e) {
+      if (e instanceof ErrorEvent) window.__maoFail('The viewer stopped with an error: ' + e.message);
+    });
+  })();
 </script>
 </body>
 </html>

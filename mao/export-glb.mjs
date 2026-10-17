@@ -31,6 +31,16 @@ const base64 = await page.evaluate(async () => {
   const root = new THREE.Group();
   root.name = 'MaoZedongStatue';
   root.add(plinth.clone(true));
+  // KHR_materials_sheen has no intensity, so fold three.js's `sheen` scalar into the colour.
+  const baked = new Map();
+  const bake = (mt) => {
+    if (!baked.has(mt)) {
+      const c = mt.clone();
+      if (c.isMeshPhysicalMaterial && c.sheen > 0) { c.sheenColor.multiplyScalar(c.sheen); c.sheen = 1; }
+      baked.set(mt, c);
+    }
+    return baked.get(mt);
+  };
   const fig = new THREE.Group();
   fig.name = 'Figure';
   fig.position.copy(figure.position);
@@ -49,7 +59,7 @@ const base64 = await page.evaluate(async () => {
     g.setAttribute('color', new THREE.BufferAttribute(rgba, 4, true));
     g.setIndex(src.index);
     for (const gr of src.groups) g.addGroup(gr.start, gr.count, gr.materialIndex);
-    const mesh = new THREE.Mesh(g, m.material);
+    const mesh = new THREE.Mesh(g, m.material.map(bake));
     mesh.name = { head: 'Head', body: 'Suit', handR: 'RightHand', handL: 'LeftHand' }[m.name] || m.name;
     mesh.position.copy(m.position);
     mesh.quaternion.copy(m.quaternion);
