@@ -48,6 +48,8 @@ export class Tracker {
     this.frame = 0;
     this.maskBytes = null;
     this.errors = 0;
+    this.failStreak = 0;
+    this.recipes = {};  // kind -> { Task, optionsFor } so tasks can be rebuilt on CPU
   }
 
   // Loads the wasm runtime + hand model. onProgress(fraction 0..1, label).
@@ -65,7 +67,7 @@ export class Tracker {
     fileset.wasmBinaryPath = URL.createObjectURL(new Blob([wasm], { type: 'application/wasm' }));
     this.fileset = fileset;
     onProgress(1, 'Starting neural nets');
-    this.hand = await this._create(HandLandmarker, (delegate) => ({
+    this.hand = await this._create('hand', HandLandmarker, (delegate) => ({
       baseOptions: { modelAssetBuffer: handModel, delegate },
       runningMode: 'VIDEO',
       numHands: 2,
@@ -76,7 +78,8 @@ export class Tracker {
   }
 
   // Try the GPU delegate first, fall back to CPU (older iOS, headless, etc).
-  async _create(Task, optionsFor) {
+  async _create(kind, Task, optionsFor) {
+    this.recipes[kind] = { Task, optionsFor };
     if (this.delegate === 'GPU') {
       try {
         return await Task.createFromOptions(this.fileset, optionsFor('GPU'));
@@ -97,7 +100,7 @@ export class Tracker {
       while (!this.fileset) await new Promise((r) => setTimeout(r, 100));
       if (kind === 'face') {
         const buf = await fetchBytes(MODELS.face);
-        this.face = await this._create(FaceLandmarker, (delegate) => ({
+        this.face = await this._create('face', FaceLandmarker, (delegate) => ({
           baseOptions: { modelAssetBuffer: buf, delegate },
           runningMode: 'VIDEO',
           numFaces: 1,
@@ -109,7 +112,7 @@ export class Tracker {
       }
       if (kind === 'segment') {
         const buf = await fetchBytes(MODELS.segment);
-        this.segmenter = await this._create(ImageSegmenter, (delegate) => ({
+        this.segmenter = await this._create('segment', ImageSegmenter, (delegate) => ({
           baseOptions: { modelAssetBuffer: buf, delegate },
           runningMode: 'VIDEO',
           outputConfidenceMasks: true,
@@ -146,8 +149,11 @@ export class Tracker {
           score: cat?.score ?? 1,
         });
       }
+      this.failStreak = 0;
     } catch (e) {
       this._error(e);
+      // Some mobile GPUs build the GPU task fine but then fail every frame.
+      if (++this.failStreak >= 3 && this.delegate === 'GPU') this._fallbackToCPU();
     }
 
     // Heavier models alternate frames when both are on.
@@ -179,6 +185,24 @@ export class Tracker {
       } catch (e) { this._error(e); }
     }
     return out;
+  }
+
+  // Rebuild every loaded task on the CPU delegate (slower, but works everywhere).
+  async _fallbackToCPU() {
+    if (this._fallingBack) return;
+    this._fallingBack = true;
+    console.warn('[tracker] GPU inference keeps failing; switching to CPU');
+    this.delegate = 'CPU';
+    const rebuild = async (key, kind) => {
+      const old = this[key];
+      const r = this.recipes[kind];
+      if (!old || !r) return;
+      this[key] = null;
+      try { old.close(); } catch (e) { /* already broken */ }
+      try { this[key] = await r.Task.createFromOptions(this.fileset, r.optionsFor('CPU')); } catch (e) { console.error(`[tracker] CPU ${kind} failed`, e); }
+    };
+    await Promise.all([rebuild('hand', 'hand'), rebuild('face', 'face'), rebuild('segmenter', 'segment')]);
+    this.failStreak = 0;
   }
 
   _error(e) {
