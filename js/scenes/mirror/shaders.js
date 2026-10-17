@@ -26,7 +26,7 @@ uniform float uFovScale;      // 1 / (2 tan(fov / 2))
 
 uniform sampler2D uMap;
 uniform float uMapLinear;     // 1: sampler returns linear colour (sRGB image), 0: raw sRGB (video)
-uniform float uLod;           // mip level matching one particle (images only)
+uniform float uLod;           // mip level where one texel ~ one particle
 uniform vec4 uUvRect;         // visible window of the source: x0, y0, width, height
 uniform float uFlipX;         // selfie mirror
 
@@ -213,8 +213,9 @@ void main() {
     col = vec3(0.9, 0.94, 1.0) * (0.05 + 0.9 * v * v);
     sz *= mix(0.3, 1.25, v);
   } else if (uStyle < 2.5) {
-    // Matrix: mint glow + falling code streaks
-    float v = smoothstep(0.04, 0.9, lum);
+    // Matrix: mint glow + falling code streaks. Local contrast (detail vs. its
+    // blurred surroundings) keeps big flat bright walls from turning into a mint flood.
+    float v = smoothstep(0.04, 0.9, lum * 0.8 + (lum - blur) * 1.4 + 0.08);
     float colId = floor(g.x * uGrid.x / 2.0);
     float speed = 0.08 + hash11(colId) * 0.22;
     float head = 1.0 - fract(uTime * speed + hash11(colId + 31.7));
@@ -238,13 +239,14 @@ void main() {
   // soft highlight roll-off so white shirts / walls do not burn out
   col = col / (1.0 + 0.45 * max(max(col.r, col.g), col.b));
 
-  // background dust is small and faint
-  sz *= mix(1.0, 0.5, bg);
-  alpha *= mix(1.0, 0.06, smoothstep(0.0, 0.6, bg));
+  // background dust is small and faint (but joins the ball at full strength)
+  float dust = smoothstep(0.0, 0.6, bg) * (1.0 - t);
+  sz *= mix(1.0, 0.5, dust);
+  alpha *= mix(1.0, 0.06, dust);
 
   // the ball packs every particle into a small space: smaller, much fainter, hotter
   sz *= mix(1.0, 0.75, t);
-  alpha *= mix(1.0, 0.15, t);
+  alpha *= mix(1.0, 0.12, t);
   col *= 1.0 + t * 0.6 + uBlast.w * 0.5;
 
   // a tilted sheet piles particles up on screen: dim to keep the brightness even

@@ -1,9 +1,14 @@
 // Shapes: ~120k glowing particles that morph between 3D forms.
-// Hold up 1–5 fingers (or 👍) to pick a shape — no typing needed.
-//   ☝️ point      push the particles (springy hole with a wake that ripples back)
+// Hold up 1–5 fingers (or 👍) and keep the hand still to pick a shape — no typing needed.
+//   ☝️ point+move push the particles (springy hole with a wake that ripples back)
 //   🤏 pinch+drag rotate with inertia          ✊ fist → ✋ open   squeeze into a core, then explode
-//   tilt hand     rotate around the view axis  hand closer / wheel  scale
+//   ✋ tilt       rotate around the view axis  hand closer / wheel  scale
 //   mouse click   next shape                   GUI                  shape list + your own text
+//
+// One hand pose can mean two things (1 finger = point = push; 5 fingers = open palm =
+// tilt / explode), so a finger count only picks a shape as a deliberate "dwell": the pose
+// must be held still and upright, and a pose that already pushed, tilted or exploded never
+// picks a shape until the hand changes shape or leaves the camera.
 import * as THREE from 'three';
 import { BaseScene } from '../core/BaseScene.js';
 import { createShapeMaterial, createStarMaterial, TRAIL_SLOTS } from './shapes/shaders.js';
@@ -22,19 +27,34 @@ const TAU = Math.PI * 2;
 const SPREAD = 0.45; // share of the morph used for the per-particle stagger (must match uSpread)
 const PUFF = 0.16; // outward bloom mid-flight (must match uPuff)
 const SWEEP_MIX = 0.7; // how much the shape's own order drives the stagger
-const HOLD_TIME = 0.6; // seconds a finger count must be held
+const HOLD_TIME = 0.6; // seconds 2 / 3 fingers or 👍 must be held still
+const HOLD_TIME_SHARED = 0.95; // 1 finger and the open palm also push / turn / explode: wait longer
+const SETTLE = 0.3; // a new point / open-palm pose must settle before it starts counting
+const GRACE = 0.25; // tracking hiccups shorter than this keep the current pose
+const STILL_R = 0.05; // NDC: moving further than this restarts the hold (and makes a point a push)
+const STILL_SPEED = 0.16; // NDC/s: faster than this and the hold drains
+// rad: |roll| below this counts fingers, above it turns the shape. Real "upright" hands
+// lean 14–17° (the point / open-palm fixtures read 0.24–0.29), so 20° keeps them countable;
+// a deliberate tilt from upright is caught by ROLL_DRIFT anyway.
+const UPRIGHT = 0.35;
+const ROLL_DRIFT = 0.15; // rad: turning the hand this much during a hold means "tilt", not "count"
 const HEART = 2;
+const PLANET = 4;
 const TEXT = 5;
+const PLANET_CORE = 1.12; // radius that hides what is behind the planet (body radius 1.22)
 const WAKE = TRAIL_SLOTS - 1;
 
-/** tilt: presentation tilt (x, y, z radians), spin: auto-rotation factor, sway: face the viewer. */
+/**
+ * tilt: presentation tilt (x, y, z radians), spin: auto-rotation factor, sway: face the viewer,
+ * dot: dot-size factor (small dots keep the dense letters crisp).
+ */
 const SHAPES = [
-  { name: 'Sphere', icon: '🔮', fingers: 1, tilt: [0.35, 0, 0.18], spin: 1 },
-  { name: 'Torus knot', icon: '➰', fingers: 2, tilt: [0.45, 0, 0], spin: 1 },
-  { name: 'Heart', icon: '❤️', fingers: 3, tilt: [0, 0, 0], sway: 0.6 },
-  { name: 'DNA helix', icon: '🧬', fingers: 4, tilt: [0, 0, 0.32], spin: 1.6 },
-  { name: 'Planet', icon: '🪐', fingers: 5, tilt: [0.4, 0, -0.32], spin: 0.8 },
-  { name: 'Text', icon: '🔤', fingers: 0, tilt: [0, 0, 0], sway: 0.38 },
+  { name: 'Sphere', icon: '🔮', fingers: 1, tilt: [0.35, 0, 0.18], spin: 1, dot: 1 },
+  { name: 'Torus knot', icon: '➰', fingers: 2, tilt: [0.45, 0, 0], spin: 1, dot: 1 },
+  { name: 'Heart', icon: '❤️', fingers: 3, tilt: [0, 0, 0], sway: 0.6, dot: 1 },
+  { name: 'DNA helix', icon: '🧬', fingers: 4, tilt: [0, 0, 0.32], spin: 1.6, dot: 0.9 },
+  { name: 'Planet', icon: '🪐', fingers: 5, tilt: [0.4, 0, -0.32], spin: 0.8, dot: 1 },
+  { name: 'Text', icon: '🔤', fingers: 0, tilt: [0, 0, 0], sway: 0.2, dot: 0.68 },
 ];
 const FINGER_ICON = ['', '☝️', '✌️', '🤟', '🖖', '🖐️'];
 
@@ -70,14 +90,14 @@ export default class ShapesScene extends BaseScene {
   static meta = {
     id: 'shapes',
     title: 'Shapes',
-    subtitle: 'Hold up fingers to change the shape (mouse: click)',
+    subtitle: 'Hold fingers still to pick a shape (mouse: click)',
     icon: '💠',
     hints: [
-      { icon: '✌️', gesture: '1 · 2 fingers', text: 'Sphere · Torus knot' },
-      { icon: '🖐️', gesture: '3 · 4 · 5 fingers', text: 'Heart · DNA · Planet' },
-      { icon: '👍', gesture: 'Thumbs up', text: 'your text' },
+      { icon: '✌️', gesture: 'Hold 1 / 2 / 3 fingers', text: 'Sphere / Knot / Heart' },
+      { icon: '🖐️', gesture: 'Hold 4 / 5 fingers / 👍', text: 'DNA / Planet / text' },
       { icon: '☝️', gesture: 'Point + move', text: 'push the particles' },
-      { icon: '🤏', gesture: 'Pinch + drag', text: 'rotate (tilt hand: turn)' },
+      { icon: '🤏', gesture: 'Pinch + drag', text: 'rotate' },
+      { icon: '✋', gesture: 'Tilt open hand', text: 'turn the shape' },
       { icon: '✊', gesture: 'Fist, then open ✋', text: 'squeeze, then explode' },
     ],
     bloom: { strength: 0.9, radius: 0.5, threshold: 0.05 },
@@ -171,7 +191,6 @@ export default class ShapesScene extends BaseScene {
     this.rotVel = new THREE.Vector2();
     this.roll = 0;
     this.rollTarget = 0;
-    this.prevRoll = 0;
     this.zoom = 1;
     this.scale = 1;
     this.collapse = 0;
@@ -179,12 +198,13 @@ export default class ShapesScene extends BaseScene {
     this.fistState = 'idle';
     this.fistWait = 0;
     this.explodeAge = 100;
-    this.suppressOpen = false;
-    this.suppressT = 0;
-    this.holdCand = -1;
-    this.holdT = 0;
-    this.holdLost = 0;
+    // the current hand pose ("dwell" session), see updateCounting
+    this.ses = { fam: 'none', lost: 0, age: 0, shape: -1, shapeLost: 0, hold: 0, used: false, ax: 0, ay: 0, roll0: 0 };
+    this.pointPending = false;
     this.charge = 0;
+    this.occ = 0;
+    this.sizeFrom = SHAPES[this.current].dot;
+    this.sizeTo = SHAPES[this.current].dot;
     this.beatW = 0;
     this.click = null;
     this.idleT = 0;
@@ -259,9 +279,9 @@ export default class ShapesScene extends BaseScene {
 
   enter() {
     if (!this.indicator.el.isConnected) document.body.appendChild(this.indicator.el);
-    this.holdCand = -1;
-    this.holdT = 0;
-    this.holdLost = 0;
+    this.ses.fam = 'none';
+    this.ses.hold = 0;
+    this.pointPending = false;
     this.click = null;
     this.idleT = 0;
   }
@@ -279,7 +299,12 @@ export default class ShapesScene extends BaseScene {
     this.camera.position.set(0, 0, this.camDist);
     this.material.uniforms.uFocus.value = this.camDist;
     this.mobileLayout = width <= 720;
-    this.indicator.el.style.bottom = this.mobileLayout ? '140px' : '72px';
+    // Bottom centre, except on narrow desktop windows where the hint panel (bottom left,
+    // up to 376 px wide) would sit under it: there it goes where the shape toast appears.
+    const st = this.indicator.el.style;
+    const narrow = !this.mobileLayout && width < 960;
+    st.top = narrow ? '76px' : 'auto';
+    st.bottom = narrow ? 'auto' : this.mobileLayout ? '140px' : '72px';
   }
 
   dispose() {
@@ -342,15 +367,23 @@ export default class ShapesScene extends BaseScene {
     this.morphAge = 0;
   }
 
+  /** Per-shape dot size, blended per particle in the shader (uSizeFrom → uSizeTo). */
+  startSizeMorph(idx) {
+    const k = ease(clamp((this.progress - SPREAD * 0.5) / (1 - SPREAD), 0, 1));
+    this.sizeFrom += (this.sizeTo - this.sizeFrom) * k;
+    this.sizeTo = SHAPES[idx].dot;
+  }
+
   setShape(idx, { toast = true } = {}) {
     idx = clamp(Math.round(idx) || 0, 0, SHAPES.length - 1);
     if (idx === this.current) return;
     this.current = idx;
     this.settings.shape = idx;
     this.shapeCtrl?.updateDisplay();
+    this.startSizeMorph(idx);
     this.startMorph(this.targets[idx]);
     this.swayBase = null;
-    this.holdT = 0;
+    this.ses.hold = 0;
     if (toast) {
       const sh = SHAPES[idx];
       this.app.hud.toast(`${sh.icon} ${idx === TEXT ? `“${this.settings.text}”` : sh.name}`, 1600);
@@ -372,8 +405,10 @@ export default class ShapesScene extends BaseScene {
     this.targets[TEXT] = target;
     this.settings.text = target.text;
     this.textCtrl?.updateDisplay();
-    if (this.current === TEXT) this.startMorph(target);
-    else this.setShape(TEXT);
+    if (this.current === TEXT) {
+      this.startSizeMorph(TEXT);
+      this.startMorph(target);
+    } else this.setShape(TEXT);
   }
 
   // ------------------------------------------------------------------ frame
@@ -404,6 +439,15 @@ export default class ShapesScene extends BaseScene {
     u.uCollapse.value = this.collapse;
     u.uExplodeT.value = this.explodeAge;
 
+    // the planet's body hides the far half of its ring (only once it has formed, and never
+    // while squeezed into the core or flying apart)
+    const occOn = this.current === PLANET && this.progress > 0.72 && this.collapse < 0.05 && this.explodeAge > 2.2;
+    this.occ += ((occOn ? 1 : 0) - this.occ) * damp(occOn ? 3 : 12, dt);
+    u.uOcclude.value = this.occ < 0.002 ? 0 : this.occ;
+    u.uOccRadius.value = PLANET_CORE;
+    u.uSizeFrom.value = this.sizeFrom;
+    u.uSizeTo.value = this.sizeTo;
+
     this.updatePointer(dt, time, input);
     this.updateTransform(dt, time, input);
 
@@ -431,75 +475,121 @@ export default class ShapesScene extends BaseScene {
     this.stars.rotation.x = Math.sin(time * 0.05) * 0.05;
   }
 
-  /** Finger count → shape, with a short hold and a visible "charging" phase. */
+  /** Which hand pose this is, for the finger-count dwell. */
+  poseFamily(input) {
+    if (input.source !== 'hand' || !input.active) return 'none';
+    const g = input.gesture;
+    if (input.pinching || input.fist || g === 'fist' || g === 'pinch') return 'busy';
+    if (g === 'thumbsUp') return 'thumbs';
+    if (g === 'point') return 'point';
+    if (g === 'victory') return 'victory';
+    if (g === 'open' || input.open) return 'open';
+    if (input.fingers >= 1 && input.fingers <= 3) return 'count';
+    return 'busy';
+  }
+
+  /** Shape a pose asks for. The hand stack counts the thumb too: a point with the thumb out
+   * is still "1", a peace sign is "2" whatever the thumb does. */
+  poseShape(fam, input) {
+    switch (fam) {
+      case 'thumbs': return TEXT;
+      case 'point': return 0;
+      case 'victory': return 1;
+      case 'open': return input.fingers >= 5 ? 4 : 3;
+      case 'count': return input.fingers - 1;
+      default: return -1;
+    }
+  }
+
+  startPose(fam, input) {
+    const ses = this.ses;
+    const p = fam === 'point' ? input.pointer : input.palm;
+    ses.fam = fam;
+    ses.lost = 0;
+    ses.age = 0;
+    ses.hold = 0;
+    ses.shape = this.poseShape(fam, input);
+    ses.shapeLost = 0;
+    ses.ax = p.x;
+    ses.ay = p.y;
+    ses.roll0 = input.roll;
+    // the open palm that ends "fist → open" is not a request for the planet
+    ses.used = fam === 'open' && this.explodeAge < 1.5;
+  }
+
+  /**
+   * Finger count → shape, as a deliberate dwell with a visible "charging" phase.
+   * A pose session starts when the hand changes shape (or appears). It counts only while
+   * the hand stays within STILL_R of where the hold started, moves slower than STILL_SPEED
+   * and (for point / open palm) stays upright. A point that moved is a push and an open
+   * palm that tilted is a turn: those sessions are "used" and never pick a shape.
+   */
   updateCounting(dt, input) {
-    const hand = input.source === 'hand' && input.active;
-    let cand = -1;
-    if (
-      hand && !input.uiCaptured && !input.pinching && !input.fist &&
-      input.gesture !== 'fist' && input.gesture !== 'pinch' &&
-      this.fistState === 'idle' && this.collapse < 0.1 && this.explodeAge > 1.2
-    ) {
-      // The hand stack counts the thumb too: pointing with the thumb out is still "1",
-      // a peace sign is "2" whatever the thumb does.
-      if (input.gesture === 'thumbsUp') cand = TEXT;
-      else if (input.gesture === 'point') cand = 0;
-      else if (input.gesture === 'victory') cand = 1;
-      else if (input.fingers >= 1 && input.fingers <= 5) cand = input.fingers - 1;
-    }
-    // After "fist → open palm" the palm is still up; don't let it switch to DNA / planet
-    // until the hand has clearly changed shape.
-    if (this.suppressOpen) {
-      const open = hand && (input.open || input.gesture === 'open' || input.fingers >= 4);
-      if (open) {
-        this.suppressT = 0;
-        cand = -1;
-      } else if ((this.suppressT += dt) > 0.25 || !hand) {
-        this.suppressOpen = false;
-      } else {
-        cand = -1;
-      }
-    }
-
-    const speed = Math.hypot(input.velocity.x, input.velocity.y);
-    const rollRate = dt > 0 ? Math.abs(input.roll - this.prevRoll) / dt : 0;
-    this.prevRoll = input.roll;
-    // Finger counts need an upright, still hand (a tilted hand is turning the shape);
-    // a thumbs-up is naturally sideways, so only stillness matters for it.
-    const upright = cand === TEXT || (Math.abs(input.roll) < 0.6 && rollRate < 2.5);
-    const steady = speed < 0.9 && upright;
-
-    // A tracking hiccup of a few frames must not restart the hold: keep the old candidate
-    // for a short grace period before accepting a different one.
-    if (cand !== this.holdCand) {
-      this.holdLost += dt;
-      if (this.holdLost > 0.25 || this.holdCand < 0) {
-        this.holdCand = cand;
-        this.holdT = 0;
-        this.holdLost = 0;
-      }
+    const ses = this.ses;
+    const fam = this.poseFamily(input);
+    if (fam !== ses.fam) {
+      ses.lost += dt;
+      if (ses.lost > GRACE || ses.fam === 'none' || ses.fam === 'busy') this.startPose(fam, input);
     } else {
-      this.holdLost = 0;
-      if (cand >= 0 && cand !== this.current) {
-        this.holdT = steady ? this.holdT + dt : Math.max(0, this.holdT - dt * 2);
-        if (this.holdT >= HOLD_TIME) {
-          this.setShape(cand);
-          this.holdT = 0;
+      ses.lost = 0;
+    }
+    const shared = ses.fam === 'point' || ses.fam === 'open';
+    const live = fam === ses.fam && fam !== 'none' && fam !== 'busy';
+
+    if (live) {
+      ses.age += dt;
+      const shape = this.poseShape(fam, input);
+      if (shape !== ses.shape) {
+        if ((ses.shapeLost += dt) > 0.2) {
+          ses.shape = shape;
+          ses.shapeLost = 0;
+          ses.hold = 0;
         }
       } else {
-        this.holdT = 0;
+        ses.shapeLost = 0;
+      }
+      if (shared && (Math.abs(input.roll) > UPRIGHT || Math.abs(input.roll - ses.roll0) > ROLL_DRIFT)) {
+        ses.used = true; // this hand is turning the shape
+      }
+      const p = fam === 'point' ? input.pointer : input.palm;
+      if (Math.hypot(p.x - ses.ax, p.y - ses.ay) > STILL_R) {
+        if (fam === 'point') ses.used = true; // a moving fingertip is a push
+        ses.ax = p.x;
+        ses.ay = p.y;
+        ses.hold = 0;
       }
     }
-    cand = this.holdCand;
 
-    const charging = cand >= 0 && cand !== this.current;
-    const target = charging ? clamp(this.holdT / HOLD_TIME, 0, 1) : 0;
+    const blocked = input.uiCaptured || this.fistState !== 'idle' || this.collapse > 0.1 || this.explodeAge < 1.2 ||
+      (ses.fam !== 'point' && this.repel.x > 0.1);
+    const wanted = ses.shape >= 0 && ses.shape !== this.current && !ses.used && !blocked &&
+      ses.fam !== 'none' && ses.fam !== 'busy';
+    // A still, upright point that may still become "1 finger → Sphere" does not push yet;
+    // once it pushes, it stays a push.
+    this.pointPending = wanted && ses.fam === 'point';
+    if (ses.fam === 'point' && !this.pointPending && live) ses.used = true;
+
+    const need = shared ? HOLD_TIME_SHARED : HOLD_TIME;
+    if (live && wanted && ses.shape === this.poseShape(fam, input)) {
+      const speed = Math.hypot(input.velocity.x, input.velocity.y);
+      const still = speed < (shared ? STILL_SPEED : 0.5);
+      if (ses.age >= (shared ? SETTLE : 0.1)) ses.hold = still ? ses.hold + dt : Math.max(0, ses.hold - dt * 2);
+      if (ses.hold >= need) {
+        this.setShape(ses.shape);
+        ses.hold = 0;
+      }
+    } else if (!wanted) {
+      ses.hold = 0;
+    }
+
+    const charging = wanted && ses.hold > 0.04;
+    const target = charging ? clamp(ses.hold / need, 0, 1) : 0;
     this.charge += (target - this.charge) * damp(charging ? 14 : 8, dt);
 
-    if (charging && this.holdT > 0.04) {
-      const sh = SHAPES[cand];
-      const text = cand === TEXT ? `👍 → ${sh.name}` : `${FINGER_ICON[sh.fingers]} ${sh.fingers} → ${sh.name}`;
-      this.showIndicator(true, text, this.holdT / HOLD_TIME);
+    if (charging) {
+      const sh = SHAPES[ses.shape];
+      const text = ses.shape === TEXT ? `👍 → ${sh.name}` : `${FINGER_ICON[sh.fingers]} ${sh.fingers} → ${sh.name}`;
+      this.showIndicator(true, text, ses.hold / need);
     } else {
       this.showIndicator(false);
     }
@@ -532,10 +622,12 @@ export default class ShapesScene extends BaseScene {
     } else if (this.click && input.pinching) {
       this.click.moved += Math.hypot(input.dragDelta.x, input.dragDelta.y);
     }
+    // A touch long-press turns into a fist (MouseInput, 450 ms): that is a squeeze, not a click.
+    if (input.fist || input.events.has('fiststart')) this.click = null;
     if (input.events.has('pinchend') && this.click) {
       const c = this.click;
       this.click = null;
-      if (c.mouse && input.source === 'mouse' && c.moved < 0.02 && time - c.t < 0.45 && !input.uiCaptured) this.nextShape();
+      if (c.mouse && input.source === 'mouse' && c.moved < 0.02 && time - c.t < 0.3 && !input.uiCaptured) this.nextShape();
     }
   }
 
@@ -593,15 +685,14 @@ export default class ShapesScene extends BaseScene {
     this.explodeAge = 0;
     this.swirlBoost = 0.6;
     this.shake = 1;
-    if (input.source === 'hand') {
-      this.suppressOpen = true;
-      this.suppressT = 0;
-    }
+    // the open palm that triggered this must not go on to pick the planet / DNA
+    if (input.source === 'hand') this.ses.used = true;
   }
 
   /** Fingertip push: a springy head plus a short wake that ripples closed. */
   updatePointer(dt, time, input) {
-    const pointing = input.active && !input.uiCaptured && input.gesture === 'point' && !input.pinching && !input.fist;
+    const pointing = input.active && !input.uiCaptured && input.gesture === 'point' && !input.pinching && !input.fist &&
+      !this.pointPending;
     if (pointing && !this.ptrLive) {
       this.ptrX.x = input.pointer.x;
       this.ptrY.x = input.pointer.y;
@@ -655,11 +746,11 @@ export default class ShapesScene extends BaseScene {
     const sh = SHAPES[this.current];
     const hand = input.source === 'hand' && input.active;
 
-    // ---- tilt the hand → rotate around the view axis
+    // ---- tilt the hand → rotate around the view axis (an upright hand, |roll| < UPRIGHT,
+    // is left for finger counting)
     if (hand && (input.open || input.gesture === 'open' || input.gesture === 'point')) {
-      const dz = 0.12;
-      const r = Math.abs(input.roll) < dz ? 0 : input.roll - Math.sign(input.roll) * dz;
-      this.rollTarget = clamp(r * 1.15, -1.5, 1.5);
+      const r = Math.abs(input.roll) < UPRIGHT ? 0 : input.roll - Math.sign(input.roll) * UPRIGHT;
+      this.rollTarget = clamp(r * 1.5, -1.5, 1.5);
     } else if (!input.active) {
       this.rollTarget *= Math.exp(-dt * 0.8);
     }

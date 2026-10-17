@@ -18,9 +18,9 @@ export const WORLD_HEIGHT = 10;
 // Relative sampling density per body part: the face and hair get the most
 // particles so features stay crisp, the large plain T-shirt gets fewer.
 const LABEL_DENSITY = [0, 1, 0.85, 1, 0.5, 0.8];
-// Brightness per body part (the bright white shirt is toned down a little so
-// the face stays the subject).
-const LABEL_WEIGHT = [1, 1, 1, 1, 0.55, 1];
+// Brightness per body part (the bright white shirt is toned down so the face
+// stays the brightest part and the glow does not haze the background).
+const LABEL_WEIGHT = [1, 1, 1, 1, 0.4, 1];
 
 /** Fraction of particles drawn in Mono mode (see the 3x3 tagging below). */
 export const MONO_FRACTION = 1 / 9;
@@ -242,6 +242,19 @@ export async function loadPortrait(targetCount) {
     }
   }
 
+  // Coarse distance field (16 px cells) to the nearest person pixel, so the
+  // touch trail can skip all work while the finger is far from any particle.
+  const CELL = 16;
+  const gc = Math.ceil(W / CELL);
+  const gr = Math.ceil(H / CELL);
+  const near = new Float32Array(gc * gr).fill(1e6);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (mask[y * W + x]) near[((y / CELL) | 0) * gc + ((x / CELL) | 0)] = 0;
+    }
+  }
+  chamfer(near, gc, gr);
+
   return {
     meta,
     width: W,
@@ -261,5 +274,38 @@ export async function loadPortrait(targetCount) {
     // Kept for ray-casting the pointer onto the 3D surface.
     depth,
     mask,
+    /** Distance (photo px) from each CELL x CELL block to the person. */
+    near: { dist: near, cols: gc, rows: gr, cell: CELL },
   };
+}
+
+/** In-place two-pass chamfer distance transform (unit / sqrt2 steps, in cells). */
+function chamfer(d, w, h) {
+  const D = Math.SQRT2;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      let v = d[i];
+      if (x > 0) v = Math.min(v, d[i - 1] + 1);
+      if (y > 0) {
+        v = Math.min(v, d[i - w] + 1);
+        if (x > 0) v = Math.min(v, d[i - w - 1] + D);
+        if (x < w - 1) v = Math.min(v, d[i - w + 1] + D);
+      }
+      d[i] = v;
+    }
+  }
+  for (let y = h - 1; y >= 0; y--) {
+    for (let x = w - 1; x >= 0; x--) {
+      const i = y * w + x;
+      let v = d[i];
+      if (x < w - 1) v = Math.min(v, d[i + 1] + 1);
+      if (y < h - 1) {
+        v = Math.min(v, d[i + w] + 1);
+        if (x < w - 1) v = Math.min(v, d[i + w + 1] + D);
+        if (x > 0) v = Math.min(v, d[i + w - 1] + D);
+      }
+      d[i] = v;
+    }
+  }
 }

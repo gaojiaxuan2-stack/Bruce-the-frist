@@ -1,6 +1,7 @@
 // Shaders for the Shapes scene. All per-particle animation happens here:
 // morph (aFrom -> position with stagger, puff and curl swirl), breathing, heartbeat,
-// "charging" tremble, fist core, explosion burst and the fingertip push with its wake.
+// "charging" tremble, fist core, explosion burst, the fingertip push with its wake and
+// the planet body hiding whatever is behind it.
 import * as THREE from 'three';
 import { GLSL } from '../../core/glsl.js';
 
@@ -31,6 +32,10 @@ uniform float uExplodeAmp;
 uniform float uTremble;
 uniform float uBeat;
 uniform float uSize;
+uniform float uSizeFrom;   // per-shape dot size, blended per particle during the morph
+uniform float uSizeTo;
+uniform float uOcclude;    // 0..1: the planet body hides the ring / back side behind it
+uniform float uOccRadius;  // object-space radius of that body
 uniform float uFocus;
 uniform float uRepelRadius;
 uniform vec4 uTrail[${TRAIL_SLOTS}];
@@ -104,35 +109,66 @@ void main() {
 
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
 
-  // ---- fingertip push (view space; uTrail = ray direction + strength, head + fading wake)
+  // ---- fingertip push (view space; uTrail = ray direction + strength, head + fading wake).
+  // Area preserving: a dot at distance d from the finger's ray moves out to
+  // sqrt(d^2 + K^2 s e(d)). That clears a round hole of radius ~K*sqrt(s) and spreads the
+  // displaced dots evenly around it; the map never folds over, so there is no hard rim.
   vec3 disp = vec3(0.0);
   float total = 0.0;
+  float wsum = 0.0;
+  float wmax = 1e-4;
   float re = uRepelRadius * (-mv.z / uFocus);
   float re2 = re * re;
+  float K2 = re2 * 1.35 * (1.0 + 0.8 * rnd.x); // every dot has its own hole size: a soft edge, not a drawn circle
+  float F2 = re2 * 6.0;
   for (int i = 0; i < ${TRAIL_SLOTS}; i++) {
     vec4 tr = uTrail[i];
     if (abs(tr.w) < 0.002) continue;
     vec3 perp = mv.xyz - tr.xyz * dot(mv.xyz, tr.xyz);
     float d2 = dot(perp, perp);
-    float f = exp(-d2 / re2) * tr.w;
-    disp += perp * inversesqrt(max(d2, 1e-6)) * f;
-    total += abs(f);
+    float fe = exp(-d2 / F2);
+    float nd2 = max(d2 + K2 * tr.w * fe, d2 * 0.35);
+    float inv = inversesqrt(max(d2, 1e-8));
+    disp += perp * inv * (sqrt(nd2) - d2 * inv);
+    float g = abs(tr.w) * fe;
+    wsum += g;
+    wmax = max(wmax, g);
+    total += abs(tr.w) * exp(-d2 / re2);
   }
-  mv.xyz += disp * (re * 1.2 / max(1.0, total));
+  // overlapping head + wake slots must not dig a hole twice as deep
+  mv.xyz += disp / max(1.0, wsum / wmax);
   float push = min(total, 1.5);
+
+  // ---- planet body: dots behind it (seen from the camera) fade out, so the far half of
+  // the ring passes behind the planet instead of shining through it
+  float occ = 0.0;
+  if (uOcclude > 0.001) {
+    vec3 c = (modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    float R = uOccRadius * length(modelViewMatrix[0].xyz);
+    float L = length(mv.xyz);
+    vec3 rd = mv.xyz / L;
+    float tca = dot(c, rd);
+    float h2 = R * R - (dot(c, c) - tca * tca);
+    if (h2 > 0.0) {
+      float t0 = tca - sqrt(h2);
+      occ = smoothstep(0.0, 0.25, L - t0) * smoothstep(0.0, 0.2, h2 / (R * R)) * uOcclude;
+    }
+  }
 
   gl_Position = projectionMatrix * mv;
 
   // ---- size + brightness (soft depth of field: out-of-focus dots get bigger and fainter)
   float dof = abs(-mv.z - uFocus);
-  float size = uSize * aRand.y * (1.0 + 0.25 * push + 0.25 * boom) * (1.0 + 0.1 * min(dof, 4.0)) * mix(1.0, 0.75, ci);
+  float shapeSize = mix(uSizeFrom, uSizeTo, e);
+  float size = uSize * shapeSize * aRand.y * (1.0 + 0.15 * push + 0.25 * boom) * (1.0 + 0.1 * min(dof, 4.0)) * mix(1.0, 0.75, ci);
   gl_PointSize = clamp(pointSize(size, mv), 1.0, 64.0);
 
   float tw = 0.78 + 0.22 * sin(uTime * (1.3 + aRand.x * 2.7) + ph * 3.0);
   vAlpha = (0.5 + 0.5 * aRand.w) * tw / (1.0 + dof * 0.22);
-  vAlpha *= 1.0 + push * 0.35 + uTremble * 0.7 + boom * 0.3;
+  vAlpha *= 1.0 + push * 0.1 + uTremble * 0.7 + boom * 0.3;
   vAlpha *= mix(1.0, 0.06 + 0.5 * aRand.w * aRand.w, ci); // the dense centre stays soft, the outer swirl keeps its colour
-  vColor = mix(col, vec3(1.0, 0.93, 0.86) * max(max(col.r, col.g), col.b) * 1.3 + 0.05, clamp(push * 0.12 + ci * 0.15 + boom * 0.1, 0.0, 0.6));
+  vAlpha *= 1.0 - 0.9 * occ;
+  vColor = mix(col, vec3(1.0, 0.93, 0.86) * max(max(col.r, col.g), col.b) * 1.3 + 0.05, clamp(push * 0.04 + ci * 0.15 + boom * 0.1, 0.0, 0.6));
 }
 `;
 
@@ -169,6 +205,10 @@ export function createShapeMaterial(shared) {
       uTremble: { value: 0 },
       uBeat: { value: 0 },
       uSize: { value: 2.6 },
+      uSizeFrom: { value: 1 },
+      uSizeTo: { value: 1 },
+      uOcclude: { value: 0 },
+      uOccRadius: { value: 1.1 },
       uFocus: { value: 10 },
       uRepelRadius: { value: 0.62 },
       uTrail: { value: trail },

@@ -36,8 +36,8 @@ const MAX_INCL = 82 * DEG;
 
 const PALETTES = [
   { name: 'Interstellar gold', colors: ['#e4eeff', '#ffd27a', '#ff8426', '#5c0c03'] },
-  { name: 'Blue-white', colors: ['#ffffff', '#a6d2ff', '#3c74ff', '#170f5c'] },
-  { name: 'Crimson', colors: ['#fff0e8', '#ff7658', '#d0142f', '#36000f'] },
+  { name: 'Blue-white', colors: ['#ffffff', '#9cd0ff', '#2f6bff', '#071c5e'] },
+  { name: 'Crimson', colors: ['#fff1d8', '#ff3a1c', '#c4001c', '#4a0008'] },
 ];
 
 const damp = (k, dt) => 1 - Math.exp(-k * dt);
@@ -58,7 +58,7 @@ export default class BlackHoleScene extends BaseScene {
     hints: [
       { icon: '☝️', gesture: 'Move hand', text: 'fly around the black hole' },
       { icon: '🤏', gesture: 'Pinch + drag', text: 'spin the view' },
-      { icon: '↕️', gesture: 'Hand near / far', text: 'zoom in / out' },
+      { icon: '🖐️', gesture: 'Hand closer / farther', text: 'zoom in / out' },
       { icon: '✊', gesture: 'Fist', text: 'feed it — more gravity' },
       { icon: '✋', gesture: 'Open hand after fist', text: 'release a big flash' },
       { icon: '✌️', gesture: 'Victory', text: 'change colors' },
@@ -110,7 +110,7 @@ export default class BlackHoleScene extends BaseScene {
       uCol2: { value: pal[2] },
       uCol3: { value: pal[3] },
       uStarBright: { value: 1 },
-      uDust: { value: 0.11 },
+      uDust: { value: 0.065 },
       uJet: { value: 0 },
       uJetClock: { value: 0 },
       uRingBright: { value: 1 },
@@ -166,11 +166,11 @@ export default class BlackHoleScene extends BaseScene {
     this.stars.frustumCulled = false;
     this.scene.add(this.stars);
 
-    this.dust = new THREE.Points(this.buildDust(this.count(26000)), additive(dustVertex, pointFragment));
+    this.dust = new THREE.Points(this.buildDust(this.count(16000)), additive(dustVertex, pointFragment));
     this.dust.frustumCulled = false;
     this.scene.add(this.dust);
 
-    this.jets = new THREE.Points(this.buildJets(this.count(14000)), additive(jetVertex, pointFragment));
+    this.jets = new THREE.Points(this.buildJets(this.count(10000)), additive(jetVertex, pointFragment));
     this.jets.frustumCulled = false;
     this.jets.visible = false;
     this.scene.add(this.jets);
@@ -209,6 +209,10 @@ export default class BlackHoleScene extends BaseScene {
       wasPinching: false,
     };
     this.fit = 1;
+    // Fewer particles at lower quality: make each one a bit bigger and brighter.
+    const q = 1 / this.app.particleScale;
+    this.sizeComp = Math.pow(q, 0.25);
+    this.brightComp = Math.pow(q, 0.45);
     this.clockValue = 0;
     this.jetClock = 0;
     this.feed = 0;
@@ -220,7 +224,6 @@ export default class BlackHoleScene extends BaseScene {
     this.jetLevel = 0;
     this.shock = null;
     this.tmp = new THREE.Vector3();
-    this.tmp2 = new THREE.Vector3();
     this.updateCamera(0);
   }
 
@@ -329,8 +332,8 @@ export default class BlackHoleScene extends BaseScene {
   resize(width, height) {
     super.resize(width, height);
     const aspect = width / Math.max(height, 1);
-    // keep the whole disk in view on tall (phone) screens
-    this.fit = aspect < 1.25 ? clamp(1.25 / aspect, 1, 2.3) : 1;
+    // pull back a little on tall (phone) screens; the outer disk may overflow the sides
+    this.fit = aspect < 1.25 ? clamp(0.85 / aspect, 1, 1.75) : 1;
   }
 
   setPalette(name, announce = false) {
@@ -375,11 +378,15 @@ export default class BlackHoleScene extends BaseScene {
 
     const following = active && !ui && !pinching;
     if (following && (!c.wasActive || c.wasPinching)) {
-      // Hand just appeared or a pinch just ended: re-anchor so the view does not jump.
+      // Hand just appeared or a pinch just ended: re-anchor the azimuth so the
+      // view does not swing around. Height stays absolute (hand up = look from
+      // above), except right after a pinch-drag, which keeps the angle it set.
       c.spinAz += c.handAz - handAz;
-      c.dragIncl += c.handIncl - handIncl;
       c.handAz = c.handAzTarget = handAz;
-      c.handIncl = c.handInclTarget = handIncl;
+      if (c.wasPinching) {
+        c.dragIncl += c.handIncl - handIncl;
+        c.handIncl = c.handInclTarget = handIncl;
+      }
     }
     if (following) {
       c.handAzTarget = handAz;
@@ -395,13 +402,13 @@ export default class BlackHoleScene extends BaseScene {
 
     // ------------------------------------------------ camera: pinch + drag with inertia
     if (pinching) {
-      const dAz = -input.dragDelta.x * 3.2;
-      const dIn = -input.dragDelta.y * 1.8;
+      const dAz = -input.dragDelta.x * 2.8;
+      const dIn = -input.dragDelta.y * 1.6;
       c.spinAz += dAz;
       c.dragIncl += dIn;
       if (dt > 0) {
-        c.spinVel += (dAz / dt - c.spinVel) * damp(14, dt);
-        c.inclVel += (dIn / dt - c.inclVel) * damp(14, dt);
+        c.spinVel += (clamp(dAz / dt, -3.5, 3.5) - c.spinVel) * damp(10, dt);
+        c.inclVel += (clamp(dIn / dt, -1.5, 1.5) - c.inclVel) * damp(10, dt);
       }
     } else {
       c.spinAz += c.spinVel * dt;
@@ -429,8 +436,10 @@ export default class BlackHoleScene extends BaseScene {
       if (this.sinceFist > 3) this.charge = Math.max(0, this.charge - dt * 0.6);
     }
     this.feed += ((fist ? 1 : 0) - this.feed) * damp(fist ? 2.2 : 1.1, dt);
-    if (!fist && active && !ui && input.open && this.charge > 0.12 && this.sinceFist < 3) this.release(this.charge);
-    if (input.events.has('victorystart') && !ui) {
+    // (Open palm and victory are whole-hand poses, not clicks, so they work even
+    // while the hand cursor happens to hover the UI.)
+    if (!fist && active && input.open && this.charge > 0.12 && this.sinceFist < 3) this.release(this.charge);
+    if (input.events.has('victorystart')) {
       this.setPalette(PALETTES[(this.paletteIndex + 1) % PALETTES.length].name, true);
     }
 
@@ -499,12 +508,13 @@ export default class BlackHoleScene extends BaseScene {
     u.uHoleView.value.set(0, 0, 0).applyMatrix4(cam.matrixWorldInverse);
     u.uFeed.value = this.feed;
     u.uFlash.value = this.flash;
-    u.uSize.value = 7 * s.size;
-    u.uBright.value = s.brightness;
+    u.uSize.value = 7 * s.size * this.sizeComp;
+    u.uBright.value = s.brightness * this.brightComp;
+    u.uDust.value = 0.075 * this.brightComp;
     u.uRs.value = RS * this.mass;
     u.uRing.value = RING * this.mass;
     u.uLensA.value = 3 * s.lensing * this.mass * this.mass;
-    u.uLensStar.value = 5 * s.lensing;
+    u.uLensStar.value = 2.5 * s.lensing;
     u.uStreams.value = 0.45 + 1.6 * this.feed;
     u.uJet.value = this.jetLevel;
     u.uRingBright.value = (0.9 + 0.6 * this.feed + 1.6 * this.flash) * Math.sqrt(s.brightness);
@@ -520,7 +530,7 @@ export default class BlackHoleScene extends BaseScene {
     if (u.uBeamDir.value.lengthSq() > 1e-6) u.uBeamDir.value.normalize();
 
     // Palette cross-fade.
-    const k = damp(3, dt);
+    const k = damp(4, dt);
     [u.uCol0, u.uCol1, u.uCol2, u.uCol3].forEach((uc, i) => uc.value.lerp(this.paletteTarget[i], k));
 
     // Light sink: cancel last frame's bloom inside the shadow so it stays pure black.
@@ -530,7 +540,11 @@ export default class BlackHoleScene extends BaseScene {
     if (bloom && bloom.enabled && bloomTex && target) {
       u.uBloomTex.value = bloomTex;
       u.uScreen.value.set(target.width, target.height);
-      u.uSink.value = 1;
+      // Last frame's glow is one frame old: when the scene is getting brighter
+      // (feeding, flash, shock) scale it up by how much brighter it got.
+      const level = (1 + 0.8 * this.feed) * (1 + 1.2 * this.flash) * (1 + 0.8 * u.uShock.value.y) * s.brightness;
+      u.uSink.value = clamp(level / (this.prevLevel || level), 1, 3);
+      this.prevLevel = level;
     } else {
       u.uSink.value = 0;
     }
@@ -540,10 +554,5 @@ export default class BlackHoleScene extends BaseScene {
     for (const m of [this.ring, this.sink, this.shadow]) m.quaternion.copy(cam.quaternion);
     this.shadow.scale.setScalar(RING * this.mass * 0.985);
     this.horizon.scale.setScalar(this.mass);
-  }
-
-  dispose() {
-    super.dispose();
-    this.diskSecondary.geometry.dispose();
   }
 }

@@ -59,11 +59,22 @@ export const THRESHOLDS = {
   // Pinch strength ramp: distance where strength is 1 and where it reaches 0.
   pinchFull: 0.18,
   pinchNone: 0.9,
-  // In a fist the thumb rests on the curled index, so the tips are close too (0.18-0.24):
-  // a pinch needs the index finger NOT folded into the palm (reach above this, see fingerState)...
-  pinchIndexReach: 0.86,
-  // ...or not bent back on itself.
-  pinchIndexStraight: -0.25,
+  // In a fist the thumb rests on the curled index, so the tips are close too (0.17-0.24).
+  // The index finger decides, with hysteresis (real MediaPipe fists: reach 0.68-0.76,
+  // straight -0.41..-0.84, tip 0.53-0.66 from the palm centre; pinches: reach >= 0.95,
+  // straight >= 0.3, tip >= 0.99):
+  // a pinch can START only while the index is clearly free: reach above this (see fingerState)...
+  pinchIndexReach: 0.9,
+  // ...or not bent back on itself;
+  pinchIndexStraight: -0.1,
+  // ...and with its tip away from the palm centre (hand-scale units; while a fist opens,
+  // the thumb lies on the uncurling index for a moment);
+  pinchIndexTipPalm: 0.8,
+  // a pinch ENDS once the index is folded into the palm: reach below this and...
+  foldIndexReach: 0.84,
+  // ...bent back on itself, or its tip close to the palm centre.
+  foldIndexStraight: -0.25,
+  foldIndexTipPalm: 0.68,
   // Grab ramp: fingertip -> palm-centre distance (hand-scale units) for an open hand and a fist.
   grabOpen: 1.2,
   grabClosed: 0.6,
@@ -240,7 +251,10 @@ export function grabAmount(lm, scale = handScale(lm), t = THRESHOLDS) {
  * @param {{x:number,y:number,z:number}[]} lm hand-space landmarks
  * @param {boolean[]|null} [prevExt] last frame's `ext` for this hand (finger hysteresis)
  * @returns {{scale:number, ext:boolean[], fingers:number, pinchDist:number, pinch:number,
- *   pinchAllowed:boolean, grab:number, thumbUp:boolean, roll:number}}
+ *   pinchAllowed:boolean, indexFolded:boolean, indexOpen:number, grab:number, thumbUp:boolean,
+ *   roll:number}}
+ *   pinchAllowed: a pinch may start; indexFolded: the index is curled into a fist (ends a
+ *   pinch); indexOpen: 0 (folded) .. 1 (free), continuous between the two.
  */
 export function analyzeHand(lm, prevExt = null, t = THRESHOLDS) {
   const was = (i) => !!prevExt?.[i];
@@ -255,21 +269,41 @@ export function analyzeHand(lm, prevExt = null, t = THRESHOLDS) {
     fingerState(lm, 3, t, was(4)).extended,
   ];
   const pinchDist = pinchDistance(lm, scale);
-  const indexFree = index.reach > t.pinchIndexReach || index.straight > t.pinchIndexStraight;
-  // Fade the strength out as the index folds into the palm, so a fist never reads as a pinch.
-  const indexOpen = clamp((index.reach - (t.pinchIndexReach - 0.08)) / 0.12, 0, 1);
+  const g = indexGrip(lm, index, scale, t);
   const raw = clamp((t.pinchNone - pinchDist) / (t.pinchNone - t.pinchFull), 0, 1);
   return {
     scale,
     ext,
     fingers: ext.filter(Boolean).length,
     pinchDist,
-    pinch: indexFree ? raw * Math.max(indexOpen, index.straight > t.pinchIndexStraight ? 1 : 0) : 0,
-    pinchAllowed: indexFree,
+    // Fades out as the index folds into the palm, so a fist never reads as a pinch.
+    pinch: raw * g.open,
+    pinchAllowed: g.free,
+    indexFolded: g.folded,
+    indexOpen: g.open,
     grab: grabAmount(lm, scale, t),
     thumbUp: thumb.extended && thumb.up < t.thumbUpAngle,
     roll: rollAngle(lm),
   };
+}
+
+/**
+ * Is the index finger free to pinch, or folded into a fist? Two thresholds with a gap
+ * between them (hysteresis): `free` starts a pinch, `folded` ends one.
+ * @returns {{free: boolean, folded: boolean, open: number, tipPalm: number}}
+ */
+export function indexGrip(lm, index = fingerState(lm, 0), scale = handScale(lm), t = THRESHOLDS) {
+  const tipPalm = dist(lm[8], palmCenter(lm)) / scale;
+  const free = (index.reach > t.pinchIndexReach || index.straight > t.pinchIndexStraight)
+    && tipPalm > t.pinchIndexTipPalm;
+  const folded = !free && index.reach < t.foldIndexReach
+    && (index.straight < t.foldIndexStraight || tipPalm < t.foldIndexTipPalm);
+  const ramp = (v, lo, hi) => clamp((v - lo) / (hi - lo), 0, 1);
+  const open = folded ? 0 : Math.min(
+    Math.max(ramp(index.reach, t.foldIndexReach, t.pinchIndexReach), ramp(index.straight, t.foldIndexStraight, t.pinchIndexStraight)),
+    ramp(tipPalm, t.foldIndexTipPalm, t.pinchIndexTipPalm),
+  );
+  return { free, folded, open, tipPalm };
 }
 
 /** Can a pinch start with this hand shape? (Not while the index is folded into a fist.) */
@@ -369,7 +403,9 @@ export class OneEuroFilter {
 
 /**
  * Pinch on/off with hysteresis so a held pinch never flickers: it starts below
- * `enter` and only ends above `exit` (normalised thumb-index distance).
+ * `enter` and ends above `exit` (normalised thumb-index distance), or when the
+ * hand closes into a fist (in a fist the thumb rests on the curled index, so the
+ * distance alone would keep the pinch alive forever).
  */
 export class PinchDetector {
   constructor({
@@ -385,38 +421,86 @@ export class PinchDetector {
     this.pinching = false;
     this.below = 0;
     this.above = 0;
+    this.folded = 0;
   }
 
   reset() {
     this.pinching = false;
     this.below = 0;
     this.above = 0;
+    this.folded = 0;
   }
 
   /**
    * @param {number} d normalised thumb-index distance
-   * @param {boolean} [allowed] false blocks a NEW pinch (e.g. the hand is a fist)
+   * @param {boolean} [allowed] false blocks a NEW pinch (the index is not clearly free)
+   * @param {boolean} [folded] the index is folded into a fist: ends a pinch after
+   *   `releaseFrames` such frames in a row
    * @returns {boolean} pinching
    */
-  update(d, allowed = true) {
+  update(d, allowed = true, folded = false) {
     if (!this.pinching) {
-      this.below = allowed && d < this.enter ? this.below + 1 : 0;
+      this.below = allowed && !folded && d < this.enter ? this.below + 1 : 0;
       if (this.below >= this.enterFrames) {
         this.pinching = true;
         this.below = 0;
         this.above = 0;
+        this.folded = 0;
       }
-    } else if (d > this.exit) {
-      // Release after a couple of frames above the exit line, or at once when clearly open.
-      this.above++;
-      if (this.above >= this.releaseFrames || d > this.exit * 1.6) {
-        this.pinching = false;
-        this.above = 0;
-      }
-    } else {
+      return this.pinching;
+    }
+    this.folded = folded ? this.folded + 1 : 0;
+    this.above = d > this.exit ? this.above + 1 : 0;
+    // Release after a couple of frames above the exit line (at once when clearly open),
+    // or a couple of frames of a closed fist.
+    if (this.above >= this.releaseFrames || d > this.exit * 1.6 || this.folded >= this.releaseFrames) {
+      this.pinching = false;
       this.above = 0;
+      this.folded = 0;
     }
     return this.pinching;
+  }
+}
+
+/**
+ * Where the pointer sits between the index fingertip (0) and the thumb/index midpoint (1).
+ * The midpoint barely moves while the fingers meet, so a pinch-click lands where you aimed.
+ * Continuous in the pinch distance and damped on the way back (fast in, slow out), so the
+ * cursor glides back to the fingertip after a pinch instead of hopping.
+ */
+export class PinchPointBlend {
+  constructor({ near = 0.3, far = 0.8, rise = 30, fall = 9 } = {}) {
+    this.near = near;
+    this.far = far;
+    this.rise = rise;
+    this.fall = fall;
+    this.w = 0;
+    this.init = false;
+  }
+
+  reset() {
+    this.w = 0;
+    this.init = false;
+  }
+
+  /**
+   * @param {number} d normalised thumb-index distance
+   * @param {number} indexOpen 0..1 (analyzeHand().indexOpen)
+   * @param {boolean} pinching stable pinch state
+   * @param {number} dt seconds since the last update (tracking rate)
+   * @returns {number} 0..1
+   */
+  update(d, indexOpen, pinching, dt) {
+    const t = clamp((d - this.near) / (this.far - this.near), 0, 1);
+    const target = pinching ? 1 : (1 - t * t * (3 - 2 * t)) * clamp(indexOpen, 0, 1);
+    if (!this.init || !(dt > 0)) {
+      this.w = target;
+      this.init = true;
+      return this.w;
+    }
+    const k = target > this.w ? this.rise : this.fall;
+    this.w += (target - this.w) * (1 - Math.exp(-k * Math.min(dt, 0.5)));
+    return this.w;
   }
 }
 
@@ -471,19 +555,37 @@ export class GestureStabilizer {
 }
 
 /**
- * Horizontal swipe of an open hand. Feed it one sample per tracking frame.
- * A swipe = the hand travelled at least `minDistance` (NDC) sideways within
- * `maxDuration` ms, mostly horizontally. 'swipeleft' = toward the left of the
- * (mirrored) screen.
+ * Horizontal swipe of an open hand: a deliberate flick, not just any sideways move.
+ * Feed it one sample per tracking frame (skip frames where the hand was not detected).
+ * A swipe:
+ *   - starts from rest or a turn (the hand was nearly still, or moving the other way),
+ *   - covers at least `minDistance` (NDC) sideways within `maxDuration` ms of that start,
+ *   - is fast: `fastSteps` samples in a row at `minSpeed` NDC/s or more,
+ *   - is mostly horizontal (|dy| < maxSlope * |dx| along the whole path).
+ * 'swipeleft' = toward the left of the (mirrored) screen. After a swipe nothing fires
+ * for `cooldown` ms (the hand coming back is not a swipe).
  *
+ * `size` scales distance and speeds with the apparent hand size (1 = comfortable
+ * distance), so the same physical flick works near and far from the camera.
  * Slow tracking (a few frames per second) cannot time a 200 ms flick: pass the
- * sampling interval and the allowed duration grows to ~1.3 intervals (the
- * distance threshold stays the same). At 30 fps nothing changes.
+ * sampling interval and the allowed duration grows to ~1.3 intervals (the distance
+ * stays the same, the speed threshold drops to match). At 30 fps nothing changes.
  */
 export class SwipeDetector {
-  constructor({ minDistance = 0.55, maxDuration = 350, maxSlope = 0.6, cooldown = 900 } = {}) {
+  constructor({
+    minDistance = 0.8,
+    maxDuration = 350,
+    minSpeed = 2.5,
+    fastSteps = 2,
+    restSpeed = 1.0,
+    maxSlope = 0.6,
+    cooldown = 900,
+  } = {}) {
     this.minDistance = minDistance;
     this.maxDuration = maxDuration;
+    this.minSpeed = minSpeed;
+    this.fastSteps = fastSteps;
+    this.restSpeed = restSpeed;
     this.maxSlope = maxSlope;
     this.cooldown = cooldown;
     this.history = [];
@@ -499,37 +601,63 @@ export class SwipeDetector {
    * @param {number} timeMs
    * @param {number} x NDC (+ = right of the screen)
    * @param {number} y NDC
-   * @param {boolean} [eligible] the hand is an open palm (not pinching / fist)
+   * @param {boolean} [eligible] the hand is a settled open palm (not pinching / fist)
    * @param {number} [intervalMs] typical time between tracking samples
+   * @param {number} [size] apparent hand size, 1 = comfortable distance
    * @returns {'swipeleft'|'swiperight'|null}
    */
-  update(timeMs, x, y, eligible = true, intervalMs = 0) {
+  update(timeMs, x, y, eligible = true, intervalMs = 0, size = 1) {
     const h = this.history;
     if (!eligible) {
       h.length = 0;
       return null;
     }
-    const interval = Math.min(600, Math.max(0, intervalMs));
-    const duration = Math.max(this.maxDuration, interval * 1.3);
-    const window = Math.max(duration, interval * 2.5);
     const last = h[h.length - 1];
-    if (last && (timeMs - last.t > window || timeMs <= last.t)) h.length = 0;
-    h.push({ t: timeMs, x, y });
-    while (h.length && timeMs - h[0].t > window) h.shift();
-    if (timeMs - this.lastSwipe < this.cooldown) return null;
+    if (last && timeMs <= last.t) return null;
+    const interval = clamp(intervalMs || 0, 0, 600);
+    const duration = Math.max(this.maxDuration, interval * 1.3);
+    // A long gap (the hand was lost) breaks the motion.
+    if (last && timeMs - last.t > Math.max(duration, interval * 2.5)) h.length = 0;
+    // `first`: the hand just became eligible, so this sample may start a flick.
+    h.push({ t: timeMs, x, y, first: h.length === 0 });
+    // Older samples cannot start a flick that is still running.
+    while (h.length > 1 && timeMs - h[0].t > duration) h.shift();
+    const n = h.length - 1;
+    if (n < 1 || timeMs - this.lastSwipe < this.cooldown) return null;
 
-    const minSpeed = this.minDistance / duration;
-    for (let i = 0; i < h.length - 1; i++) {
-      const dx = x - h[i].x;
-      const dy = y - h[i].y;
-      const dt = timeMs - h[i].t;
-      const adx = Math.abs(dx);
-      if (adx >= this.minDistance && adx / dt >= minSpeed && Math.abs(dy) < this.maxSlope * adx) {
-        this.lastSwipe = timeMs;
-        h.length = 0;
-        return dx < 0 ? 'swipeleft' : 'swiperight';
-      }
+    const s = clamp(size || 1, 0.5, 1.6);
+    const sign = Math.sign(h[n].x - h[n - 1].x);
+    if (!sign) return null;
+    const need = this.minDistance * s;
+    const rest = this.restSpeed * s;
+    const fast = this.minSpeed * s * Math.min(1, this.maxDuration / duration);
+    const fastNeed = interval > 90 ? 1 : this.fastSteps;
+    // Walk back to where this movement started: the last sample where the hand was
+    // nearly still or moving the other way.
+    let k = n;
+    let run = 0;
+    let bestRun = 0;
+    while (k > 0) {
+      const a = h[k - 1];
+      const b = h[k];
+      const dx = (b.x - a.x) * sign;
+      const v = dx / ((b.t - a.t) / 1000);
+      if (dx <= 0 || v < rest) break;
+      run = v >= fast ? run + 1 : 0;
+      bestRun = Math.max(bestRun, run);
+      k--;
     }
-    return null;
+    // Still moving at the oldest sample we kept: the movement began too long ago
+    // (unless the hand only just became eligible there).
+    if (k === 0 && !h[0].first) return null;
+    const o = h[k];
+    const dx = (h[n].x - o.x) * sign;
+    if (dx < need || bestRun < fastNeed || h[n].t - o.t > duration) return null;
+    for (let i = k + 1; i <= n; i++) {
+      if (Math.abs(h[i].y - o.y) >= this.maxSlope * dx) return null;
+    }
+    this.lastSwipe = timeMs;
+    h.length = 0;
+    return sign < 0 ? 'swipeleft' : 'swiperight';
   }
 }

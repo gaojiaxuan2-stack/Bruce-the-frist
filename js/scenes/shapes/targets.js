@@ -286,7 +286,7 @@ export function dnaTarget(n, rand) {
   const turns = 2.2;
   const k = (TAU * turns) / H;
   const off = Math.PI * 0.78;
-  const tube = 0.13;
+  const tube = 0.17;
   const strandA = palette(['#1fe4ff', '#2f6bff', '#1fe4ff']);
   const strandB = palette(['#ff3d9a', '#a24dff', '#ff3d9a']);
   const pairs = [
@@ -308,9 +308,12 @@ export function dnaTarget(n, rand) {
     const second = i & 1;
     const ang = y * k + (second ? off : 0);
     randDir(rand, d);
-    const rr = tube * (rand() < 0.7 ? 1 + gauss(rand) * 0.05 : Math.sqrt(rand()));
+    // mostly on the tube's skin: where the two strands cross on screen they must not
+    // pile up into a white blob
+    const skin = rand() < 0.82;
+    const rr = tube * (skin ? 1 + gauss(rand) * 0.04 : Math.sqrt(rand()));
     (second ? strandB : strandA)(s, c);
-    w.push(Math.cos(ang) * R + d.x * rr, y + d.y * rr, Math.sin(ang) * R + d.z * rr, c, 0.75 + 0.35 * rand(), s);
+    w.push(Math.cos(ang) * R + d.x * rr, y + d.y * rr, Math.sin(ang) * R + d.z * rr, c, skin ? 0.48 + 0.22 * rand() : 0.3, s);
   }
   for (let i = 0; i < nRung; i++) {
     const m = Math.floor(rand() * rungs);
@@ -327,7 +330,7 @@ export function dnaTarget(n, rand) {
     const pair = pairs[m % pairs.length];
     c.copy(t < 0.5 ? pair[0] : pair[1]);
     const j = 0.035;
-    w.push(x0 + (x1 - x0) * t + gauss(rand) * j, y + gauss(rand) * j, z0 + (z1 - z0) * t + gauss(rand) * j, c, 0.55 + 0.3 * rand(), s);
+    w.push(x0 + (x1 - x0) * t + gauss(rand) * j, y + gauss(rand) * j, z0 + (z1 - z0) * t + gauss(rand) * j, c, 0.45 + 0.25 * rand(), s);
   }
   while (!w.full) {
     const ang = rand() * TAU;
@@ -402,26 +405,76 @@ export function planetTarget(n, rand) {
 // ------------------------------------------------------------------ 6 text
 
 const FONT_STACK = '"Arial Black", "Segoe UI Black", "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif';
+const CJK = /[⺀-鿿가-힯豈-﫿＀-￯]/;
+const BASE_PX = 160;
+/** Max height (units) of the whole text block for 1, 2 and 3 lines; the width cap is TEXT_W. */
+const TEXT_H = [2.4, 3.3, 3.9];
+const TEXT_W = 6.6;
+/** Letter dots per unit² of letter face: dense enough to read, sparse enough not to burn out. */
+const TEXT_DENSITY = 17000;
+
+/** Cut `tokens` into `lines` groups so the widest line is as narrow as possible. */
+function bestSplit(tokens, lines, joiner, width) {
+  let best = null;
+  let bestW = Infinity;
+  const rec = (start, left, acc) => {
+    if (left === 1) {
+      const all = [...acc, tokens.slice(start).join(joiner).trim()];
+      const m = Math.max(...all.map(width));
+      if (m < bestW) {
+        bestW = m;
+        best = all;
+      }
+      return;
+    }
+    for (let i = start + 1; i <= tokens.length - (left - 1); i++) {
+      rec(i, left - 1, [...acc, tokens.slice(start, i).join(joiner).trim()]);
+    }
+  };
+  if (tokens.length >= lines) rec(0, lines, []);
+  return best ? { lines: best, width: bestW } : null;
+}
+
+/** Break points: after a word (with its spaces) or after any single CJK character. */
+const TOKENS = /(?:[\u2E80-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF00-\uFFEF]|[^\s\u2E80-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF00-\uFFEF]+)\s*/g;
+
+/** Long text wraps onto 2–3 lines so the letters stay big enough to read. */
+function layoutLines(ctx, str) {
+  const width = (t) => ctx.measureText(t).width;
+  const aspect = width(str) / BASE_PX;
+  const n = aspect <= 5.2 ? 1 : aspect <= 10.5 ? 2 : 3;
+  if (n === 1) return [str];
+  // prefer whole words; split inside a word only when that is much better balanced
+  const byWords = bestSplit(str.match(TOKENS) || [str], n, '', width);
+  const byChars = bestSplit(Array.from(str), n, '', width);
+  if (byWords && (!byChars || byWords.width <= byChars.width * 1.5)) return byWords.lines;
+  return byChars ? byChars.lines : [str];
+}
 
 function rasterise(str) {
-  let fontPx = 160;
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  ctx.font = `900 ${fontPx}px ${FONT_STACK}`;
-  let width = ctx.measureText(str).width;
-  if (width > 2400) {
-    fontPx = Math.max(24, Math.floor((fontPx * 2400) / width));
-    ctx.font = `900 ${fontPx}px ${FONT_STACK}`;
-    width = ctx.measureText(str).width;
+  // Synthetic "black" weight smears Chinese / Japanese / Korean strokes together.
+  const weight = CJK.test(str) ? 600 : 900;
+  let fontPx = BASE_PX;
+  const font = () => `${weight} ${fontPx}px ${FONT_STACK}`;
+  ctx.font = font();
+  const lines = layoutLines(ctx, str);
+  let width = Math.max(...lines.map((l) => ctx.measureText(l).width));
+  if (width > 1600) {
+    fontPx = Math.max(32, Math.floor((fontPx * 1600) / width));
+    ctx.font = font();
+    width = Math.max(...lines.map((l) => ctx.measureText(l).width));
   }
+  const lineH = Math.ceil(fontPx * 1.2);
   const pad = Math.ceil(fontPx * 0.3);
   canvas.width = Math.ceil(width) + pad * 2;
-  canvas.height = Math.ceil(fontPx * 1.6);
-  ctx.font = `900 ${fontPx}px ${FONT_STACK}`;
+  canvas.height = lineH * lines.length + pad * 2;
+  ctx.font = font(); // resizing the canvas resets the context
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#fff';
-  ctx.fillText(str, canvas.width / 2, canvas.height / 2);
+  lines.forEach((line, i) => ctx.fillText(line, canvas.width / 2, pad + lineH * (i + 0.5)));
   const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const W = canvas.width;
   const Hh = canvas.height;
@@ -444,10 +497,14 @@ function rasterise(str) {
       if (y > maxY) maxY = y;
     }
   }
-  return { W, filled, edges, minX, maxX, minY, maxY };
+  return { W, filled, edges, minX, maxX, minY, maxY, lines: lines.length };
 }
 
-/** Text rasterised on a 2D canvas, then extruded into a 3D slab of points. */
+/**
+ * Text rasterised on a 2D canvas, then extruded into a thin 3D slab of points.
+ * Only as many dots as the letters can hold go into them (so a short word does not
+ * burn out to a flat blob); the rest become a faint glowing dust that hugs the letters.
+ */
 export function textTarget(n, text, rand) {
   let str = String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, 24);
   let img = str ? rasterise(str) : null;
@@ -455,19 +512,26 @@ export function textTarget(n, text, rand) {
     str = 'HELLO';
     img = rasterise(str);
   }
-  const { W, filled, edges, minX, maxX, minY, maxY } = img;
+  const { W, filled, edges, minX, maxX, minY, maxY, lines } = img;
   const w = new Writer(n);
-  const pal = palette(['#00f5d4', '#00bbf9', '#9b5de5', '#f15bb5', '#fee440']);
+  const pal = palette(['#00a896', '#00a0e0', '#8a5ae6', '#ea58b0', '#f2d640']);
   const c = new THREE.Color();
   const pw = maxX - minX + 1;
   const ph = maxY - minY + 1;
-  const s = Math.min(6.6 / pw, 2.4 / ph);
+  const s = Math.min(TEXT_W / pw, TEXT_H[lines - 1] / ph);
   const cx = (minX + maxX + 1) / 2;
   const cy = (minY + maxY + 1) / 2;
-  const depth = 0.6;
-  for (let i = 0; i < n; i++) {
-    const edge = edges.length > 0 && rand() < 0.24;
-    const idx = edge ? edges[Math.floor(rand() * edges.length)] : filled[Math.floor(rand() * filled.length)];
+  const depth = 0.25;
+  // TEXT_DENSITY is for the full ("high") particle count; lower qualities use bigger dots
+  const want = filled.length * s * s * TEXT_DENSITY * (n / 120000);
+  const nLetter = Math.round(Math.min(n, Math.max(want, n * 0.25)));
+  // a tiny text (one short letter) still gets a quarter of the dots: dim them instead
+  const dim = Math.min(1, want / nLetter);
+  const pick = (edge) => (edge ? edges[Math.floor(rand() * edges.length)] : filled[Math.floor(rand() * filled.length)]);
+
+  for (let i = 0; i < nLetter; i++) {
+    const edge = edges.length > 0 && rand() < 0.32;
+    const idx = pick(edge);
     const px = (idx % W) + rand();
     const py = Math.floor(idx / W) + rand();
     const X = (px - cx) * s;
@@ -475,25 +539,39 @@ export function textTarget(n, text, rand) {
     let Z;
     let b;
     if (edge) {
-      Z = (rand() - 0.5) * depth;
-      b = 0.85;
+      Z = (rand() - 0.5) * depth; // the side walls give the crisp outline
+      b = 0.8;
     } else {
       const r = rand();
-      if (r < 0.48) {
-        Z = depth / 2;
+      if (r < 0.66) {
+        Z = depth / 2; // front face
         b = 1;
-      } else if (r < 0.78) {
-        Z = -depth / 2;
-        b = 0.6;
+      } else if (r < 0.88) {
+        Z = -depth / 2; // back face
+        b = 0.25;
       } else {
         Z = (rand() - 0.5) * depth;
-        b = 0.35;
+        b = 0.15;
       }
-      Z += gauss(rand) * 0.01;
+      Z += gauss(rand) * 0.008;
     }
     const t = (px - minX) / pw;
-    pal(t + 0.06 * Math.sin(Y * 3), c);
-    w.push(X, Y, Z, c, b * (0.85 + 0.3 * rand()), t);
+    pal(t + 0.05 * Math.sin(Y * 3), c);
+    w.push(X, Y, Z, c, b * dim * (0.8 + 0.3 * rand()), t);
+  }
+  // faint dust around the strokes: a soft particle glow, a little deeper than the letters
+  while (!w.full) {
+    const idx = pick(false);
+    const px = (idx % W) + rand();
+    const py = Math.floor(idx / W) + rand();
+    const spread = 0.12 + 0.3 * rand() * rand();
+    const X = (px - cx) * s + gauss(rand) * spread;
+    const Y = -(py - cy) * s + gauss(rand) * spread;
+    const Z = -0.05 + gauss(rand) * 0.35;
+    const t = (px - minX) / pw;
+    pal(t, c);
+    const r = rand();
+    w.push(X, Y, Z, c, 0.015 + 0.11 * r * r * r, t);
   }
   const out = w.finish(rand);
   out.text = str;

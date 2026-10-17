@@ -16,6 +16,9 @@ const STYLES = Object.keys(STYLE_IDS);
 const PHOTO_URL = new URL('../../assets/face/color.jpg', import.meta.url).href;
 const PHOTO_DATA_URL = new URL('../../assets/face/data.png', import.meta.url).href;
 
+/** Settings live at module level so they survive a quality change (which rebuilds the scene). */
+const PARAMS = { style: 'Matrix', removeBg: true, depth: 1, size: 1, brightness: 1 };
+
 const BASE_COUNT = 110000;
 const BASE_DEPTH = 2.2; // world units of relief at "3D depth" = 1
 const INTRO_SECONDS = 1.8;
@@ -81,7 +84,7 @@ export default class MirrorScene extends BaseScene {
 
   constructor(app) {
     super(app);
-    this.params = { style: 'Matrix', removeBg: true, depth: 1, size: 1, brightness: 1 };
+    this.params = PARAMS;
     this.actions = {
       load: () => this.ui.pickFile(),
       camera: () => this.useCamera(),
@@ -219,7 +222,6 @@ export default class MirrorScene extends BaseScene {
     this.isActive = false;
     this.ui.setCtaVisible(false, true);
     this.file?.video?.pause();
-    this.segmenter.reset();
   }
 
   resize(width, height) {
@@ -347,7 +349,10 @@ export default class MirrorScene extends BaseScene {
     u.uMapLinear.value = src.linear ? 1 : 0;
     u.uFlipX.value = src.flipX ? 1 : 0;
     this.layoutDirty = true;
-    if (changed) this.intro = Math.min(this.intro, 0.15);
+    if (changed) {
+      this.intro = Math.min(this.intro, 0.15);
+      this.maskOn = 0; // a mask belongs to its own source
+    }
   }
 
   // ---------------------------------------------------------------- layout
@@ -375,7 +380,12 @@ export default class MirrorScene extends BaseScene {
     const ch = Math.min(H, vh);
     const aspect = cw / ch;
     const n = this.count(BASE_COUNT);
-    if (!this.grid || this.grid.n !== n || Math.abs(aspect - this.grid.aspect) / aspect > 0.01) this.buildGrid(n, aspect);
+    if (!this.grid || this.grid.n !== n || Math.abs(aspect - this.grid.aspect) / aspect > 0.01) {
+      // rebuilding 110k particles is cheap but not free: at most ~4x a second while a window is resized
+      const now = performance.now();
+      if (!this.grid || now - this.grid.builtAt > 250) this.buildGrid(n, aspect);
+      else this.layoutDirty = true;
+    }
 
     const u = this.uniforms;
     const { cols, rows } = this.grid;
@@ -412,7 +422,7 @@ export default class MirrorScene extends BaseScene {
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 50);
     this.points.geometry.dispose();
     this.points.geometry = geo;
-    this.grid = { n, aspect, cols, rows };
+    this.grid = { n, aspect, cols, rows, builtAt: performance.now() };
   }
 
   /** NDC -> point on the (tilted) sheet plane, in the sheet's own coordinates. */
@@ -436,6 +446,8 @@ export default class MirrorScene extends BaseScene {
     }
     const u = this.uniforms;
     const vs = this.viewH / 9.326; // world units scale with the view
+    // hand-sized effects (void, ball) follow the short side so they fit on a phone held upright
+    const hs = Math.max(0.6, Math.min(1, this.camera.aspect)) * vs;
 
     // ---- input
     const ui = input.uiCaptured;
@@ -464,7 +476,7 @@ export default class MirrorScene extends BaseScene {
     u.uFacing.value = Math.max(0.35, Math.cos(this.points.rotation.x) * Math.cos(this.points.rotation.y));
 
     // ---- point: a big soft void that follows the fingertip, with a springy trail
-    const R = 1.35 * vs;
+    const R = 1.35 * hs;
     if (pointing) {
       const p = this.toSheet(input.pointer, _v2a);
       if (!this.voidSeen) {
@@ -523,7 +535,7 @@ export default class MirrorScene extends BaseScene {
     }
     this.wasFist = fist;
     u.uCollapse.value = this.collapse;
-    u.uFist.value.set(this.fistPos.x, this.fistPos.y, this.fistPos.z, 1.25 * vs * (1 + 0.05 * Math.sin(time * 5)));
+    u.uFist.value.set(this.fistPos.x, this.fistPos.y, this.fistPos.z, 1.25 * hs * (1 + 0.05 * Math.sin(time * 5)));
 
     if (this.blastT >= 0) {
       this.blastT += dt;
@@ -588,7 +600,7 @@ export default class MirrorScene extends BaseScene {
     u.uSize.value = 1.25 * this.params.size;
     // keep the overall brightness the same whatever the particle size / density
     const coverage = 0.37 * u.uSize.value * u.uSize.value;
-    u.uGain.value = (this.params.brightness * 0.62) / Math.max(coverage, 0.3);
+    u.uGain.value = (this.params.brightness * 0.66) / Math.max(coverage, 0.3);
 
     // ---- camera call-to-action while only the photo is showing
     this.ui.setCtaVisible(this.isActive && src.kind === 'photo' && !this.app.input.video);

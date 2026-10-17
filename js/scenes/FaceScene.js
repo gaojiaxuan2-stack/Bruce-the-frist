@@ -20,7 +20,7 @@ import { createMotes } from './face/motes.js';
 
 const MODES = ['Photo', 'Mono', 'Neon'];
 const MODE_TOAST = { Photo: '📷 Photo colours', Mono: '⚪ Mono dots', Neon: '💜 Neon glow' };
-const MODE_EXPOSURE = { Photo: 0.6, Mono: 0.9, Neon: 0.72 };
+const MODE_EXPOSURE = { Photo: 0.66, Mono: 0.9, Neon: 0.62 };
 // Dust motes around the head: two colours per mode.
 const MOTE_COLORS = {
   Photo: [new THREE.Color('#ffd7ae'), new THREE.Color('#9fd8ff')],
@@ -28,7 +28,10 @@ const MOTE_COLORS = {
   Neon: [new THREE.Color('#7cf6c8'), new THREE.Color('#8a4dff')],
 };
 // Glow per mode, relative to the scene / user glow strength (Mono wants crisp dots on black).
-const MODE_BLOOM = { Photo: 1, Mono: 0.3, Neon: 1.3 };
+const MODE_BLOOM = { Photo: 1, Mono: 0.3, Neon: 1.15 };
+// Glow threshold per mode. Photo / Mono keep it high so only real highlights
+// glow (no haze over the background); the darker Neon dots glow from lower down.
+const MODE_THRESHOLD = { Photo: 0.28, Mono: 0.28, Neon: 0.1 };
 
 const FOV = 40;
 const DEPTH_WORLD = 2.4; // world depth of the nearest point at "Depth" = 1
@@ -63,7 +66,7 @@ export default class FaceScene extends BaseScene {
       { icon: '✌️', gesture: 'Peace', text: 'change the colours' },
       { icon: '↕️', gesture: 'Hand closer / farther', text: 'zoom in / out' },
     ],
-    bloom: { strength: 0.5, radius: 0.35, threshold: 0.18 },
+    bloom: { strength: 0.5, radius: 0.35, threshold: MODE_THRESHOLD.Photo },
   };
 
   constructor(app) {
@@ -103,6 +106,7 @@ export default class FaceScene extends BaseScene {
     this.ballTime = 0;
     this.ballWorld = new THREE.Vector3(0, 0, FIST_PLANE_Z);
     this.fistWasDown = false;
+    this.fistSource = 'none';
     this.fistUpAt = -Infinity;
     this.burst = null;
     this.introPlayed = false;
@@ -115,6 +119,7 @@ export default class FaceScene extends BaseScene {
     this._inv = new THREE.Matrix4();
     this._v = new THREE.Vector3();
     this._uv = { u: 0, v: 0 };
+    this.pickHit = false;
     this.baseDistance = 16;
     this.cameraY = 0;
   }
@@ -199,7 +204,10 @@ export default class FaceScene extends BaseScene {
   exit() {
     this.trail.clear();
     // Leave the shared glow as the App configured it.
-    if (this.bloomBase != null && this.app.bloomPass) this.app.bloomPass.strength = this.bloomBase;
+    if (this.bloomBase != null && this.app.bloomPass) {
+      this.app.bloomPass.strength = this.bloomBase;
+      this.app.bloomPass.threshold = this.meta.bloom.threshold;
+    }
     this.bloomBase = null;
   }
 
@@ -267,12 +275,16 @@ export default class FaceScene extends BaseScene {
     const mu = this.motes.uniforms;
     const a = mu.uColorA.value.setRGB(0, 0, 0);
     const b = mu.uColorB.value.setRGB(0, 0, 0);
-    MODES.forEach((name, i) => {
+    for (let i = 0; i < MODES.length; i++) {
       const wi = w.getComponent(i);
-      const [ca, cb] = MOTE_COLORS[name];
-      a.setRGB(a.r + ca.r * wi, a.g + ca.g * wi, a.b + ca.b * wi);
-      b.setRGB(b.r + cb.r * wi, b.g + cb.g * wi, b.b + cb.b * wi);
-    });
+      const pair = MOTE_COLORS[MODES[i]];
+      a.r += pair[0].r * wi;
+      a.g += pair[0].g * wi;
+      a.b += pair[0].b * wi;
+      b.r += pair[1].r * wi;
+      b.g += pair[1].g * wi;
+      b.b += pair[1].b * wi;
+    }
     mu.uOpacity.value = 0.5 - 0.2 * w.y;
 
     // Scale the shared bloom by mode. If the user moved the global glow slider
@@ -286,6 +298,7 @@ export default class FaceScene extends BaseScene {
     else if (changed) this.bloomBase = bloom.strength / this.bloomFactor;
     this.bloomFactor = factor;
     this.bloomSet = bloom.strength = this.bloomBase * factor;
+    bloom.threshold = w.x * MODE_THRESHOLD.Photo + w.y * MODE_THRESHOLD.Mono + w.z * MODE_THRESHOLD.Neon;
   }
 
   updateRotation(dt, input, pinching) {
@@ -370,6 +383,7 @@ export default class FaceScene extends BaseScene {
     }
 
     if (fistDown) {
+      this.fistSource = input.source;
       // At the hand cursor (the index fingertip / mouse), where the user is looking.
       const target = this.ndcToWorld(input.pointer, FIST_PLANE_Z, this._v);
       if (!this.fistWasDown && this.gather < 0.02) this.ballWorld.copy(target);
@@ -377,9 +391,13 @@ export default class FaceScene extends BaseScene {
       this.gather = Math.min(1, this.gather + dt / 1.4);
       this.ballTime += dt;
     } else {
+      // Hands explode with an open palm shortly after the fist. A mouse / touch
+      // fist explodes when it is let go (a touch release leaves no pointer to
+      // read "open" from, so the release itself is the trigger).
+      const released = this.fistWasDown && this.fistSource === 'mouse';
       if (this.fistWasDown) this.fistUpAt = this.time;
       const since = this.time - this.fistUpAt;
-      if (this.gather > 0.25 && since < 1.0 && input.active && input.open) {
+      if (this.gather > 0.25 && ((since < 1.0 && input.active && input.open) || released)) {
         this.explode(true);
         this.fistWasDown = false;
         return;
@@ -398,14 +416,20 @@ export default class FaceScene extends BaseScene {
     const pointing = input.active && !input.pinching && !input.fist && !input.uiCaptured && !this.burst && this.gather < 0.05;
     this.trail.radius = this.params.pushRadius;
     const uv = pointing ? this.pickUV(input.pointer) : null;
-    if (uv) this.trail.move(uv.u, uv.v, dt);
-    else this.trail.lift();
+    // Off the head (plane fallback) the trail still follows the finger while it
+    // is close enough to brush the outline, but there is no resting dent there;
+    // far from the person nothing is drawn or uploaded at all.
+    if (uv && (this.pickHit || this.nearPerson(uv.u, uv.v, this.trail.radius))) {
+      this.trail.move(uv.u, uv.v, dt, this.pickHit);
+    } else this.trail.lift();
     this.trail.update(dt);
   }
 
   /**
    * Ray-cast a screen point (NDC) onto the 3D relief of the portrait, taking the
    * current head rotation into account. Returns photo uv (v up) or null.
+   * `this.pickHit` tells whether the ray really hit the head (false: the uv
+   * comes from the plane fallback, where there are no particles).
    */
   pickUV(ndc) {
     const p = this.portrait;
@@ -414,62 +438,86 @@ export default class FaceScene extends BaseScene {
     const pu = p.pivotUV.u;
     const pv = p.pivotUV.v;
     const D = Math.max(1e-3, this.uniforms.uDepthWorld.value);
+    this.pickHit = false;
     this.raycaster.setFromCamera(ndc, this.camera);
     const ray = this._ray.copy(this.raycaster.ray).applyMatrix4(this._inv.copy(this.root.matrixWorld).invert());
     const o = ray.origin;
     const d = ray.direction;
-    const min = [-pu * Ww, -pv * Hw, -PIVOT_DEPTH * D];
-    const max = [(1 - pu) * Ww, (1 - pv) * Hw, (1 - PIVOT_DEPTH) * D];
+
+    // Clip the ray against the relief's bounding box (slab test, no allocations).
     let t0 = 0;
     let t1 = Infinity;
-    const oa = [o.x, o.y, o.z];
-    const da = [d.x, d.y, d.z];
     for (let a = 0; a < 3; a++) {
-      if (Math.abs(da[a]) < 1e-9) {
-        if (oa[a] < min[a] || oa[a] > max[a]) return this.planeUV(ray);
+      const oa = a === 0 ? o.x : a === 1 ? o.y : o.z;
+      const da = a === 0 ? d.x : a === 1 ? d.y : d.z;
+      const lo = a === 0 ? -pu * Ww : a === 1 ? -pv * Hw : -PIVOT_DEPTH * D;
+      const hi = a === 0 ? (1 - pu) * Ww : a === 1 ? (1 - pv) * Hw : (1 - PIVOT_DEPTH) * D;
+      if (Math.abs(da) < 1e-9) {
+        if (oa < lo || oa > hi) return this.planeUV(ray);
         continue;
       }
-      let ta = (min[a] - oa[a]) / da[a];
-      let tb = (max[a] - oa[a]) / da[a];
-      if (ta > tb) [ta, tb] = [tb, ta];
+      let ta = (lo - oa) / da;
+      let tb = (hi - oa) / da;
+      if (ta > tb) {
+        const tmp = ta;
+        ta = tb;
+        tb = tmp;
+      }
       t0 = Math.max(t0, ta);
       t1 = Math.min(t1, tb);
     }
     if (t0 > t1) return this.planeUV(ray);
 
-    const W = p.width;
-    const H = p.height;
-    const below = (t) => {
-      const x = o.x + d.x * t;
-      const y = o.y + d.y * t;
-      const z = o.z + d.z * t;
-      const u = x / Ww + pu;
-      const v = y / Hw + pv;
-      if (u < 0 || u >= 1 || v <= 0 || v > 1) return false;
-      const i = Math.floor((1 - v) * H) * W + Math.floor(u * W);
-      if (!p.mask[i]) return false;
-      return z <= (p.depth[i] - PIVOT_DEPTH) * D;
-    };
+    // March through the box until the ray goes below the surface, then refine.
     const steps = 80;
     const dt = (t1 - t0) / steps;
     let prev = t0;
     for (let s = 1; s <= steps; s++) {
       const t = t0 + dt * s;
-      if (below(t)) {
+      if (this.belowSurface(ray, t, D)) {
         let lo = prev;
         let hi = t;
         for (let k = 0; k < 6; k++) {
           const mid = (lo + hi) / 2;
-          if (below(mid)) hi = mid;
+          if (this.belowSurface(ray, mid, D)) hi = mid;
           else lo = mid;
         }
         this._uv.u = (o.x + d.x * hi) / Ww + pu;
         this._uv.v = (o.y + d.y * hi) / Hw + pv;
+        this.pickHit = true;
         return this._uv;
       }
       prev = t;
     }
     return this.planeUV(ray);
+  }
+
+  /** Is the point at distance t along the (head-local) ray inside the person's relief? */
+  belowSurface(ray, t, D) {
+    const p = this.portrait;
+    const o = ray.origin;
+    const d = ray.direction;
+    const u = (o.x + d.x * t) / p.worldSize.w + p.pivotUV.u;
+    const v = (o.y + d.y * t) / p.worldSize.h + p.pivotUV.v;
+    if (u < 0 || u >= 1 || v <= 0 || v > 1) return false;
+    const i = Math.floor((1 - v) * p.height) * p.width + Math.floor(u * p.width);
+    if (!p.mask[i]) return false;
+    return o.z + d.z * t <= (p.depth[i] - PIVOT_DEPTH) * D;
+  }
+
+  /** Is photo uv (v up) within `radius` (fraction of the photo height) of the person? */
+  nearPerson(u, v, radius) {
+    const p = this.portrait;
+    const { dist, cols, rows, cell } = p.near;
+    const x = u * p.width;
+    const y = (1 - v) * p.height;
+    const cx = clamp(Math.floor(x / cell), 0, cols - 1);
+    const cy = clamp(Math.floor(y / cell), 0, rows - 1);
+    // Outside the photo: add the distance to its border.
+    const ox = Math.max(0, -x, x - p.width);
+    const oy = Math.max(0, -y, y - p.height);
+    const d = dist[cy * cols + cx] * cell + Math.hypot(ox, oy);
+    return d - cell * 1.5 <= radius * p.height;
   }
 
   /** Fallback when the ray misses the head: a plane through the face. */

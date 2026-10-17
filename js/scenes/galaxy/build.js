@@ -122,8 +122,8 @@ export function buildBackgroundGeometry(count, seed = 99) {
     pos[i * 3 + 1] = u * r;
     pos[i * 3 + 2] = s * Math.sin(phi) * r;
     const m = Math.pow(rand(), 5);
-    star[i * 4] = 1.0 + m * 1.6; // size in px (before pixel ratio)
-    star[i * 4 + 1] = 0.1 + Math.pow(rand(), 3) * 0.5 + m * 0.7; // brightness
+    star[i * 4] = 1.0 + m * 2.0; // size in px (before pixel ratio): bright stars are bigger,
+    star[i * 4 + 1] = Math.min(0.5, 0.1 + Math.pow(rand(), 3) * 0.4 + m * 0.3); // not hotter
     star[i * 4 + 2] = rand(); // twinkle phase / speed
     star[i * 4 + 3] = rand(); // colour temperature
   }

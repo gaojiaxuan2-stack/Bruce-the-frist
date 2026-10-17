@@ -63,14 +63,18 @@ class TrackedHand {
     this.created = now;
     this.lastSeen = now;
     this.updates = 0;
+    /** consecutive tracking frames this hand was seen in (0 after a miss) */
+    this.streak = 0;
     this.handedness = 'Right';
     /** hand space (isotropic, mirrored, y up) - raw, for gesture maths */
     this.space = [];
     /** filtered, mirrored, normalised image coords (x right, y down) - for drawing + pointer */
     this.img = Array.from({ length: 21 }, () => ({ x: 0, y: 0, z: 0 }));
+    // One Euro per coordinate: ~1 px of residual jitter at rest, ~1 frame of lag when moving
+    // (units: normalised image coords, so beta is per image-width/second of speed).
     this.filters = Array.from({ length: 21 }, () => [
-      new OneEuroFilter({ minCutoff: 1.4, beta: 9, dCutoff: 1 }),
-      new OneEuroFilter({ minCutoff: 1.4, beta: 9, dCutoff: 1 }),
+      new OneEuroFilter({ minCutoff: 1.0, beta: 9, dCutoff: 1 }),
+      new OneEuroFilter({ minCutoff: 1.0, beta: 9, dCutoff: 1 }),
     ]);
     this.pinchDetector = new PinchDetector({ enterFrames: 2, releaseFrames: 2 });
     this.stabilizer = new GestureStabilizer({ minFrames: 3, minMs: 80, initial: 'none' });
@@ -110,6 +114,7 @@ class TrackedHand {
     const t = now / 1000;
     this.lastSeen = now;
     this.updates++;
+    this.streak++;
     this.handedness = handedness;
 
     // Gesture maths on the raw landmarks (most responsive; debounced below).
@@ -188,6 +193,7 @@ export class HandInput {
     this._landmarkerPromise = null;
     this.delegate = null;
     this._swapping = false;
+    this._cpuOnly = false;
 
     this.hands = [];
     this.primary = null;
@@ -385,13 +391,18 @@ export class HandInput {
 
   /** GPU unless asked otherwise (?delegate=cpu) or WebGL is a software renderer. */
   _preferredDelegate() {
+    if (this._cpuOnly) return 'CPU';
     const forced = this.app.params?.get?.('delegate');
     if (forced && /^(cpu|gpu)$/i.test(forced)) return forced.toUpperCase();
     try {
       const gl = this.app.renderer?.getContext?.();
-      const ext = gl?.getExtension('WEBGL_debug_renderer_info');
-      const name = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : '';
-      if (/swiftshader|llvmpipe|softpipe|software|basic render/i.test(String(name))) return 'CPU';
+      // Firefox reports the real renderer here; Chromium / Safari mask it ("WebKit WebGL").
+      let name = String(gl?.getParameter(gl.RENDERER) || '');
+      if (!name || /webkit webgl/i.test(name)) {
+        const ext = gl?.getExtension('WEBGL_debug_renderer_info');
+        if (ext) name = String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) || '');
+      }
+      if (/swiftshader|llvmpipe|softpipe|software|basic render/i.test(name)) return 'CPU';
     } catch {
       /* ignore - just use the GPU */
     }
@@ -426,6 +437,7 @@ export class HandInput {
   async _fallbackToCpu() {
     if (this._swapping) return;
     this._swapping = true;
+    this._cpuOnly = true;
     const old = this.landmarker;
     this.landmarker = null;
     try {
@@ -577,6 +589,13 @@ export class HandInput {
   _maybeDetect(now) {
     const video = this._video;
     const lm = this.landmarker;
+    if (!lm && !this._swapping && !this._landmarkerPromise && now >= this._pausedUntil) {
+      // The model went away (failed CPU rebuild): try again every few seconds.
+      this._ensureLandmarker().catch((err) => {
+        console.warn('Hand tracking: could not reload the model', err);
+        this._pausedUntil = performance.now() + 3000;
+      });
+    }
     if (!lm || !video || this._swapping || document.hidden) return false;
     if (video.readyState < 2 || !video.videoWidth) return false;
     // Only new camera frames (some browsers advance currentTime coarsely for live
@@ -634,7 +653,7 @@ export class HandInput {
     // Forget hands that have been gone for a while (recently lost ones can be re-acquired
     // with their filters and gesture state intact).
     for (let i = this.hands.length - 1; i >= 0; i--) {
-      if (now - this.hands[i].lastSeen > Math.max(RETAIN_MS, lost)) this.hands.splice(i, 1);
+      if (now - this.hands[i].lastSeen > Math.max(RETAIN_MS, lost * 3)) this.hands.splice(i, 1);
     }
     const dets = marks.map((raw, i) => {
       // MediaPipe's labels assume a mirrored image; ours is raw, so swap them.
@@ -665,6 +684,7 @@ export class HandInput {
     }
     // ~3 frames / 80 ms to accept a new gesture; 2 frames when tracking runs slowly.
     const minFrames = this.debug.fps > 0 && this.debug.fps < 14 ? 2 : 3;
+    for (const h of this.hands) if (!used.has(h)) h.streak = 0;
     for (const d of dets) {
       if (!d.hand) {
         d.hand = new TrackedHand(this._nextId++, now);
@@ -693,7 +713,9 @@ export class HandInput {
       this.debug.rawGesture = p.rawShape;
       this.debug.pinchDistance = Math.round(p.analysis.pinchDist * 100) / 100;
       const twoHands = this._visibleHands(now).length >= 2;
-      const eligible = !twoHands && !p.pinching && (p.rawShape === 'open' || p.shape === 'open');
+      // Only a hand that has been tracked for a few frames and is a steady open palm can
+      // swipe (a hand entering the picture from the side is not a swipe).
+      const eligible = !twoHands && !p.pinching && p.shape === 'open' && p.streak >= minFrames;
       const interval = this.debug.fps > 0 ? 1000 / this.debug.fps : 0;
       const swipe = this.swipe.update(now, p.rawPalmNdc.x, p.rawPalmNdc.y, eligible, interval);
       const samples = this.debug.samples;

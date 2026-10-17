@@ -24,6 +24,9 @@ const REFORM_TIME = 2.0;
 const COLLAPSE_TIME = 1.3;
 const RELEASE_GRACE = 0.9;
 const IDLE_AFTER = 2.5;
+const ZOOM_RESET_AFTER = 9; // seconds without any input before a wheel / hand zoom eases back
+const POINT_HOLD = 0.35;    // a ☝️ well survives this long through a blurry 'none' pose
+const CORE_WHITE = new THREE.Color(1, 0.93, 0.85);
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const damp = (x, target, k, dt) => x + (target - x) * (1 - Math.exp(-k * dt));
@@ -209,9 +212,14 @@ export default class GalaxyScene extends BaseScene {
     this.yawVel = 0;
     this.pitchVel = 0;
     this.zoom = 1;
+    this.zoomTarget = 1;
     this.depthZoom = 1;
+    this.radiusFit = 1;
+    this.fistSource = 'none';
+    this.pointHold = 0;
     this.idleTime = 10;
     this.baseDist = 9;
+    this.camDist = 10;
     this.lookTarget = new THREE.Vector3();
     this.coreColor = new THREE.Color();
     this.coreTarget = new THREE.Color();
@@ -222,6 +230,7 @@ export default class GalaxyScene extends BaseScene {
     this.applyParams();
     this.u.uBright.value = brightnessFor(this.params.count);
     this.coreColor.copy(this.coreTarget);
+    this.radiusFit = clamp(this.params.radius / 5, 0.3, 2);
 
     // Mouse users have no ✌️ - a double click makes a new galaxy instead.
     this.onDblClick = (e) => {
@@ -262,7 +271,8 @@ export default class GalaxyScene extends BaseScene {
     u.uRadius.value = p.radius;
     u.uSize.value = p.size;
     u.uWellRadius.value = 0.18 * p.radius;
-    this.coreTarget.set(p.insideColor).lerp(new THREE.Color(1, 0.93, 0.85), 0.5);
+    // keep the core glow in the galaxy's own colour (a white glow washes the centre out)
+    this.coreTarget.set(p.insideColor).lerp(CORE_WHITE, 0.15);
   }
 
   settleMorph() {
@@ -333,7 +343,11 @@ export default class GalaxyScene extends BaseScene {
 
   updateCollapse(dt, time, input) {
     const fist = input.active && input.fist && !input.uiCaptured;
+    // Mouse / touch have no "open hand": letting go of the right button or the
+    // long-press is the open hand. (A touch release also makes input inactive.)
+    const released = this.fistSource === 'mouse' && input.events.has('fistend');
     if (fist) {
+      this.fistSource = input.source;
       this.releaseTimer = -1;
       if (this.bang >= 0) this.bang += dt / 0.35; // finish a running bang fast, then collapse
       else this.collapse = Math.min(1, this.collapse + dt / COLLAPSE_TIME);
@@ -345,7 +359,7 @@ export default class GalaxyScene extends BaseScene {
       } else {
         if (this.releaseTimer < 0) this.releaseTimer = 0;
         this.releaseTimer += dt;
-        if (input.active && input.open && !input.uiCaptured) this.startBang(1);
+        if ((input.active && input.open && !input.uiCaptured) || released) this.startBang(1);
         else if (this.releaseTimer > RELEASE_GRACE) this.startBang(0.22);
       }
     }
@@ -431,16 +445,18 @@ export default class GalaxyScene extends BaseScene {
     this.updateWell(dt, input);
 
     // ---- camera: idle drift, zoom (wheel / two hands) and hand distance
-    this.idleTime = active ? 0 : this.idleTime + dt;
+    const zooming = input.zoom !== 0 && !ui;
+    this.idleTime = active || zooming ? 0 : this.idleTime + dt;
     const idle = this.idleTime > IDLE_AFTER;
     if (!dragging) this.yaw += dt * (idle ? 0.04 : 0.015);
-    if (idle) {
-      this.pitch = damp(this.pitch, this.pitchIdle + 0.07 * Math.sin(time * 0.17), 0.45, dt);
-      this.zoom = damp(this.zoom, 1, 0.25, dt);
-    }
-    if (input.zoom && !ui) this.zoom = clamp(this.zoom * Math.exp(-input.zoom * 1.1), 0.4, 2.4);
+    if (idle) this.pitch = damp(this.pitch, this.pitchIdle + 0.07 * Math.sin(time * 0.17), 0.45, dt);
+    if (this.idleTime > ZOOM_RESET_AFTER) this.zoomTarget = damp(this.zoomTarget, 1, 0.3, dt);
+    if (zooming) this.zoomTarget = clamp(this.zoomTarget * Math.exp(-input.zoom * 1.1), 0.4, 2.4);
+    this.zoom = damp(this.zoom, this.zoomTarget, 8, dt);
     const depthTarget = input.source === 'hand' && active ? clamp(1 - (input.depth - 0.5) * 1.1, 0.5, 1.6) : 1;
     this.depthZoom = damp(this.depthZoom, depthTarget, 2.2, dt);
+    // keep the whole galaxy framed when the Radius slider changes
+    this.radiusFit = damp(this.radiusFit, clamp(p.radius / 5, 0.3, 2), 4, dt);
     this.placeCamera(dt, time);
 
     // ---- galaxy rotation (rigid + bounded differential, see shader)
@@ -456,9 +472,12 @@ export default class GalaxyScene extends BaseScene {
   updateWell(dt, input) {
     const p = this.params;
     let target = 0;
-    // ☝️ point = full well; a visible hand in no clear pose still gets a softer one
+    // ☝️ point (or the mouse pointer) = gravity well. Only a pose that was just
+    // 'point' may blur into 'none' for a moment without dropping the well.
     const g = input.gesture;
-    const power = g === 'point' ? 1 : g === 'none' && input.source === 'hand' ? 0.6 : 0;
+    if (g === 'point') this.pointHold = POINT_HOLD;
+    else this.pointHold = g === 'none' ? Math.max(0, this.pointHold - dt) : 0;
+    const power = g === 'point' || this.pointHold > 0 ? 1 : 0;
     const pointing = power > 0 && input.active && !input.uiCaptured && !input.pinching && !input.fist
       && this.collapse === 0;
     if (pointing) {
@@ -488,7 +507,8 @@ export default class GalaxyScene extends BaseScene {
   }
 
   placeCamera(dt, time) {
-    const dist = this.baseDist * this.zoom * this.depthZoom;
+    const dist = this.baseDist * this.zoom * this.depthZoom * this.radiusFit;
+    this.camDist = this.baseDist * this.zoom * this.depthZoom; // in "radius 5" units (core glow fade)
     const cp = Math.cos(this.pitch);
     const cam = this.camera;
     cam.position.set(Math.sin(this.yaw) * cp * dist, Math.sin(this.pitch) * dist, Math.cos(this.yaw) * cp * dist);
@@ -514,21 +534,25 @@ export default class GalaxyScene extends BaseScene {
     this.flash *= Math.exp(-2.2 * dt);
     const bangGlow = this.bang >= 0 ? (1 - smoothstep(0, 0.45, this.bang)) * this.u.uBangC.value : 0;
     cu.uColor.value.copy(this.coreColor);
-    cu.uIntensity.value = (0.32 + 0.7 * this.collapse + 0.45 * bangGlow + 0.8 * this.flash) * pulse;
-    cu.uScale.value = p.radius * (0.7 - 0.2 * this.collapse + 0.7 * this.flash);
+    // the glow is a soft halo seen from afar: it fades out as the camera flies into the core
+    const near = smoothstep(2.0, 8.0, this.camDist);
+    cu.uIntensity.value = (0.11 + 0.5 * this.collapse + 0.4 * bangGlow + 0.75 * this.flash) * pulse * near;
+    cu.uScale.value = p.radius * (0.75 - 0.25 * this.collapse + 0.7 * this.flash);
+    this.core.visible = cu.uIntensity.value > 0.002;
 
     // gravity-well marker
     const wu = this.wellMarker.material.uniforms;
     this.wellMarker.position.copy(this.wellPos);
     this.wellMarker.visible = this.wellStrength > 0.002;
-    wu.uIntensity.value = this.wellStrength * 0.8;
+    // marker + swirl are a hint seen from afar; close up they would cover the screen
+    wu.uIntensity.value = this.wellStrength * 0.8 * (0.15 + 0.85 * near);
     wu.uScale.value = this.u.uWellRadius.value * 2.2;
     wu.uColor.value.copy(this.coreColor);
     this.wellRing.position.copy(this.wellPos);
     this.wellRing.position.y -= this.u.uWellRadius.value * 0.25 * this.wellStrength;
     this.wellRing.visible = this.wellMarker.visible;
     this.wellRing.scale.setScalar(this.u.uWellRadius.value * 2.4);
-    this.wellRing.material.uniforms.uIntensity.value = this.wellStrength * 0.28;
+    this.wellRing.material.uniforms.uIntensity.value = this.wellStrength * 0.28 * near * near;
 
     // Big Bang shock wave on the galactic plane
     if (this.shockT >= 0) {
@@ -550,7 +574,7 @@ export default class GalaxyScene extends BaseScene {
     this.folder = folder;
     const p = this.params;
     const apply = () => this.applyParams();
-    folder.add(p, 'count', 1000, this.count(400000), 1000).name('Count (stars)').onChange(() => this.scheduleRegen());
+    folder.add(p, 'count', 1000, this.count(250000), 1000).name('Count (stars)').onChange(() => this.scheduleRegen());
     folder.add(p, 'size', 0.2, 3, 0.01).name('Size').onChange(apply);
     folder.add(p, 'radius', 1, 10, 0.1).name('Radius').onChange(apply);
     folder.add(p, 'branches', 1, 12, 1).name('Branches (arms)').onChange(apply);

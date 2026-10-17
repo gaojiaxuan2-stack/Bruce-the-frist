@@ -84,13 +84,15 @@ vec3 armColor(vec3 cin, vec3 cout, float rn) {
   // mix in (approximate) sRGB space so the gradient looks like the GUI colours
   vec3 a = pow(max(cin, vec3(0.0)), vec3(0.4545));
   vec3 b = pow(max(cout, vec3(0.0)), vec3(0.4545));
-  return pow(mix(a, b, clamp(rn * 1.1, 0.0, 1.0)), vec3(2.2));
+  // the inner part of the disk stays close to the inside colour, the arms turn
+  // towards the outside colour in the outer half (like REF/4)
+  return pow(mix(a, b, smoothstep(0.1, 0.95, rn)), vec3(2.2));
 }
 
 vec3 starColor(vec3 cin, vec3 cout, float rn) {
   float v = aRnd.y;
   vec3 c = armColor(cin, cout, rn + (fract(v * 7.31) - 0.5) * 0.12);
-  if (isKind(1.0)) c = mix(armColor(cin, cout, 0.0), vec3(1.0, 0.82, 0.62), 0.12 + 0.25 * v * v);
+  if (isKind(1.0)) c = mix(armColor(cin, cout, 0.0), vec3(1.0, 0.8, 0.6), 0.06 + 0.22 * v * v);
   else if (isKind(4.0)) c = mix(c, vec3(0.75, 0.86, 1.0), 0.15 + 0.25 * v);
   // a touch more saturation so additive blending does not wash the colours out
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
@@ -181,9 +183,12 @@ vec3 galaxyPosition(out vec3 col, out float alpha, out float heat, out float wel
     p.xz = uWell.xz + rel;
     p.y = p.y * (1.0 - 0.6 * uWellStrength * f) - uWellStrength * uWellRadius * 0.45 * f;
     float env = smoothstep(0.0, 0.18, wl) * smoothstep(1.0, 0.82, wl);
-    alpha *= mix(1.0, env, uWellStrength * fw) * (1.0 - 0.3 * uWellStrength * f);
+    // the well squeezes stars together; near the dense core that would turn white,
+    // so core stars get dimmer instead of hotter there
+    float outer = smoothstep(0.1, 0.35, rn);
+    alpha *= mix(1.0, env, uWellStrength * fw) * (1.0 - uWellStrength * f * mix(0.6, 0.3, outer));
     wellF = uWellStrength * fw;
-    heat += uWellStrength * f * 0.22;
+    heat += uWellStrength * f * 0.22 * outer;
   }
   return p;
 }
@@ -196,7 +201,7 @@ uniform float uSize;
 uniform float uBright;
 varying vec3 vColor;
 varying float vAlpha;
-varying float vHaze;
+varying float vProfile;
 
 void main() {
   vec3 col;
@@ -206,27 +211,45 @@ void main() {
   gl_Position = projectionMatrix * mv;
 
   float w = aSeed.w;
+  float rn = aSeed.x;
   float size;
   float bright;
   float maxPx = 16.0;
-  vHaze = 0.0;
+  vProfile = 0.0;
   if (isKind(2.0)) {
     size = 24.0 + 22.0 * w;
     bright = 0.045 * (1.0 - clamp(heat, 0.0, 1.0));
-    vHaze = 1.0;
+    vProfile = 1.0;
     maxPx = 48.0;
   } else {
-    if (isKind(1.0)) { size = 0.75 + 0.7 * w; bright = 0.22 + 0.3 * w; }
-    else if (isKind(4.0)) { size = 1.5 + 1.2 * w; bright = 0.9 + 0.7 * w; }
-    else { size = 0.7 + 1.5 * pow(w, 4.0); bright = 0.3 + 0.9 * w * w; }
+    if (isKind(1.0)) {
+      // bulge: the density climbs steeply towards the centre, so the stars get
+      // fainter there to keep the core a glowing colour instead of a white blob
+      float rb = length(position) * rn;
+      size = 0.75 + 0.7 * w;
+      bright = (0.13 + 0.17 * w) * mix(0.35, 1.0, smoothstep(0.0, 0.14, rb));
+    } else if (isKind(4.0)) {
+      // bright young stars: wider, softer sprite with a faint halo (a tiny very
+      // bright point would bloom into a hard square)
+      size = 3.0 + 2.0 * w;
+      bright = 0.3 + 0.24 * w;
+      vProfile = 2.0;
+    } else {
+      size = 0.7 + 1.6 * pow(w, 4.0);
+      bright = 0.3 + 0.72 * w * w;
+    }
     // the middle is much denser: dim it so additive blending keeps the colours
-    bright *= mix(0.3, 1.25, smoothstep(0.0, 0.75, aSeed.x));
+    if (!isKind(1.0)) bright *= mix(0.5, 1.12, smoothstep(0.0, 0.75, rn));
     size *= uSize;
   }
+  // Radius slider: the camera reframes the galaxy (GalaxyScene.radiusFit), so the
+  // stars of a small galaxy look bigger on screen - keep its light about the same
+  bright *= min(pow(clamp(uRadius / 5.0, 0.3, 2.0), 1.6), 1.7);
   float h = clamp(heat, 0.0, 1.0);
+  float wb = wellF * smoothstep(0.1, 0.35, rn); // no well boost inside the dense core
   col = mix(col, vec3(1.0, 0.88, 0.74) * 1.15, h);
-  size *= 1.0 + 0.3 * h + 0.3 * wellF;
-  bright *= 1.0 + 0.3 * h + 0.3 * wellF;
+  size *= 1.0 + 0.3 * h + 0.3 * wb;
+  bright *= 1.0 + 0.3 * h + 0.3 * wb;
 
   float ps = pointSize(size, mv);
   float minPx = 1.6 * uPixelRatio;
@@ -248,11 +271,18 @@ void main() {
 export const starFragment = /* glsl */ `
 varying vec3 vColor;
 varying float vAlpha;
-varying float vHaze;
+varying float vProfile;
 void main() {
   float d = length(gl_PointCoord - 0.5) * 2.0;
   if (d > 1.0) discard;
-  float a = vHaze > 0.5 ? pow(1.0 - d, 2.2) : max(exp(-d * d * 5.0) - 0.0067, 0.0);
+  float a;
+  if (vProfile > 1.5) {          // bright star: small core + faint wide halo
+    a = exp(-d * d * 11.0) * 0.85 + (exp(-d * d * 2.5) - 0.082) * 0.2;
+  } else if (vProfile > 0.5) {   // haze
+    a = pow(1.0 - d, 2.2);
+  } else {
+    a = max(exp(-d * d * 5.0) - 0.0067, 0.0);
+  }
   gl_FragColor = vec4(vColor, a * vAlpha);
 }
 `;
@@ -309,7 +339,7 @@ void main() {
   vec3 cool = vec3(0.62, 0.75, 1.0);
   vec3 warm = vec3(1.0, 0.8, 0.6);
   vColor = mix(mix(cool, warm, aStar.w), vec3(1.0), 0.35);
-  vAlpha = aStar.y * tw * uBgBright;
+  vAlpha = min(aStar.y, 0.5) * tw * uBgBright;
   gl_PointSize = max(aStar.x * uPixelRatio, 1.0);
 }
 `;
@@ -342,8 +372,8 @@ uniform float uIntensity;
 varying vec2 vUv;
 void main() {
   float r = length(vUv - 0.5) * 2.0;
-  float g = exp(-r * r * 26.0) * 0.85 + exp(-r * 6.5) * 0.2;
-  g *= 1.0 - smoothstep(0.7, 1.0, r);
+  float g = exp(-r * r * 14.0) * 0.75 + exp(-r * 5.5) * 0.25;
+  g *= 1.0 - smoothstep(0.6, 1.0, r);
   gl_FragColor = vec4(uColor * g * uIntensity, 1.0);
 }
 `;

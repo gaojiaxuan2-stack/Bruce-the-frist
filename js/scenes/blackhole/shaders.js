@@ -117,6 +117,21 @@ void main() {
     x += aRand.x * 0.05 * (1.0 + 0.05 * x);
   }
 
+#ifdef SECONDARY
+  // Most particles have no visible secondary image: bail out before the noise.
+  {
+    vec4 mv0 = viewMatrix * (modelMatrix * vec4(x * cos(theta), 0.0, x * sin(theta), 1.0));
+    float w0;
+    lensSecondary(mv0.xyz, uLensA, 2.5, w0);
+    if (w0 < 0.003) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      gl_PointSize = 0.0;
+      vColor = vec3(0.0);
+      return;
+    }
+  }
+#endif
+
   // Swirling streaks: noise advected with the local orbital speed, two layers
   // cross-faded so the pattern never winds up into mush (flow-map trick).
   float omega = uOrbitK * pow(x, -1.5);
@@ -191,6 +206,7 @@ void main() {
     float cyc = fract(uTime * 0.05 + sh);
     fade *= (1.0 - smoothstep(0.82, 1.0, u)) * smoothstep(0.0, 0.25, cyc) * (1.0 - smoothstep(0.6, 1.0, cyc));
     fade *= uStreams * 2.2;
+    I = max(I, 0.045) * 1.6;
   } else {
     float edge = uRin * (0.93 + 0.07 * n);
     fade *= smoothstep(edge * 0.88, edge * 1.06, x);
@@ -293,7 +309,7 @@ void main() {
   vec4 mvl = vec4(lp, 1.0);
   gl_Position = projectionMatrix * mvl;
   float near = exp(-abs(aDust.z) * 0.35);
-  vec3 c = mix(vec3(0.55, 0.58, 0.66), mix(uCol1, uCol2, 0.5), 0.35 * near);
+  vec3 c = mix(vec3(0.55, 0.58, 0.66), mix(uCol1, uCol2, 0.5), 0.55 * near);
   float I = (0.35 + 0.65 * aDust.w) * (0.4 + 0.6 * near) * smoothstep(2.5, 6.0, aDust.x);
   I *= 1.0 + shock * 1.5 + uFlash * 0.6;
   vColor = c * I * uDust;
@@ -311,7 +327,6 @@ uniform float uJetClock;
 uniform float uJet;
 uniform float uSize;
 uniform float uLensA;
-uniform float uTime;
 varying vec3 vColor;
 void main() {
   float s = fract(aJet.y + uJetClock * (0.1 + 0.05 * aJet.w));
@@ -396,7 +411,7 @@ float bandHit(vec3 ro, vec3 rd, float h) {
   if (dot(p, ro) <= 0.0) return 0.0;
   float rho = length(p.xz);
   // only the bright inner part matters: the faint outer band never reaches the bloom threshold
-  return smoothstep(uRin * 0.78, uRin * 0.92, rho) * (1.0 - smoothstep(uRin * 1.25, uRin * 1.75, rho));
+  return smoothstep(uRin * 0.78, uRin * 0.92, rho) * (1.0 - smoothstep(uRin * 1.1, uRin * 1.45, rho));
 }
 
 void main() {

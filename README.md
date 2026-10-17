@@ -80,7 +80,7 @@ tests/                unit tests for the gesture logic (node --test tests/)
 
 ```bash
 npm install                      # Playwright for the headless checks
-npm test                         # gesture unit tests
+npm test                         # gesture unit tests (node --test "tests/*.test.mjs")
 node tools/smoke.mjs --scene galaxy --shot out/galaxy.png
 bash tools/make_fixtures.sh      # fake-webcam videos of real hands
 node tools/smoke.mjs --scene test --input hand --video out/fixtures/fist.y4m --wait 9000 \

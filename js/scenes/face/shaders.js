@@ -197,8 +197,9 @@ void main() {
   neon = mix(neon, uNeonNear, smoothstep(0.5, 0.95, depth01));
   float scanPos = 1.15 - fract(uTime * 0.11) * 1.4;
   float scan = smoothstep(0.03, 0.0, abs(uv.y - scanPos));
-  vec3 cNeon = neon * (0.06 + 1.35 * pow(lumC, 1.25)) * (1.0 + 1.6 * scan) * (1.0 + 1.3 * (1.0 - edge));
-  float sNeon = 1.25 + 0.6 * lumC;
+  // Kept well below clipping so the eyes, brows and mouth stay darker dots.
+  vec3 cNeon = neon * (0.03 + 0.9 * pow(lumC, 1.5)) * (1.0 + 1.2 * scan) * (1.0 + 0.7 * (1.0 - edge));
+  float sNeon = 1.0 + 0.35 * lumC;
 
   vec3 col = photo * uMode.x + cMono * uMode.y + cNeon * uMode.z;
   float size = sPhoto * uMode.x + sMono * uMode.y + sNeon * uMode.z;
@@ -210,11 +211,13 @@ void main() {
   size *= mix(0.5, 1.0, edge);
   alpha *= mix(0.4, 1.0, edge);
 
-  // Even brightness when the head turns: steep areas bunch up on screen
-  // (projected area of the surface patch ~ |v.z - slope . v.xy|).
+  // Even brightness when the head turns. Each particle stands for the same
+  // patch of the photo plane; seen from the view direction that patch covers
+  // |n . v| = |v.z - slope . v.xy| of its front-on screen area, so the on-screen
+  // density grows by 1 / proj and the alpha has to shrink by proj.
   vec3 view = normalize(uCamLocal - home);
   float proj = abs(view.z - dot(aSlope * uDepthWorld, view.xy));
-  alpha *= mix(1.0, clamp(proj / max(view.z, 0.2), 0.22, 1.5), rf);
+  alpha *= mix(1.0, clamp(proj, 0.2, 1.2), rf);
 
   // Shimmer, plus a rare glint here and there.
   alpha *= 1.0 - 0.18 * uLife * (0.5 + 0.5 * sin(uTime * (2.0 + 3.0 * rnd) + rnd2 * 50.0));
