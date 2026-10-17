@@ -43,6 +43,7 @@ export class UI {
   chips() { return document.querySelectorAll('#hud .chip:not([hidden])'); }
 
   setMode(m) {
+    this.modeSince = performance.now() / 1000;
     document.documentElement.style.setProperty('--accent', m.accent || '#38f9ff');
     this.accent = m.accent || '#38f9ff';
     for (const b of this.$modes.children) b.classList.toggle('active', b.dataset.id === m.id);
@@ -127,6 +128,13 @@ export class UI {
     const now = frame.t;
     if (frame.hands.length) this.lastHandsAt = now;
     this.$idle.classList.toggle('show', now - this.lastHandsAt > 4 && frame.ready);
+
+    // The gesture guide steps back once it has been read, and gets out of
+    // the way when a hand moves over it.
+    const g = this.$guide.getBoundingClientRect();
+    const handOver = g.width > 0 && frame.hands.some((h) => h.lm.some((p) => p.x > g.left - 20 && p.x < g.right + 20 && p.y > g.top - 20 && p.y < g.bottom + 20));
+    this.$guide.classList.toggle('faded', now - (this.modeSince ?? now) > 12);
+    this.$guide.classList.toggle('covered', handOver);
 
     // Pointers: a hand that points (index only) or pinches.
     this.pointers = [];

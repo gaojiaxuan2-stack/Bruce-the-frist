@@ -5,6 +5,7 @@
 //   node dev/shoot.mjs --url "index.html#portal" --cam hands.y4m      # fake camera video (.y4m / .mjpeg)
 //
 // Options: --size 1280x720  --mobile (390x844 @3x)  --ready (wait for the hand model)
+//          --noperm (don't pre-grant the camera: shows the start screen)
 //          --eval "__bv.setOption('miles')"  (run in the page once it has started)
 // Shot times count from when the app starts (that is also sim time 0).
 // Prints window.__bv.state() and every console error as JSON.
@@ -53,7 +54,7 @@ const context = await browser.newContext({
   viewport: { width: w, height: h },
   deviceScaleFactor: mobile ? 3 : 1,
   isMobile: mobile, hasTouch: mobile,
-  permissions: ['camera'],
+  permissions: args.noperm ? [] : ['camera'],
 });
 const page = await context.newPage();
 const logs = [];
@@ -69,7 +70,7 @@ if (args.click !== undefined || args.cam) {
 const out = args.out || '/tmp/bv';
 fs.mkdirSync(path.dirname(out + 'x'), { recursive: true });
 
-await page.waitForFunction(() => window.__bv?.state().started, null, { timeout: 60000 }).catch(() => logs.push('[harness] app never started'));
+if (!args.noperm) await page.waitForFunction(() => window.__bv?.state().started, null, { timeout: 60000 }).catch(() => logs.push('[harness] app never started'));
 if (args.ready) {
   await page.waitForFunction(() => window.__bv?.state().ready, null, { timeout: Number(args.timeout || 60000) }).catch(() => logs.push('[harness] timed out waiting for ready'));
 }
