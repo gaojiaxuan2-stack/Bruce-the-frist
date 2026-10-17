@@ -74,6 +74,7 @@ export class InputManager {
     s.events.clear();
     s.dragDelta.x = s.dragDelta.y = 0;
     s.zoom = 0;
+    s.uiCaptured = false;
 
     const frame = this.hand?.running ? this.hand.update(dt) : null;
     if (frame) {

@@ -221,7 +221,8 @@ export class App {
     this.sharedUniforms.uTime.value = this.elapsed;
 
     const input = this.input.update(dt);
-    if (this.settings.swipe && !input.uiCaptured) {
+    // Swipes come only from an open, moving hand, so they are not blocked by the cursor being over UI.
+    if (this.settings.swipe) {
       if (input.events.has('swipeleft')) this.next();
       else if (input.events.has('swiperight')) this.prev();
     }

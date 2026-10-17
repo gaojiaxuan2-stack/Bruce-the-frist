@@ -268,7 +268,7 @@ button.chip:hover, button.chip.hand-hover { border-color: rgba(255, 255, 255, 0.
 .noscript { position: fixed; inset: 0; display: grid; place-items: center; }
 
 /* ---------- lil-gui ---------- */
-.lil-gui.root {
+body > .lil-gui.lil-root {
   position: fixed;
   top: 64px;
   right: 16px;
@@ -295,7 +295,7 @@ button.chip:hover, button.chip.hand-hover { border-color: rgba(255, 255, 255, 0.
   #hints { max-width: calc(100vw - 32px); padding: 10px 12px; }
   #hint-list { display: none; }
   #cam-preview { width: 120px; bottom: auto; top: 112px; }
-  .lil-gui.root { top: 112px; }
+  body > .lil-gui.lil-root { top: 112px; }
   #status { bottom: 92px; }
 }
 
