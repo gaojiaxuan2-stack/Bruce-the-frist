@@ -1,0 +1,1277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mao Zedong Statue</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Serif+SC:wght@600;900&display=swap">
+<style>
+  /* Layout: a full-bleed gallery plinth view; a museum label top-left, a finish/view dock at the bottom. */
+  :root {
+    --stone-hi: #ece6dc;
+    --stone-lo: #c9bfb1;
+    --ink: #2b2420;
+    --muted: #6d6158;
+    --lacquer: #9c3226;
+    --panel: rgba(248, 244, 237, 0.82);
+    --rule: rgba(43, 36, 32, 0.16);
+    --display: "Noto Serif SC", "Songti SC", "SimSun", Georgia, serif;
+    --ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --stone-hi: #2c2522;
+      --stone-lo: #141110;
+      --ink: #eee6dc;
+      --muted: #a8998c;
+      --lacquer: #dc7a64;
+      --panel: rgba(28, 24, 22, 0.78);
+      --rule: rgba(238, 230, 220, 0.16);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --stone-hi: #2c2522;
+    --stone-lo: #141110;
+    --ink: #eee6dc;
+    --muted: #a8998c;
+    --lacquer: #dc7a64;
+    --panel: rgba(28, 24, 22, 0.78);
+    --rule: rgba(238, 230, 220, 0.16);
+    color-scheme: dark;
+  }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    overflow: hidden;
+    font: 14px/1.45 var(--ui);
+    color: var(--ink);
+    background: radial-gradient(120% 90% at 50% 20%, var(--stone-hi) 0%, var(--stone-lo) 100%);
+  }
+  #stage { position: fixed; inset: 0; }
+  #stage canvas { display: block; width: 100%; height: 100%; touch-action: none; outline: none; }
+
+  .label {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + 20px);
+    left: max(16px, env(safe-area-inset-left, 0px));
+    max-width: min(320px, calc(100vw - 32px));
+    display: grid;
+    gap: 6px;
+    pointer-events: none;
+  }
+  .label h1 {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+    font-weight: 900;
+    text-wrap: balance;
+  }
+  .label .zh { font-family: var(--display); font-size: 40px; line-height: 1; letter-spacing: 0.06em; }
+  .label .en { font-family: var(--display); font-weight: 600; font-size: 18px; letter-spacing: 0.02em; }
+  .label .dates {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    color: var(--lacquer);
+  }
+  .label .spec { margin: 2px 0 0; color: var(--muted); font-size: 13px; max-width: 36ch; }
+
+  .dock {
+    position: fixed;
+    left: 50%;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+    transform: translateX(-50%);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    padding: 8px;
+    width: max-content;
+    max-width: calc(100vw - 32px);
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+  .group { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--rule); }
+  .dock button {
+    font: 500 13px/1 var(--ui);
+    color: var(--ink);
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    padding: 9px 12px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .dock button:hover { background: var(--rule); }
+  .dock button[aria-pressed="true"] { background: var(--lacquer); color: var(--stone-hi); }
+  .dock button:focus-visible { outline: 2px solid var(--lacquer); outline-offset: 2px; }
+  .swatch {
+    display: inline-block;
+    width: 9px; height: 9px;
+    margin-right: 6px;
+    border-radius: 50%;
+    vertical-align: -1px;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+  }
+
+  .stats {
+    position: fixed;
+    right: max(16px, env(safe-area-inset-right, 0px));
+    top: calc(env(safe-area-inset-top, 0px) + 22px);
+    margin: 0;
+    font: 11px/1.6 var(--mono);
+    color: var(--muted);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+  }
+
+  #loading {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+  }
+  .loader { display: grid; gap: 10px; width: min(260px, calc(100vw - 32px)); }
+  .loader p { margin: 0; font: 12px/1.4 var(--mono); color: var(--muted); letter-spacing: 0.04em; }
+  .bar { height: 3px; background: var(--rule); border-radius: 2px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--lacquer); transition: width 0.25s ease; }
+
+  @media (max-width: 640px) {
+    .label .zh { font-size: 30px; }
+    .label .en { font-size: 15px; }
+    .label .spec { display: none; }
+    .stats { display: none; }
+    .dock button { padding: 8px 9px; font-size: 12px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .bar i { transition: none; }
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="stage"></div>
+
+<header class="label">
+  <h1><span class="zh" lang="zh-Hans">毛泽东</span><span class="en">Mao Zedong</span></h1>
+  <p class="dates">1893 – 1976</p>
+  <p class="spec">Standing figure in a Zhongshan suit, right hand raised. Life size, 1.80 m. Drag to orbit, scroll or pinch to zoom.</p>
+</header>
+
+<p class="stats" id="stats"></p>
+
+<nav class="dock" aria-label="Model controls" hidden id="dock">
+  <div class="group" role="group" aria-label="Finish">
+    <button type="button" id="finish-painted" data-finish="painted" aria-pressed="true"><span class="swatch" style="background:#6a6f6c"></span>Painted</button>
+    <button type="button" id="finish-marble" data-finish="marble" aria-pressed="false"><span class="swatch" style="background:#eeebe4"></span>Marble</button>
+    <button type="button" id="finish-bronze" data-finish="bronze" aria-pressed="false"><span class="swatch" style="background:#8a5a30"></span>Bronze</button>
+    <button type="button" id="finish-gold" data-finish="gold" aria-pressed="false"><span class="swatch" style="background:#d9a845"></span>Gold</button>
+  </div>
+  <div class="group" role="group" aria-label="View">
+    <button type="button" id="view-full" data-view="full">Full figure</button>
+    <button type="button" id="view-face" data-view="face">Face</button>
+    <button type="button" id="turntable" aria-pressed="false">Turntable</button>
+  </div>
+</nav>
+
+<div id="loading" role="status" aria-live="polite">
+  <div class="loader">
+    <p id="loading-text">Sculpting head, hands and suit…</p>
+    <div class="bar"><i id="loading-bar"></i></div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+
+/* =====================================================================
+ * Sculpting kit
+ * Every part of the figure is a signed distance field (SDF) built from
+ * ellipsoids, round cones and boxes blended with smooth min/max. Each
+ * field is polygonised with sparse surface nets, then vertices are
+ * snapped to the surface, shaded with SDF normals and baked ambient
+ * occlusion, and painted by a per-part material function.
+ * Units are metres; +y is up, +z is the direction the figure faces.
+ * ===================================================================== */
+function sculptKit() {
+const { sqrt, abs, min, max, sin, cos, acos, atan2, exp, PI } = Math;
+const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
+const mix = (a, b, t) => a + (b - a) * t;
+const sstep = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
+function smin(a, b, k) { const h = max(k - abs(a - b), 0) / k; return min(a, b) - h * h * k * 0.25; }
+function smax(a, b, k) { const h = max(k - abs(a - b), 0) / k; return max(a, b) + h * h * k * 0.25; }
+
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const scl = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const len = (a) => sqrt(dot(a, a));
+const norm = (a) => scl(a, 1 / len(a));
+function rotAxis(v, k, ang) {
+  const c = cos(ang), s = sin(ang), kv = cross(k, v), d = dot(k, v) * (1 - c);
+  return [v[0] * c + kv[0] * s + k[0] * d, v[1] * c + kv[1] * s + k[1] * d, v[2] * c + kv[2] * s + k[2] * d];
+}
+// Row-major 3x3 rotation (local -> world) = Ry(ay) * Rx(ax) * Rz(az)
+function mul3(a, b) {
+  const r = new Array(9);
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) r[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j];
+  return r;
+}
+function euler(ax, ay, az) {
+  const cx = cos(ax), sx = sin(ax), cy = cos(ay), sy = sin(ay), cz = cos(az), sz = sin(az);
+  const Rx = [1, 0, 0, 0, cx, -sx, 0, sx, cx];
+  const Ry = [cy, 0, sy, 0, 1, 0, -sy, 0, cy];
+  const Rz = [cz, -sz, 0, sz, cz, 0, 0, 0, 1];
+  return mul3(Ry, mul3(Rx, Rz));
+}
+
+let primitiveCount = 0;
+
+function sphere(c, r) {
+  primitiveCount++;
+  const [cx, cy, cz] = c;
+  return (x, y, z) => { const dx = x - cx, dy = y - cy, dz = z - cz; return sqrt(dx * dx + dy * dy + dz * dz) - r; };
+}
+
+// Ellipsoid (Quilez's bound), optionally rotated by a row-major local->world matrix.
+function ellipsoid(c, r, M) {
+  primitiveCount++;
+  const [cx, cy, cz] = c, [rx, ry, rz] = r;
+  const ix = 1 / rx, iy = 1 / ry, iz = 1 / rz, ix2 = ix * ix, iy2 = iy * iy, iz2 = iz * iz, rmin = min(rx, ry, rz);
+  const m = M || [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  return (x, y, z) => {
+    const qx = x - cx, qy = y - cy, qz = z - cz;
+    const px = m[0] * qx + m[3] * qy + m[6] * qz;
+    const py = m[1] * qx + m[4] * qy + m[7] * qz;
+    const pz = m[2] * qx + m[5] * qy + m[8] * qz;
+    const a = px * ix, b = py * iy, d = pz * iz;
+    const k0 = sqrt(a * a + b * b + d * d);
+    const e = px * ix2, f = py * iy2, g = pz * iz2;
+    const k1 = sqrt(e * e + f * f + g * g);
+    return k1 > 1e-12 ? (k0 * (k0 - 1)) / k1 : -rmin;
+  };
+}
+
+// Round cone between a (radius r1) and b (radius r2), Quilez's exact form.
+function cone(a, b, r1, r2) {
+  primitiveCount++;
+  const [ax, ay, az] = a;
+  const bax = b[0] - ax, bay = b[1] - ay, baz = b[2] - az;
+  const l2 = bax * bax + bay * bay + baz * baz, il2 = 1 / l2;
+  const rr = r1 - r2, a2 = l2 - rr * rr, srr = rr > 0 ? 1 : -1;
+  if (abs(rr) < 1e-9) {
+    return (x, y, z) => {
+      const px = x - ax, py = y - ay, pz = z - az;
+      const h = clamp((px * bax + py * bay + pz * baz) * il2, 0, 1);
+      const dx = px - bax * h, dy = py - bay * h, dz = pz - baz * h;
+      return sqrt(dx * dx + dy * dy + dz * dz) - r1;
+    };
+  }
+  return (x, y, z) => {
+    const px = x - ax, py = y - ay, pz = z - az;
+    const yy = px * bax + py * bay + pz * baz;
+    const zz = yy - l2;
+    const qx = px * l2 - bax * yy, qy = py * l2 - bay * yy, qz = pz * l2 - baz * yy;
+    const x2 = qx * qx + qy * qy + qz * qz;
+    const y2 = yy * yy * l2, z2 = zz * zz * l2;
+    const k = srr * rr * rr * x2;
+    if ((zz > 0 ? 1 : zz < 0 ? -1 : 0) * a2 * z2 > k) return sqrt(x2 + z2) * il2 - r2;
+    if ((yy > 0 ? 1 : yy < 0 ? -1 : 0) * a2 * y2 < k) return sqrt(x2 + y2) * il2 - r1;
+    return (sqrt(x2 * a2 * il2) + yy * rr) * il2 - r1;
+  };
+}
+
+function roundBox(c, h, r, M) {
+  primitiveCount++;
+  const [cx, cy, cz] = c, hx = h[0] - r, hy = h[1] - r, hz = h[2] - r;
+  const m = M || [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  return (x, y, z) => {
+    const qx = x - cx, qy = y - cy, qz = z - cz;
+    const px = m[0] * qx + m[3] * qy + m[6] * qz;
+    const py = m[1] * qx + m[4] * qy + m[7] * qz;
+    const pz = m[2] * qx + m[5] * qy + m[8] * qz;
+    const ux = abs(px) - hx, uy = abs(py) - hy, uz = abs(pz) - hz;
+    const ox = max(ux, 0), oy = max(uy, 0), oz = max(uz, 0);
+    return sqrt(ox * ox + oy * oy + oz * oz) + min(max(ux, max(uy, uz)), 0) - r;
+  };
+}
+
+// 2D helpers for garment details drawn onto the jacket front.
+function rect2(x, y, cx, cy, hx, hy, r) {
+  const qx = abs(x - cx) - hx + r, qy = abs(y - cy) - hy + r;
+  const ox = max(qx, 0), oy = max(qy, 0);
+  return sqrt(ox * ox + oy * oy) + min(max(qx, qy), 0) - r;
+}
+// Pocket flap with the pointed "pen-rack" lower edge of the Zhongshan suit.
+function flap2(x, y, cx, top, bottom, hx, point) {
+  const dx = abs(x - cx);
+  const yb = bottom - point * (1 - min(dx / hx, 1));
+  return max(dx - hx, max(y - top, yb - y));
+}
+
+// March from in front of the face along -z until the surface is hit.
+function frontZ(f, x, y, z = 0.25) {
+  for (let i = 0; i < 400; i++) {
+    const d = f(x, y, z);
+    if (d < 1e-6) break;
+    z -= max(d * 0.8, 2e-6);
+  }
+  return z;
+}
+
+const linear = (hex) => {
+  const f = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  return [f((hex >> 16) & 255), f((hex >> 8) & 255), f(hex & 255)];
+};
+const PAL = {
+  suit: linear(0x5c615e),
+  button: linear(0x34332f),
+  shoe: linear(0x141313),
+  sole: linear(0x231d19),
+  skin: linear(0xcf9d7c),
+  blush: linear(0xcd8875),
+  lip: linear(0xa86d5e),
+  hair: linear(0x1c1814),
+  brow: linear(0x1e1814),
+  mole: linear(0x4f3427),
+  nostril: linear(0x4a2a22),
+  sclera: linear(0xe6ddd0),
+  iris: linear(0x3a281c),
+  pupil: linear(0x0b0807),
+  nail: linear(0xe4bcaa),
+};
+// Material groups (one geometry group per finish slot)
+const G = { SUIT: 0, SKIN: 1, HAIR: 2, EYE: 3, SHOE: 4, BUTTON: 5 };
+
+/* ---------------- Sparse surface nets ---------------- */
+function polygonize(field, bmin, bmax, h) {
+  const B = 4, P = B + 1, P2 = P * P, BB = B * B;
+  const nbx = Math.ceil((bmax[0] - bmin[0]) / (h * B));
+  const nby = Math.ceil((bmax[1] - bmin[1]) / (h * B));
+  const nbz = Math.ceil((bmax[2] - bmin[2]) / (h * B));
+  const [ox, oy, oz] = bmin;
+  // A block is meshed if its corners straddle the surface or one corner is
+  // close enough that the surface could pass through it.
+  const thresh = 0.5 * sqrt(3) * B * h * 1.3;
+  const cx = nbx + 1, cxy = (nbx + 1) * (nby + 1);
+  const corner = new Float32Array(cxy * (nbz + 1));
+  for (let k = 0; k <= nbz; k++)
+    for (let j = 0; j <= nby; j++)
+      for (let i = 0; i <= nbx; i++) corner[i + cx * j + cxy * k] = field(ox + i * B * h, oy + j * B * h, oz + k * B * h);
+  const data = new Array(nbx * nby * nbz);
+  const verts = new Array(nbx * nby * nbz);
+  const active = [];
+  for (let bz = 0; bz < nbz; bz++)
+    for (let by = 0; by < nby; by++)
+      for (let bx = 0; bx < nbx; bx++) {
+        const c0 = bx + cx * by + cxy * bz;
+        let neg = 0, near = false;
+        for (let c = 0; c < 8; c++) {
+          const v = corner[c0 + (c & 1) + ((c >> 1) & 1) * cx + ((c >> 2) & 1) * cxy];
+          if (v < 0) neg++;
+          if (abs(v) < thresh) near = true;
+        }
+        if (near || (neg > 0 && neg < 8)) active.push(bx + nbx * (by + nby * bz));
+      }
+  for (const bi of active) {
+    const bx = bi % nbx, by = ((bi / nbx) | 0) % nby, bz = (bi / (nbx * nby)) | 0;
+    const x0 = ox + bx * B * h, y0 = oy + by * B * h, z0 = oz + bz * B * h;
+    const arr = new Float32Array(P * P2);
+    // Reuse the face shared with an already evaluated lower neighbour.
+    const left = bx > 0 ? data[bi - 1] : null;
+    const down = by > 0 ? data[bi - nbx] : null;
+    const back = bz > 0 ? data[bi - nbx * nby] : null;
+    let n = 0;
+    for (let k = 0; k < P; k++)
+      for (let j = 0; j < P; j++)
+        for (let i = 0; i < P; i++, n++) {
+          if (i === 0 && left) arr[n] = left[n + B];
+          else if (j === 0 && down) arr[n] = down[n + B * P];
+          else if (k === 0 && back) arr[n] = back[n + B * P2];
+          else arr[n] = field(x0 + i * h, y0 + j * h, z0 + k * h);
+        }
+    data[bi] = arr;
+  }
+  const EDGES = [0, 1, 2, 3, 4, 5, 6, 7, 0, 2, 1, 3, 4, 6, 5, 7, 0, 4, 1, 5, 2, 6, 3, 7];
+  const OFF = [0, 1, P, P + 1, P2, P2 + 1, P2 + P, P2 + P + 1];
+  const cv = new Float64Array(8);
+  let pos = new Float32Array(1 << 16), nv = 0;
+  for (const bi of active) {
+    const arr = data[bi];
+    const bx = bi % nbx, by = ((bi / nbx) | 0) % nby, bz = (bi / (nbx * nby)) | 0;
+    const vi = new Int32Array(B * BB).fill(-1);
+    for (let k = 0; k < B; k++)
+      for (let j = 0; j < B; j++)
+        for (let i = 0; i < B; i++) {
+          const base = i + P * j + P2 * k;
+          let mask = 0;
+          for (let c = 0; c < 8; c++) { const v = arr[base + OFF[c]]; cv[c] = v; if (v < 0) mask |= 1 << c; }
+          if (mask === 0 || mask === 255) continue;
+          let sx = 0, sy = 0, sz = 0, cnt = 0;
+          for (let e = 0; e < 24; e += 2) {
+            const a = EDGES[e], b = EDGES[e + 1], va = cv[a], vb = cv[b];
+            if ((va < 0) === (vb < 0)) continue;
+            const t = va / (va - vb);
+            const ax = a & 1, ay = (a >> 1) & 1, az = (a >> 2) & 1;
+            sx += ax + ((b & 1) - ax) * t;
+            sy += ay + (((b >> 1) & 1) - ay) * t;
+            sz += az + (((b >> 2) & 1) - az) * t;
+            cnt++;
+          }
+          if (nv * 3 + 3 > pos.length) { const np = new Float32Array(pos.length * 2); np.set(pos); pos = np; }
+          pos[nv * 3] = ox + (bx * B + i + sx / cnt) * h;
+          pos[nv * 3 + 1] = oy + (by * B + j + sy / cnt) * h;
+          pos[nv * 3 + 2] = oz + (bz * B + k + sz / cnt) * h;
+          vi[i + B * j + BB * k] = nv++;
+        }
+    verts[bi] = vi;
+  }
+  const getV = (I, J, K) => {
+    if (I < 0 || J < 0 || K < 0) return -1;
+    const bx = (I / B) | 0, by = (J / B) | 0, bz = (K / B) | 0;
+    if (bx >= nbx || by >= nby || bz >= nbz) return -1;
+    const vi = verts[bx + nbx * (by + nby * bz)];
+    return vi ? vi[I - bx * B + B * (J - by * B) + BB * (K - bz * B)] : -1;
+  };
+  let quads = new Uint32Array(1 << 16), nq = 0;
+  const pushQuad = (a, b, c, d) => {
+    if (nq + 4 > quads.length) { const nqa = new Uint32Array(quads.length * 2); nqa.set(quads); quads = nqa; }
+    quads[nq++] = a; quads[nq++] = b; quads[nq++] = c; quads[nq++] = d;
+  };
+  for (const bi of active) {
+    const arr = data[bi], vi = verts[bi];
+    const bx = bi % nbx, by = ((bi / nbx) | 0) % nby, bz = (bi / (nbx * nby)) | 0;
+    for (let k = 0; k < B; k++)
+      for (let j = 0; j < B; j++)
+        for (let i = 0; i < B; i++) {
+          const v0 = vi[i + B * j + BB * k];
+          if (v0 < 0) continue;
+          const I = bx * B + i, J = by * B + j, K = bz * B + k;
+          const base = i + P * j + P2 * k;
+          const s0 = arr[base] < 0;
+          if ((arr[base + 1] < 0) !== s0) {
+            const a = getV(I, J - 1, K), b = getV(I, J - 1, K - 1), c = getV(I, J, K - 1);
+            if (a >= 0 && b >= 0 && c >= 0) pushQuad(v0, a, b, c);
+          }
+          if ((arr[base + P] < 0) !== s0) {
+            const a = getV(I - 1, J, K), b = getV(I - 1, J, K - 1), c = getV(I, J, K - 1);
+            if (a >= 0 && b >= 0 && c >= 0) pushQuad(v0, a, b, c);
+          }
+          if ((arr[base + P2] < 0) !== s0) {
+            const a = getV(I - 1, J, K), b = getV(I - 1, J - 1, K), c = getV(I, J - 1, K);
+            if (a >= 0 && b >= 0 && c >= 0) pushQuad(v0, a, b, c);
+          }
+        }
+  }
+  return { pos: pos.subarray(0, nv * 3), quads: quads.subarray(0, nq), nv };
+}
+
+// Snap, shade, occlude and paint the raw surface-nets mesh.
+function finishMesh(field, raw, h, aoStep, aoGain = 1.35) {
+  const n = raw.nv, P = raw.pos;
+  const N = new Float32Array(n * 3), C = new Float32Array(n * 3), A = new Float32Array(n * 3), M = new Uint8Array(n);
+  const e = h * 0.5, i4e = 1 / (4 * e), out = { m: 0, c: PAL.suit };
+  for (let i = 0; i < n; i++) {
+    const x = P[3 * i], y = P[3 * i + 1], z = P[3 * i + 2];
+    const f1 = field(x + e, y - e, z - e), f2 = field(x - e, y - e, z + e), f3 = field(x - e, y + e, z - e), f4 = field(x + e, y + e, z + e);
+    const gx = (f1 - f2 - f3 + f4) * i4e, gy = (-f1 - f2 + f3 + f4) * i4e, gz = (-f1 + f2 - f3 + f4) * i4e;
+    const gl = sqrt(gx * gx + gy * gy + gz * gz) || 1;
+    const nx = gx / gl, ny = gy / gl, nz = gz / gl;
+    let occ = 0, w = 0.5;
+    for (let s = 1; s <= 4; s++) {
+      const t = s * aoStep;
+      occ += (w * max(0, t - field(x + nx * t, y + ny * t, z + nz * t))) / t;
+      w *= 0.5;
+    }
+    const ao = clamp(1 - aoGain * occ, 0.22, 1);
+    field(x, y, z, out);
+    N[3 * i] = nx; N[3 * i + 1] = ny; N[3 * i + 2] = nz;
+    C[3 * i] = out.c[0] * ao; C[3 * i + 1] = out.c[1] * ao; C[3 * i + 2] = out.c[2] * ao;
+    A[3 * i] = A[3 * i + 1] = A[3 * i + 2] = ao;
+    M[i] = out.m;
+  }
+  // Orient quads with the SDF normals, split along the short diagonal, bucket by material.
+  const Q = raw.quads, buckets = [[], [], [], [], [], []];
+  const px = (v, k) => P[3 * v + k];
+  for (let q = 0; q < Q.length; q += 4) {
+    let a = Q[q], b = Q[q + 1], c = Q[q + 2], d = Q[q + 3];
+    const d1 = [px(c, 0) - px(a, 0), px(c, 1) - px(a, 1), px(c, 2) - px(a, 2)];
+    const d2 = [px(d, 0) - px(b, 0), px(d, 1) - px(b, 1), px(d, 2) - px(b, 2)];
+    const fn = cross(d1, d2);
+    const ns = [N[3 * a] + N[3 * b] + N[3 * c] + N[3 * d], N[3 * a + 1] + N[3 * b + 1] + N[3 * c + 1] + N[3 * d + 1], N[3 * a + 2] + N[3 * b + 2] + N[3 * c + 2] + N[3 * d + 2]];
+    if (dot(fn, ns) < 0) { const t = b; b = d; d = t; }
+    const tris = dot(d1, d1) < dot(d2, d2) ? [a, b, c, a, c, d] : [a, b, d, b, c, d];
+    for (let t = 0; t < 6; t += 3) {
+      const u = tris[t], v = tris[t + 1], wv = tris[t + 2];
+      const m = M[u] === M[v] || M[u] === M[wv] ? M[u] : M[v] === M[wv] ? M[v] : M[u];
+      buckets[m].push(u, v, wv);
+    }
+  }
+  const total = buckets.reduce((s, b) => s + b.length, 0);
+  const index = new Uint32Array(total), groups = [];
+  let off = 0;
+  buckets.forEach((b, m) => { if (b.length) { index.set(b, off); groups.push({ start: off, count: b.length, mat: m }); off += b.length; } });
+  return { position: P.slice(), normal: N, color: C, ao: A, index, groups };
+}
+
+/* ---------------- Head ---------------- */
+// Local frame: origin between the ear canals, eyes about 1 cm above.
+function buildHead() {
+  const cranium = ellipsoid([0, 0.035, -0.005], [0.0805, 0.098, 0.1]);
+  const face = ellipsoid([0, -0.038, 0.03], [0.064, 0.07, 0.068]);
+  const cheek = ellipsoid([0.039, -0.024, 0.058], [0.03, 0.034, 0.03]);
+  const zyg = ellipsoid([0.052, 0.004, 0.05], [0.025, 0.017, 0.028]);
+  const jaw = ellipsoid([0.043, -0.067, 0.012], [0.023, 0.033, 0.042]);
+  const chin = ellipsoid([0, -0.093, 0.072], [0.027, 0.021, 0.024]);
+  const jowl = ellipsoid([0, -0.097, 0.03], [0.05, 0.03, 0.05]);
+  const neck = cone([0, -0.05, -0.022], [0, -0.19, -0.03], 0.056, 0.058);
+  const brow = cone([0, 0.027, 0.094], [0.047, 0.029, 0.078], 0.0115, 0.009);
+  function base(x, y, z) {
+    const ax = abs(x);
+    let d = cranium(x, y, z);
+    d = smin(d, face(x, y, z), 0.045);
+    d = smin(d, cheek(ax, y, z), 0.03);
+    d = smin(d, zyg(ax, y, z), 0.02);
+    d = smin(d, jaw(ax, y, z), 0.03);
+    d = smin(d, chin(x, y, z), 0.025);
+    d = smin(d, jowl(x, y, z), 0.035);
+    d = smin(d, neck(x, y, z), 0.035);
+    d = smin(d, brow(ax, y, z), 0.02);
+    return d;
+  }
+
+  // Eyes: an almond-shaped opening cut through the skin with the eyeball
+  // behind it; outer corner tilted slightly up, puffy upper lid, soft bag.
+  const EZ = frontZ(base, 0.0325, 0.0115);
+  const E = [0.0325, 0.0115, EZ - 0.0155], ER = 0.0125;
+  const gaze = norm([-0.05, 0.03, 1]);
+  const orbit = ellipsoid([0.033, 0.014, EZ + 0.0095], [0.022, 0.016, 0.0115]);
+  const eyeball = sphere(E, ER);
+  const cornea = sphere(add(E, scl(gaze, 0.0086)), 0.006);
+  const AW = 0.014, AU = 0.0046, AL = 0.0033;
+  const RU = (AW * AW + AU * AU) / (2 * AU), RL = (AW * AW + AL * AL) / (2 * AL);
+  const cUy = AU - RU, cLy = RL - AL;
+  primitiveCount++;
+  const aperture = (ax, y) => {
+    const u = ax - E[0] - 0.0008, v = y - E[1] - 0.07 * (ax - E[0]);
+    return max(sqrt(u * u + (v - cUy) ** 2) - RU, sqrt(u * u + (v - cLy) ** 2) - RL);
+  };
+  const lidRoll = ellipsoid([0.033, 0.0192, frontZ(base, 0.033, 0.0192) - 0.0042], [0.0155, 0.004, 0.005], euler(0.3, 0, -0.06));
+  const bag = ellipsoid([0.033, 0.0028, frontZ(base, 0.033, 0.0028) - 0.0045], [0.014, 0.0035, 0.0048], euler(-0.3, 0, 0.05));
+
+  // Nose: low broad bridge, rounded tip, wide alae
+  const bridge = cone([0, 0.006, 0.0885], [0, -0.023, 0.1095], 0.0068, 0.0105);
+  const tip = ellipsoid([0, -0.0272, 0.1085], [0.0128, 0.0112, 0.0118]);
+  const ala = ellipsoid([0.0172, -0.0322, 0.0965], [0.0098, 0.0088, 0.0095]);
+  const nostril = ellipsoid([0.0085, -0.0395, 0.1035], [0.0045, 0.0026, 0.0055]);
+
+  // Mouth: closed, full lips, corners turned very slightly up
+  const zM = frontZ(base, 0, -0.058);
+  const lipU = ellipsoid([0, -0.0538, zM - 0.0058], [0.0225, 0.0052, 0.009]);
+  const lipL = ellipsoid([0, -0.0658, zM - 0.0066], [0.0198, 0.0072, 0.0096]);
+  const zC = frontZ(base, 0.0225, -0.0588);
+  const slit = cone([0.0225, -0.0588, zC - 0.0012], [0, -0.0603, zM + 0.0015], 0.0007, 0.001);
+
+  // Large ears with heavy lobes
+  const earM = euler(-0.2, -0.35, 0);
+  const ear = ellipsoid([0.0795, 0.004, -0.014], [0.0075, 0.0335, 0.0195], earM);
+  const concha = ellipsoid([0.0865, -0.004, -0.009], [0.006, 0.0135, 0.0095], earM);
+  const scapha = ellipsoid([0.0865, 0.017, -0.0185], [0.004, 0.0115, 0.0055], earM);
+  const lobe = ellipsoid([0.0805, -0.0265, -0.0065], [0.0062, 0.0105, 0.0085], earM);
+
+  // Eyebrows sitting close over the eyes, and the mole on the chin (his left)
+  const bz = (x, y) => frontZ(base, x, y) - 0.0012;
+  const browA = [0.011, 0.0262], browB = [0.029, 0.0305], browC = [0.05, 0.0268];
+  const brow1 = cone([...browA, bz(...browA)], [...browB, bz(...browB)], 0.0029, 0.0025);
+  const brow2 = cone([...browB, bz(...browB)], [...browC, bz(...browC)], 0.0025, 0.0013);
+  const mole = sphere([0.0115, -0.085, frontZ(base, 0.0115, -0.085) - 0.0011], 0.0023);
+
+  // Hair: a shell over the cranium, combed straight back from a high hairline.
+  // Hairline elevation (degrees) by azimuth, measured from the skull centre.
+  const HL = [[0, 42], [25, 41], [45, 36], [60, 26], [72, 12], [82, 0], [92, 5], [102, 3], [118, -24], [145, -35], [180, -38]];
+  const hairline = (phi) => {
+    let i = 0;
+    while (i < HL.length - 2 && phi > HL[i + 1][0]) i++;
+    const t = clamp((phi - HL[i][0]) / (HL[i + 1][0] - HL[i][0]), 0, 1);
+    const s = t * t * (3 - 2 * t);
+    return (mix(HL[i][1], HL[i + 1][1], s) * PI) / 180;
+  };
+  const R2D = 180 / PI;
+
+  function field(x, y, z, out) {
+    const ax = abs(x);
+    let s = base(x, y, z);
+    // Facial features only matter in front of the cheekbones.
+    let dEye = 1e9, dl = 1e9, dm = 1e9, db = 1e9, dn = 1e9;
+    if (z > 0.035 && ax < 0.075 && y > -0.11 && y < 0.055) {
+      s = smax(s, -orbit(ax, y, z), 0.012);
+      s = smin(s, lidRoll(ax, y, z), 0.006);
+      s = smin(s, bag(ax, y, z), 0.006);
+      s = smax(s, -max(aperture(ax, y), E[2] + 0.004 - z), 0.0016);
+      s = smin(s, bridge(x, y, z), 0.012);
+      s = smin(s, tip(x, y, z), 0.008);
+      s = smin(s, ala(ax, y, z), 0.009);
+      dn = nostril(ax, y, z);
+      s = smax(s, -dn, 0.003);
+      dl = min(lipU(x, y, z), lipL(x, y, z));
+      s = smin(s, dl, 0.004);
+      s = smax(s, -slit(ax, y, z), 0.0014);
+      dm = mole(x, y, z);
+      s = smin(s, dm, 0.0012);
+      db = min(brow1(ax, y, z), brow2(ax, y, z));
+      s = smin(s, db, 0.0012);
+      dEye = smin(eyeball(ax, y, z), cornea(ax, y, z), 0.002);
+    }
+    if (ax > 0.05 && z < 0.03 && y > -0.055 && y < 0.06) {
+      let de = ear(ax, y, z);
+      de = smin(de, lobe(ax, y, z), 0.004);
+      de = smax(de, -concha(ax, y, z), 0.0025);
+      de = smax(de, -scapha(ax, y, z), 0.002);
+      s = smin(s, de, 0.006);
+    }
+
+    // hair
+    const hy = y - 0.035, hz = z + 0.005;
+    const phi = atan2(ax, hz) * R2D;
+    const theta = atan2(hy, sqrt(ax * ax + hz * hz));
+    const tH = sstep(-0.03, 0.13, theta - hairline(phi));
+    let dh = 1e9;
+    if (tH > 0) {
+      const psi = atan2(hy, x);
+      const volume = 0.011 * exp(-((x / 0.076) ** 2) - ((y - 0.115) / 0.045) ** 2 - ((z - 0.01) / 0.085) ** 2);
+      const comb = 0.00007 * sin(psi * 95 + sin(z * 55) * 1.1) + 0.00004 * sin(psi * 210 + z * 40);
+      const T = 0.0036 + 0.003 * sstep(-0.02, 0.1, y) + volume + comb;
+      dh = cranium(x, y, z) - T * tH + 0.003 * sstep(0.25, 0, tH);
+    }
+    let d = min(min(s, dh), dEye);
+
+    if (out) {
+      if (dEye <= s && dEye <= dh) {
+        const vx = ax - E[0], vy = y - E[1], vz = z - E[2], vl = sqrt(vx * vx + vy * vy + vz * vz) || 1;
+        const ang = acos(clamp((vx * gaze[0] + vy * gaze[1] + vz * gaze[2]) / vl, -1, 1));
+        const irisT = sstep(0.53, 0.47, ang), pupilT = sstep(0.24, 0.2, ang), limbus = sstep(0.42, 0.5, ang) * irisT;
+        const c = [0, 0, 0];
+        for (let k = 0; k < 3; k++) {
+          let v = mix(PAL.sclera[k], PAL.iris[k], irisT);
+          v = mix(v, PAL.pupil[k], max(pupilT, limbus * 0.6));
+          c[k] = v;
+        }
+        out.c = c; out.m = G.EYE;
+      } else {
+        const hairT = sstep(-0.0004, 0.0012, s - dh);
+        const blush = exp(-(((ax - 0.045) / 0.022) ** 2) - (((y + 0.028) / 0.022) ** 2)) * sstep(0.02, 0.05, z)
+          + 0.6 * exp(-((x / 0.014) ** 2) - (((y + 0.028) / 0.012) ** 2)) * sstep(0.09, 0.11, z)
+          + 0.5 * sstep(0.072, 0.085, ax) * sstep(-0.02, 0, -z);
+        const lipT = sstep(0.0016, 0.0002, dl) * 0.8;
+        const browT = sstep(0.0009, 0.0, db);
+        const moleT = sstep(0.0011, 0.0002, dm);
+        const nostrilT = sstep(0.0015, -0.0005, dn) * 0.75;
+        const c = [0, 0, 0];
+        for (let k = 0; k < 3; k++) {
+          let v = mix(PAL.skin[k], PAL.blush[k], clamp(blush * 0.5, 0, 0.6));
+          v = mix(v, PAL.lip[k], lipT);
+          v = mix(v, PAL.brow[k], browT * 0.96);
+          v = mix(v, PAL.mole[k], moleT);
+          v = mix(v, PAL.nostril[k], nostrilT);
+          v = mix(v, PAL.hair[k], hairT);
+          c[k] = v;
+        }
+        out.c = c;
+        out.m = hairT > 0.5 || browT > 0.6 ? G.HAIR : G.SKIN;
+      }
+    }
+    return d;
+  }
+  return { field, bmin: [-0.105, -0.2, -0.13], bmax: [0.105, 0.16, 0.15] };
+}
+
+/* ---------------- Hands ---------------- */
+// Local frame of a right hand: origin at the wrist, +y along the fingers,
+// +z out of the palm, +x towards the thumb. `mirror` makes a left hand.
+function buildHand({ curl, spread, thumbDirs, mirror }) {
+  const Z = [0, 0, 1];
+  const palm = roundBox([0, 0.05, -0.001], [0.039, 0.048, 0.0125], 0.0105);
+  const thenar = ellipsoid([0.023, 0.034, 0.008], [0.02, 0.032, 0.013], euler(0, 0, -0.4));
+  const hypo = ellipsoid([-0.025, 0.045, 0.006], [0.014, 0.036, 0.01]);
+  const wrist = ellipsoid([0, -0.02, -0.002], [0.031, 0.048, 0.022]);
+  const knuckles = [];
+  const fingers = [];
+  const nails = [];
+  const FING = [
+    { k: [0.026, 0.094, 0], len: [0.043, 0.025, 0.021], r: [0.0095, 0.0088, 0.0079, 0.0071] },
+    { k: [0.008, 0.097, 0], len: [0.047, 0.029, 0.022], r: [0.0098, 0.0091, 0.0082, 0.0073] },
+    { k: [-0.0105, 0.094, 0], len: [0.044, 0.027, 0.022], r: [0.0092, 0.0085, 0.0077, 0.0069] },
+    { k: [-0.0275, 0.086, 0], len: [0.035, 0.02, 0.019], r: [0.0083, 0.0077, 0.007, 0.0063] },
+  ];
+  let lo = [-0.05, -0.075, -0.04], hi = [0.05, 0.1, 0.04];
+  const grow = (p, r) => { for (let k = 0; k < 3; k++) { lo[k] = min(lo[k], p[k] - r - 0.008); hi[k] = max(hi[k], p[k] + r + 0.008); } };
+  FING.forEach((F, fi) => {
+    const d0 = [sin(spread[fi]), cos(spread[fi]), 0];
+    const lat = norm(cross(d0, Z));
+    const segs = [cone(sub(F.k, scl(d0, 0.014)), F.k, F.r[0], F.r[0])];
+    knuckles.push(sphere([F.k[0], F.k[1] - 0.004, -0.0075], 0.0085));
+    let p = F.k, dir = d0, back = [0, 0, -1];
+    for (let j = 0; j < 3; j++) {
+      dir = rotAxis(dir, lat, curl[fi][j]);
+      back = rotAxis(back, lat, curl[fi][j]);
+      const q = add(p, scl(dir, F.len[j]));
+      segs.push(cone(p, q, F.r[j], F.r[j + 1]));
+      if (j === 2) nails.push({ a: p, b: q, back, r: F.r[3] });
+      grow(q, F.r[j]);
+      p = q;
+    }
+    fingers.push(segs);
+  });
+  const thumb = [];
+  {
+    let p = [0.026, 0.02, 0.006];
+    const tr = [0.0135, 0.0118, 0.0108, 0.0094], tl = [0.04, 0.032, 0.027];
+    for (let j = 0; j < 3; j++) {
+      const dir = norm(thumbDirs[j]);
+      const q = add(p, scl(dir, tl[j]));
+      thumb.push(cone(p, q, tr[j], tr[j + 1]));
+      if (j === 2) nails.push({ a: p, b: q, back: norm(add(scl(norm(cross(dir, Z)), 0.75), [0, 0, -0.66])), r: tr[3] });
+      grow(q, tr[j]);
+      p = q;
+    }
+  }
+  const nailCol = PAL.nail;
+  const sgn = mirror ? -1 : 1;
+  function field(x, y, z, out) {
+    x *= sgn;
+    let d = palm(x, y, z);
+    d = smin(d, thenar(x, y, z), 0.012);
+    d = smin(d, hypo(x, y, z), 0.01);
+    d = smin(d, wrist(x, y, z), 0.02);
+    for (let i = 0; i < 4; i++) d = smin(d, knuckles[i](x, y, z), 0.008);
+    let df = 1e9;
+    for (let f = 0; f < 4; f++) {
+      const s = fingers[f];
+      let dd = s[0](x, y, z);
+      for (let j = 1; j < s.length; j++) dd = smin(dd, s[j](x, y, z), 0.003);
+      df = min(df, dd);
+    }
+    d = smin(d, df, 0.009);
+    let dt = thumb[0](x, y, z);
+    for (let j = 1; j < 3; j++) dt = smin(dt, thumb[j](x, y, z), 0.004);
+    d = smin(d, dt, 0.012);
+    if (out) {
+      let nail = 0;
+      for (const N of nails) {
+        const ab = sub(N.b, N.a), ap = [x - N.a[0], y - N.a[1], z - N.a[2]];
+        const t = clamp(dot(ap, ab) / dot(ab, ab), 0, 1);
+        const c = add(N.a, scl(ab, t));
+        const v = [x - c[0], y - c[1], z - c[2]];
+        const vl = len(v) || 1;
+        const facing = dot(v, N.back) / vl;
+        nail = max(nail, sstep(0.3, 0.55, t) * sstep(0.55, 0.8, facing) * sstep(N.r * 1.6, N.r * 1.1, vl));
+      }
+      const c = [0, 0, 0];
+      for (let k = 0; k < 3; k++) c[k] = mix(PAL.skin[k], nailCol[k], nail);
+      out.c = c; out.m = G.SKIN;
+    }
+    return d;
+  }
+  if (mirror) { const l0 = -hi[0], h0 = -lo[0]; lo[0] = l0; hi[0] = h0; }
+  return { field, bmin: lo, bmax: hi };
+}
+
+/* ---------------- Suit, trousers and shoes ---------------- */
+const J = {
+  SL: [0.19, 1.405, -0.012], EL: [0.245, 1.12, -0.005], WL: [0.255, 0.88, 0.05],
+  SR: [-0.19, 1.405, -0.012], ER: [-0.4, 1.6, 0.07], WR: [-0.45, 1.85, 0.12],
+  HL: [0.095, 0.86, 0], AL: [0.108, 0.07, -0.005],
+  HR: [-0.095, 0.86, 0], AR: [-0.125, 0.07, 0.03],
+  FL: [0.112, 0, 0.045], FR: [-0.13, 0, 0.075],
+  HEAD: [0, 1.671, 0.012],
+};
+
+function buildBody() {
+  // Jacket body lofted through elliptical sections: [y, half-width, front depth, back depth, z-centre]
+  const PROF = [
+    [0.775, 0.186, 0.128, 0.117, 0.008],
+    [0.86, 0.185, 0.131, 0.117, 0.012],
+    [0.96, 0.184, 0.138, 0.117, 0.02],
+    [1.06, 0.182, 0.14, 0.118, 0.02],
+    [1.16, 0.18, 0.132, 0.115, 0.012],
+    [1.26, 0.185, 0.125, 0.115, 0.005],
+    [1.36, 0.18, 0.112, 0.112, -0.005],
+    [1.43, 0.16, 0.095, 0.1, -0.015],
+    [1.49, 0.11, 0.07, 0.08, -0.025],
+  ];
+  const NP = PROF.length, HEM = PROF[0][0], TOP = PROF[NP - 1][0];
+  const cr = (p0, p1, p2, p3, t) => 0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t * t * t);
+  primitiveCount += NP;
+  function loft(x, y, z) {
+    const yy = clamp(y, HEM, TOP);
+    let i = 0;
+    while (i < NP - 2 && yy > PROF[i + 1][0]) i++;
+    const a = PROF[i], b = PROF[i + 1], p0 = PROF[max(i - 1, 0)], p3 = PROF[min(i + 2, NP - 1)];
+    const t = (yy - a[0]) / (b[0] - a[0]);
+    const hw = cr(p0[1], a[1], b[1], p3[1], t);
+    const zc = cr(p0[4], a[4], b[4], p3[4], t);
+    const zz = z - zc;
+    const hd = zz > 0 ? cr(p0[2], a[2], b[2], p3[2], t) : cr(p0[3], a[3], b[3], p3[3], t);
+    const u = x / hw, v = zz / hd, u2 = x / (hw * hw), v2 = zz / (hd * hd);
+    const k0 = sqrt(u * u + v * v), k1 = sqrt(u2 * u2 + v2 * v2);
+    let d = k1 > 1e-9 ? (k0 * (k0 - 1)) / k1 : -min(hw, hd);
+    d = smax(d, HEM - y, 0.006);
+    d = smax(d, y - TOP, 0.03);
+    return d;
+  }
+  const shoulder = cone([0.055, 1.452, -0.032], [0.178, 1.418, -0.018], 0.06, 0.058);
+
+  // Turn-down collar around the neck axis
+  const cb = [0, 1.462, -0.03], ct = [0, 1.556, -0.016];
+  const cu = norm(sub(ct, cb)), cL = len(sub(ct, cb));
+  primitiveCount++;
+  function collar(x, y, z) {
+    const px = x - cb[0], py = y - cb[1], pz = z - cb[2];
+    const t = px * cu[0] + py * cu[1] + pz * cu[2];
+    const rx = px - cu[0] * t, ry = py - cu[1] * t, rz = pz - cu[2] * t;
+    const rad = sqrt(rx * rx + ry * ry + rz * rz);
+    const r = 0.083 - 0.016 * clamp(t / cL, 0, 1);
+    const front = max(0, rz / (rad + 1e-9));
+    let d = rad - r;
+    d = smax(d, -t, 0.004);
+    d = smax(d, t - cL + front * front * 0.018, 0.004);
+    return d;
+  }
+
+  function sleeve(S, E, W, rS, rE, rW) {
+    const up = cone(S, E, rS, rE), fore = cone(E, W, rE, rW);
+    const f = norm(sub(W, E));
+    const end = sub(W, scl(f, 0.006));
+    const hole = cone(sub(end, scl(f, 0.07)), add(end, scl(f, 0.02)), rW - 0.009, rW - 0.008);
+    return (x, y, z) => {
+      let d = smin(up(x, y, z), fore(x, y, z), 0.025);
+      d = smax(d, (x - end[0]) * f[0] + (y - end[1]) * f[1] + (z - end[2]) * f[2], 0.003);
+      return smax(d, -hole(x, y, z), 0.002);
+    };
+  }
+  const sleeveL = sleeve(J.SL, J.EL, J.WL, 0.06, 0.052, 0.044);
+  const sleeveR = sleeve(J.SR, J.ER, J.WR, 0.062, 0.053, 0.045);
+
+  const pelvis = ellipsoid([0, 0.865, 0], [0.178, 0.11, 0.122]);
+  const legL = cone(J.HL, J.AL, 0.094, 0.067);
+  const legR = cone(J.HR, J.AR, 0.094, 0.067);
+
+  function shoe(F, yaw) {
+    const R = euler(0, yaw, 0);
+    const toe = ellipsoid([0, 0.034, 0.058], [0.045, 0.038, 0.098]);
+    const heel = ellipsoid([0, 0.045, -0.045], [0.042, 0.055, 0.06]);
+    const state = { sole: 1e9 };
+    const fn = (x, y, z) => {
+      const qx = x - F[0], qy = y - F[1], qz = z - F[2];
+      const lx = R[0] * qx + R[3] * qy + R[6] * qz, ly = R[1] * qx + R[4] * qy + R[7] * qz, lz = R[2] * qx + R[5] * qy + R[8] * qz;
+      let d = smin(toe(lx, ly, lz), heel(lx, ly, lz), 0.03);
+      d = smax(d, 0.012 - ly, 0.004);
+      const outline = smin(toe(lx, 0.026, lz), heel(lx, 0.026, lz), 0.03);
+      state.sole = smax(outline - 0.0035, abs(ly - 0.0068) - 0.0068, 0.002);
+      return d;
+    };
+    fn.state = state;
+    return fn;
+  }
+  const shoeL = shoe(J.FL, 0.14), shoeR = shoe(J.FR, -0.18);
+
+  const BUTTONS = [1.462, 1.33, 1.198, 1.066, 0.934];
+  primitiveCount += BUTTONS.length + 13;
+
+  function field(x, y, z, out) {
+    let mat = G.SUIT, col = PAL.suit;
+    let d = 1e9;
+    // Jacket
+    if (y > 0.7) {
+      const ax = abs(x);
+      let dT = loft(x, y, z);
+      dT = smin(dT, shoulder(ax, y, z), 0.05);
+      const dC = collar(x, y, z);
+      dT = min(dT, dC);
+      d = dT;
+      // Garment details as a smooth relief over the jacket surface.
+      if (dT < 0.03 && y > 1.36) {
+        // Turn-down collar: a band around the neckband, widening into two points at the front.
+        const za = cb[2] + (y - cb[1]) * ((ct[2] - cb[2]) / (ct[1] - cb[1]));
+        const ang = atan2(ax, z - za);
+        const w = 0.02 + 0.026 * exp(-(((ang - 0.42) / 0.24) ** 2)) - 0.016 * exp(-((ang / 0.1) ** 2));
+        const hc = 0.0055 * sstep(0.003, -0.003, dC - w);
+        if (hc > 0) d = dT - hc;
+      }
+      if (z > 0 && dT < 0.03) {
+        const relief = (dist, height) => height * sstep(0.0038, -0.003, dist);
+        const dome = (r, R, height) => height * sstep(R + 0.0008, R - 0.0016, r) * (0.7 + 0.3 * sqrt(max(0, 1 - (r / R) ** 2)));
+        let H = relief(max(ax - 0.0185, max(HEM + 0.003 - y, y - 1.468)), 0.0028);
+        H = max(H, relief(rect2(ax, y, 0.097, 1.268, 0.05, 0.055, 0.008), 0.003));
+        H = max(H, relief(flap2(ax, y, 0.097, 1.34, 1.312, 0.053, 0.012), 0.0065));
+        H = max(H, relief(rect2(ax, y, 0.1, 0.892, 0.062, 0.08, 0.012), 0.0045));
+        H = max(H, relief(flap2(ax, y, 0.1, 0.995, 0.962, 0.066, 0.013), 0.0085));
+        let hb = dome(sqrt((ax - 0.097) ** 2 + (y - 1.311) ** 2), 0.0072, 0.0115);
+        hb = max(hb, dome(sqrt((ax - 0.1) ** 2 + (y - 0.961) ** 2), 0.0078, 0.0135));
+        for (let i = 0; i < BUTTONS.length; i++) hb = max(hb, dome(sqrt(x * x + (y - BUTTONS[i]) ** 2), 0.0084, 0.0095));
+        const dd = dT - max(H, hb);
+        if (dd < d) d = dd;
+        if (hb > H + 0.0015) { mat = G.BUTTON; col = PAL.button; }
+      }
+    }
+    // Sleeves
+    const ds = min(sleeveL(x, y, z), sleeveR(x, y, z));
+    if (ds < d) { mat = G.SUIT; col = PAL.suit; }
+    d = smin(d, ds, 0.03);
+    // Trousers
+    if (y < 1.02) {
+      let dt = pelvis(x, y, z);
+      dt = smin(dt, legL(x, y, z), 0.04);
+      dt = smin(dt, legR(x, y, z), 0.04);
+      dt = smax(dt, 0.03 - y, 0.004);
+      if (dt < d) { mat = G.SUIT; col = PAL.suit; }
+      d = min(d, dt);
+    }
+    // Shoes
+    if (y < 0.16) {
+      const a = shoeL(x, y, z), b = shoeR(x, y, z);
+      const sole = min(shoeL.state.sole, shoeR.state.sole);
+      const dsh = min(a, b);
+      if (dsh < d || sole < d) { mat = G.SHOE; col = sole < dsh ? PAL.sole : PAL.shoe; }
+      d = min(d, min(dsh, sole));
+    }
+    if (out) { out.m = mat; out.c = col; }
+    return d;
+  }
+  return { field, bmin: [-0.56, -0.004, -0.19], bmax: [0.34, 1.93, 0.26] };
+}
+
+/* ---------------- Figure assembly ---------------- */
+const HAND_R = {
+  curl: [[0.06, 0.1, 0.06], [0.05, 0.1, 0.06], [0.08, 0.12, 0.07], [0.12, 0.16, 0.1]],
+  spread: [0.06, 0.0, -0.05, -0.12],
+  thumbDirs: [[0.6, 0.75, 0.3], [0.48, 0.82, 0.32], [0.34, 0.9, 0.27]],
+  mirror: false,
+};
+const HAND_L = {
+  curl: [[0.3, 0.55, 0.3], [0.32, 0.6, 0.32], [0.36, 0.65, 0.34], [0.42, 0.7, 0.36]],
+  spread: [0.05, 0.0, -0.06, -0.14],
+  thumbDirs: [[0.42, 0.8, 0.45], [0.25, 0.82, 0.55], [0.1, 0.8, 0.62]],
+  mirror: true,
+};
+// grid spacing h, AO step and AO strength per part
+const PARTS = {
+  head: { make: buildHead, h: 0.0015, ao: 0.004, gain: 1.0 },
+  body: { make: buildBody, h: 0.0052, ao: 0.012, gain: 1.35 },
+  handR: { make: () => buildHand(HAND_R), h: 0.0014, ao: 0.004, gain: 1.1 },
+  handL: { make: () => buildHand(HAND_L), h: 0.0014, ao: 0.004, gain: 1.1 },
+};
+function frameFromAxes(Y, Zt) {
+  const y = norm(Y);
+  const z = norm(sub(Zt, scl(y, dot(Zt, y))));
+  const x = cross(y, z);
+  return [x[0], y[0], z[0], x[1], y[1], z[1], x[2], y[2], z[2]];
+}
+// Placement of each part's local frame on the figure: [row-major rotation, position]
+function frameOf(name) {
+  if (name === 'head') return { rot: euler(-0.06, 0, 0).map((v) => v * 1.05), pos: J.HEAD };
+  if (name === 'handR') {
+    const f = norm(sub(J.WR, J.ER));
+    return { rot: frameFromAxes(add(f, [0.05, 0, -0.1]), [-0.3, 0.1, 1]), pos: sub(J.WR, scl(f, 0.004)) };
+  }
+  if (name === 'handL') {
+    const f = norm(sub(J.WL, J.EL));
+    return { rot: frameFromAxes(f, [-1, 0, -0.1]), pos: sub(J.WL, scl(f, 0.004)) };
+  }
+  return { rot: [1, 0, 0, 0, 1, 0, 0, 0, 1], pos: [0, 0, 0] };
+}
+// detail > 1 coarsens every grid by that factor (fewer triangles, faster).
+function buildPart(name, detail = 1) {
+  const t0 = performance.now(), p0 = primitiveCount;
+  const spec = PARTS[name], part = spec.make(), h = spec.h * detail;
+  const raw = polygonize(part.field, part.bmin, part.bmax, h);
+  const mesh = finishMesh(part.field, raw, h, spec.ao, spec.gain);
+  return { name, ...mesh, frame: frameOf(name), primitives: primitiveCount - p0, ms: performance.now() - t0 };
+}
+return { buildPart, partNames: Object.keys(PARTS) };
+}
+
+// Sculpt all parts in parallel workers; fall back to the main thread.
+async function sculpt(detail, onProgress) {
+  const t0 = performance.now();
+  const names = ['head', 'body', 'handR', 'handL'];
+  let done = 0;
+  const finished = (r) => { onProgress(++done / names.length, r.name); return r; };
+  let results;
+  try {
+    const src = `const K = (${sculptKit.toString()})();
+self.onmessage = (e) => {
+  const r = K.buildPart(e.data.name, e.data.detail);
+  self.postMessage(r, [r.position.buffer, r.normal.buffer, r.color.buffer, r.ao.buffer, r.index.buffer]);
+};`;
+    const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    results = await Promise.all(names.map((name) => new Promise((resolve, reject) => {
+      const w = new Worker(url);
+      w.onmessage = (e) => { w.terminate(); resolve(finished(e.data)); };
+      w.onerror = (e) => { w.terminate(); reject(e); };
+      w.postMessage({ name, detail });
+    })));
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    const K = sculptKit();
+    results = [];
+    done = 0;
+    for (const name of names) {
+      await new Promise((r) => setTimeout(r, 16));
+      results.push(finished(K.buildPart(name, detail)));
+    }
+  }
+  const tris = results.reduce((s, r) => s + r.index.length / 3, 0);
+  const primitives = results.reduce((s, r) => s + r.primitives, 0);
+  return { results, tris, primitives, ms: performance.now() - t0 };
+}
+
+/* =====================================================================
+ * Viewer
+ * ===================================================================== */
+const stage = document.getElementById('stage');
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(stage.clientWidth, stage.clientHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+stage.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+scene.environmentIntensity = 0.55;
+
+const PED_H = 0.42;
+const camera = new THREE.PerspectiveCamera(30, stage.clientWidth / stage.clientHeight, 0.05, 60);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 0.45;
+controls.maxDistance = 12;
+controls.maxPolarAngle = Math.PI * 0.53;
+controls.autoRotateSpeed = 0.9;
+
+const hemi = new THREE.HemisphereLight(0xfff4e6, 0x3a302a, 0.55);
+scene.add(hemi);
+const key = new THREE.DirectionalLight(0xfff1e0, 2.6);
+key.position.set(2.2, 4.6, 3.4);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.left = -1.6; key.shadow.camera.right = 1.6;
+key.shadow.camera.top = 3.2; key.shadow.camera.bottom = -0.6;
+key.shadow.camera.near = 0.5; key.shadow.camera.far = 12;
+key.shadow.bias = -0.0004;
+key.shadow.normalBias = 0.012;
+key.target.position.set(0, 1.2, 0);
+scene.add(key, key.target);
+const rim = new THREE.DirectionalLight(0xdfe8ff, 1.3);
+rim.position.set(-3, 3.2, -3.5);
+scene.add(rim);
+const fill = new THREE.DirectionalLight(0xffe6d0, 0.45);
+fill.position.set(-3.5, 1.5, 2.5);
+scene.add(fill);
+
+const ground = new THREE.Mesh(new THREE.CircleGeometry(8, 64), new THREE.ShadowMaterial({ opacity: 0.22 }));
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// Two-tier granite plinth with a gilt inscription
+const granite = new THREE.MeshPhysicalMaterial({ color: 0x3b3431, roughness: 0.5, clearcoat: 0.2, clearcoatRoughness: 0.45, envMapIntensity: 0.5 });
+const plinth = new THREE.Group();
+plinth.name = 'Plinth';
+const tierLow = new THREE.Mesh(new RoundedBoxGeometry(1.12, 0.3, 0.86, 4, 0.02), granite);
+tierLow.name = 'PlinthBase';
+granite.name = 'Granite';
+tierLow.position.y = 0.15;
+const tierHigh = new THREE.Mesh(new RoundedBoxGeometry(0.86, 0.12, 0.64, 4, 0.015), granite);
+tierHigh.name = 'PlinthTop';
+tierHigh.position.y = 0.36;
+for (const m of [tierLow, tierHigh]) { m.castShadow = true; m.receiveShadow = true; plinth.add(m); }
+scene.add(plinth);
+
+async function addInscription() {
+  try { await Promise.race([document.fonts.load('900 150px "Noto Serif SC"', '毛泽东'), new Promise((r) => setTimeout(r, 2500))]); } catch (e) { /* fall back to a system face */ }
+  const cv = document.createElement('canvas');
+  cv.width = 1024; cv.height = 256;
+  const g = cv.getContext('2d');
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.font = '900 150px "Noto Serif SC", "Songti SC", "SimSun", "WenQuanYi Zen Hei", serif';
+  g.fillStyle = '#e8c477';
+  g.fillText('毛 泽 东', 512, 120);
+  g.font = '500 40px "IBM Plex Mono", monospace';
+  g.fillText('1893 — 1976', 512, 222);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  const mat = new THREE.MeshStandardMaterial({ map: tex, transparent: true, metalness: 0.85, roughness: 0.3, polygonOffset: true, polygonOffsetFactor: -2 });
+  mat.name = 'Inscription';
+  const plate = new THREE.Mesh(new THREE.PlaneGeometry(0.72, 0.18), mat);
+  plate.name = 'Inscription';
+  plate.position.set(0, 0.155, 0.4305);
+  plinth.add(plate);
+}
+
+const FINISHES = {
+  painted: null,
+  marble: () => new THREE.MeshPhysicalMaterial({ color: 0xf1eee7, roughness: 0.36, clearcoat: 0.35, clearcoatRoughness: 0.4, vertexColors: true, sheen: 0.3, sheenColor: 0xffffff }),
+  bronze: () => new THREE.MeshStandardMaterial({ color: 0x8a6139, metalness: 1, roughness: 0.42, vertexColors: true }),
+  gold: () => new THREE.MeshStandardMaterial({ color: 0xe2b24e, metalness: 1, roughness: 0.22, vertexColors: true }),
+};
+const painted = [
+  new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.86, sheen: 0.5, sheenRoughness: 0.6, sheenColor: 0x9a9c98 }),
+  new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.52, clearcoat: 0.08, clearcoatRoughness: 0.6, sheen: 0.25, sheenColor: 0xffc9b0 }),
+  new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.42 }),
+  new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.15, clearcoat: 1, clearcoatRoughness: 0.05 }),
+  new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.32, clearcoat: 0.7, clearcoatRoughness: 0.2 }),
+  new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.32, metalness: 0.1 }),
+];
+['Suit', 'Skin', 'Hair', 'Eyes', 'Shoes', 'Buttons'].forEach((n, i) => { painted[i].name = n; });
+const statueCache = {};
+
+const figure = new THREE.Group();
+figure.name = 'MaoZedong';
+figure.position.y = PED_H;
+scene.add(figure);
+const meshes = [];
+
+function buildMesh(m) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(m.position, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(m.normal, 3));
+  const paintedAttr = new THREE.BufferAttribute(m.color, 3);
+  const aoAttr = new THREE.BufferAttribute(m.ao, 3);
+  g.setAttribute('color', paintedAttr);
+  g.userData = { paintedAttr, aoAttr };
+  g.setIndex(new THREE.BufferAttribute(m.index, 1));
+  for (const gr of m.groups) g.addGroup(gr.start, gr.count, gr.mat);
+  g.computeBoundingSphere();
+  const mesh = new THREE.Mesh(g, painted);
+  mesh.name = m.name;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  const r = m.frame.rot, p = m.frame.pos;
+  mesh.matrix.set(r[0], r[1], r[2], p[0], r[3], r[4], r[5], p[1], r[6], r[7], r[8], p[2], 0, 0, 0, 1);
+  mesh.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
+  figure.add(mesh);
+  meshes.push(mesh);
+}
+
+let currentFinish = 'painted';
+function setFinish(name) {
+  currentFinish = name;
+  for (const mesh of meshes) {
+    const g = mesh.geometry;
+    if (name === 'painted') {
+      g.setAttribute('color', g.userData.paintedAttr);
+      mesh.material = painted;
+    } else {
+      g.setAttribute('color', g.userData.aoAttr);
+      statueCache[name] ||= FINISHES[name]();
+      mesh.material = statueCache[name];
+    }
+  }
+  document.querySelectorAll('[data-finish]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.finish === name)));
+}
+
+// Camera views
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const VIEWS = {
+  full: () => {
+    // Far enough to fit the 1.4 m-wide plinth across narrow portrait screens.
+    const aspect = stage.clientWidth / stage.clientHeight;
+    const portrait = aspect < 0.8;
+    const dist = Math.max(6.0, (portrait ? 1.6 : 1.45) / (2 * Math.tan(THREE.MathUtils.degToRad(15)) * aspect));
+    return { target: new THREE.Vector3(0, portrait ? 1.2 : 1.36, 0), pos: new THREE.Vector3(1.55, portrait ? 1.6 : 1.75, dist) };
+  },
+  face: () => ({ target: new THREE.Vector3(0, PED_H + 1.665, 0.03), pos: new THREE.Vector3(0.32, PED_H + 1.72, 0.95) }),
+};
+let tween = null;
+function setView(name, instant = false) {
+  const v = VIEWS[name]();
+  if (instant || reduceMotion) {
+    camera.position.copy(v.pos); controls.target.copy(v.target); controls.update();
+    return;
+  }
+  tween = { t: 0, fromPos: camera.position.clone(), fromTarget: controls.target.clone(), ...v };
+}
+
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+
+setView('full', true);
+renderer.setAnimationLoop(() => {
+  if (tween) {
+    tween.t = Math.min(1, tween.t + 1 / 50);
+    const e = tween.t < 0.5 ? 4 * tween.t ** 3 : 1 - (-2 * tween.t + 2) ** 3 / 2;
+    camera.position.lerpVectors(tween.fromPos, tween.pos, e);
+    controls.target.lerpVectors(tween.fromTarget, tween.target, e);
+    if (tween.t >= 1) tween = null;
+  }
+  controls.update();
+  renderer.render(scene, camera);
+});
+
+// UI wiring
+document.querySelectorAll('[data-finish]').forEach((b) => b.addEventListener('click', () => setFinish(b.dataset.finish)));
+document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+const turntable = document.getElementById('turntable');
+turntable.addEventListener('click', () => {
+  controls.autoRotate = !controls.autoRotate;
+  turntable.setAttribute('aria-pressed', String(controls.autoRotate));
+});
+
+const loadingText = document.getElementById('loading-text');
+const loadingBar = document.getElementById('loading-bar');
+addInscription();
+const LABELS = { head: 'Head finished', body: 'Suit finished', handR: 'Right hand finished', handL: 'Left hand finished' };
+// Phones get a coarser sculpt; ?detail=1.5 also works for lighter exports.
+const detailParam = parseFloat(new URLSearchParams(location.search).get('detail'));
+const detail = detailParam > 0 ? detailParam : window.matchMedia('(max-width: 640px)').matches ? 1.3 : 1;
+const built = await sculpt(detail, (p, name) => { loadingText.textContent = `${LABELS[name]}…`; loadingBar.style.width = `${Math.round(p * 100)}%`; });
+for (const r of built.results) buildMesh(r);
+document.getElementById('loading').hidden = true;
+document.getElementById('dock').hidden = false;
+document.getElementById('stats').innerHTML =
+  `${built.tris.toLocaleString('en-US')} triangles<br>${built.primitives} SDF primitives<br>sculpted in ${(built.ms / 1000).toFixed(1)} s`;
+if (!reduceMotion) { controls.autoRotate = true; turntable.setAttribute('aria-pressed', 'true'); }
+
+window.__mao = { THREE, scene, camera, controls, renderer, figure, plinth, setFinish, setView, built };
+window.__maoReady = true;
+</script>
+</body>
+</html>
