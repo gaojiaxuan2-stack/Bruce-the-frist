@@ -14,27 +14,34 @@ jobs:
   test:
     name: Build & test on iOS Simulator
     runs-on: macos-15
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show Xcode version
+      - name: Show default Xcode
         run: xcodebuild -version
 
-      - name: Pick an iPhone simulator
+      - name: Pick Xcode and iPhone simulator
         id: simulator
-        run: |
-          set -euo pipefail
-          xcodebuild -showdestinations -project Unhook.xcodeproj -scheme Unhook | tee destinations.txt
-          DEST_ID=$(grep "platform:iOS Simulator" destinations.txt | grep "name:iPhone" | head -1 | sed -E 's/.*id:([^,]+),.*/\1/')
-          if [ -z "$DEST_ID" ]; then
-            echo "No iPhone simulator available" >&2
-            exit 1
-          fi
-          echo "Using simulator $DEST_ID"
-          echo "id=$DEST_ID" >> "$GITHUB_OUTPUT"
+        # Keep going so the compile step below still reports errors if no simulator is available.
+        continue-on-error: true
+        run: .github/scripts/pick-simulator.sh
 
-      - name: Build and run unit tests
+      - name: Compile app and tests
+        run: |
+          set +e
+          xcodebuild -version
+          xcodebuild build-for-testing \
+            -project Unhook.xcodeproj \
+            -scheme Unhook \
+            -destination "generic/platform=iOS Simulator" \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee xcodebuild-compile.log | grep -E "error:|warning:|\*\* (BUILD|TEST BUILD)"
+          status=${PIPESTATUS[0]}
+          exit "$status"
+
+      - name: Run unit tests
+        if: steps.simulator.outputs.id != ''
         run: |
           set +e
           xcodebuild test \
@@ -43,14 +50,25 @@ jobs:
             -destination "id=${{ steps.simulator.outputs.id }}" \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
-            2>&1 | tee xcodebuild-test.log | grep -E "error:|warning:|Test (Suite|Case|case|run)|✔|✘|\*\* TEST"
+            2>&1 | tee xcodebuild-test.log | grep -E "error:|Test (Suite|Case|case|run)|✔|✘|\*\* TEST"
           # grep only trims the log; the step's result is xcodebuild's exit status.
           status=${PIPESTATUS[0]}
           exit "$status"
 
-      - name: Build for device (Release)
+      - name: Fail if tests could not run
+        if: steps.simulator.outputs.id == ''
+        run: |
+          echo "No iPhone simulator was available, so the unit tests did not run." >&2
+          exit 1
+
+      - name: Build for device with the runner's default Xcode (Release)
+        if: ${{ !cancelled() }}
+        env:
+          DEFAULT_DEVELOPER_DIR: ${{ steps.simulator.outputs.default_developer_dir }}
         run: |
           set +e
+          if [ -n "$DEFAULT_DEVELOPER_DIR" ]; then export DEVELOPER_DIR="$DEFAULT_DEVELOPER_DIR"; fi
+          xcodebuild -version
           xcodebuild build \
             -project Unhook.xcodeproj \
             -scheme Unhook \
