@@ -111,7 +111,7 @@ struct HabitDetailView: View {
                 StatTile(title: "Money saved", value: MoneyFormatter.rounded(stats.moneySaved, code: currencyCode), systemImage: "banknote.fill", tint: .green)
                 StatTile(title: "Time reclaimed", value: DurationFormatter.minutes(stats.minutesReclaimed), systemImage: "clock.fill", tint: .blue)
                 if habit.unitsPerDay > 0 {
-                    StatTile(title: unitsTitle, value: Int(stats.unitsAvoided).formatted(), systemImage: "xmark.circle.fill", tint: .orange)
+                    StatTile(title: unitsTitle, value: stats.unitsAvoided.clampedWholeNumber.formatted(), systemImage: "xmark.circle.fill", tint: .orange)
                 }
                 StatTile(title: "Best streak", value: DurationFormatter.compact(stats.bestStreak), systemImage: "trophy.fill", tint: .yellow)
                 StatTile(title: "Cravings beaten", value: "\(habit.resistedUrgeCount)", systemImage: "shield.lefthalf.filled", tint: .purple)

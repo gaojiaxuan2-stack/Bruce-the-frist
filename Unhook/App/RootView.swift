@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 struct RootView: View {
     @AppStorage(AppSettings.Keys.hasOnboarded) private var hasOnboarded = false
@@ -22,6 +23,9 @@ struct RootView: View {
 }
 
 struct MainTabView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @Query private var habits: [Habit]
+
     var body: some View {
         TabView {
             HomeView()
@@ -30,6 +34,13 @@ struct MainTabView: View {
                 .tabItem { Label("Progress", systemImage: "chart.bar.xaxis") }
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
+        }
+        // Only the next few milestone alerts are scheduled at a time, so top them up whenever the app opens.
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            guard phase == .active else { return }
+            for habit in habits {
+                NotificationManager.scheduleMilestones(for: habit)
+            }
         }
     }
 }

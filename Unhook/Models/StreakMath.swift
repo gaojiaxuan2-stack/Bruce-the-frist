@@ -1,5 +1,13 @@
 import Foundation
 
+extension Calendar {
+    /// Start of the day before the day that starts at `dayStart`. Steps back one second rather than one
+    /// calendar day, because in time zones that switch to daylight saving at midnight some days start at 01:00.
+    func startOfPreviousDay(before dayStart: Date) -> Date {
+        startOfDay(for: dayStart.addingTimeInterval(-1))
+    }
+}
+
 enum StreakCalculator {
     /// Consecutive days with at least one entry, ending today. Today still counts as "in progress",
     /// so a streak that ended yesterday stays alive until the day is over.
@@ -8,17 +16,14 @@ enum StreakCalculator {
         var cursor = calendar.startOfDay(for: now)
 
         if !days.contains(cursor) {
-            guard let yesterday = calendar.date(byAdding: .day, value: -1, to: cursor), days.contains(yesterday) else {
-                return 0
-            }
-            cursor = yesterday
+            cursor = calendar.startOfPreviousDay(before: cursor)
+            guard days.contains(cursor) else { return 0 }
         }
 
         var count = 0
         while days.contains(cursor) {
             count += 1
-            guard let previous = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
-            cursor = previous
+            cursor = calendar.startOfPreviousDay(before: cursor)
         }
         return count
     }
@@ -34,14 +39,17 @@ struct DayCount: Identifiable, Equatable {
 enum DailyCounts {
     /// One entry per day for the last `days` days (oldest first), including days with zero entries.
     static func make(from dates: [Date], days: Int, now: Date = .now, calendar: Calendar = .current) -> [DayCount] {
-        let today = calendar.startOfDay(for: now)
         var counts: [Date: Int] = [:]
         for date in dates {
             counts[calendar.startOfDay(for: date), default: 0] += 1
         }
-        return (0..<days).reversed().compactMap { offset in
-            guard let day = calendar.date(byAdding: .day, value: -offset, to: today) else { return nil }
-            return DayCount(day: day, count: counts[day] ?? 0)
+
+        var result: [DayCount] = []
+        var day = calendar.startOfDay(for: now)
+        for _ in 0..<max(days, 0) {
+            result.append(DayCount(day: day, count: counts[day] ?? 0))
+            day = calendar.startOfPreviousDay(before: day)
         }
+        return result.reversed()
     }
 }

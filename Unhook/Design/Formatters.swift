@@ -1,5 +1,14 @@
 import Foundation
 
+extension Double {
+    /// This value as a whole number in 0...1e15. Clamps before converting because `Int(Double)`
+    /// traps on huge or non-finite values.
+    var clampedWholeNumber: Int {
+        guard !isNaN else { return 0 }
+        return Int(min(max(self, 0), 1e15))
+    }
+}
+
 enum DurationFormatter {
     struct Parts: Equatable {
         let days: Int
@@ -9,7 +18,7 @@ enum DurationFormatter {
     }
 
     static func parts(_ interval: TimeInterval) -> Parts {
-        let total = max(0, Int(interval))
+        let total = interval.clampedWholeNumber
         return Parts(
             days: total / 86_400,
             hours: (total % 86_400) / 3_600,
@@ -37,7 +46,7 @@ enum DurationFormatter {
 
     /// Time reclaimed, given in minutes: "45m", "2h 5m", "1d 1h".
     static func minutes(_ minutes: Double) -> String {
-        let total = max(0, Int(minutes))
+        let total = minutes.clampedWholeNumber
         let days = total / 1_440
         let hours = (total % 1_440) / 60
         let mins = total % 60

@@ -47,16 +47,22 @@ struct HabitDraft {
             .filter { !$0.isEmpty }
     }
 
-    /// Parses user input like "12", "12.5" or "12,5". Anything unreadable counts as zero.
-    static func parse(_ text: String) -> Double {
+    /// Minutes in a day: the most time a habit can take per day.
+    static let maxDailyMinutes: Double = 1_440
+
+    /// Parses user input like "12", "12.5" or "12,5" into 0...upperBound. Anything unreadable, including
+    /// "inf", counts as zero; the cap keeps a run of digits from producing totals too big to display.
+    static func parse(_ text: String, upTo upperBound: Double = 1_000_000) -> Double {
         let cleaned = text
             .trimmingCharacters(in: .whitespaces)
             .replacingOccurrences(of: ",", with: ".")
-        return max(0, Double(cleaned) ?? 0)
+        guard let value = Double(cleaned), value.isFinite else { return 0 }
+        return min(max(0, value), upperBound)
     }
 
     static func format(_ value: Double) -> String {
-        guard value > 0 else { return "" }
-        return value.rounded() == value ? String(Int(value)) : String(value)
+        guard value.isFinite, value > 0 else { return "" }
+        if let whole = Int(exactly: value) { return String(whole) }
+        return String(value)
     }
 }

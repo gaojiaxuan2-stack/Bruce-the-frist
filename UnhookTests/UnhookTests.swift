@@ -5,6 +5,23 @@ import Testing
 
 private let day: TimeInterval = 86_400
 
+/// A calendar in a time zone that springs forward at midnight, and noon on that day (which starts at 01:00).
+private func midnightDaylightSavingDay() -> (calendar: Calendar, noon: Date)? {
+    for identifier in ["America/Santiago", "America/Havana", "Asia/Beirut"] {
+        guard let zone = TimeZone(identifier: identifier) else { continue }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        guard let firstNoon = calendar.date(from: DateComponents(year: 2023, month: 1, day: 1, hour: 12)) else { continue }
+        for offset in 0..<365 {
+            guard let noon = calendar.date(byAdding: .day, value: offset, to: firstNoon) else { continue }
+            if calendar.component(.hour, from: calendar.startOfDay(for: noon)) != 0 {
+                return (calendar, noon)
+            }
+        }
+    }
+    return nil
+}
+
 struct MilestoneTests {
     @Test func nextMilestoneIsFirstUnreached() {
         #expect(Milestone.next(after: 0)?.title == "1 Hour")
@@ -136,6 +153,19 @@ struct StreakCalculatorTests {
         #expect(StreakCalculator.consecutiveDays([dayOffset(0), dayOffset(0), dayOffset(-1)], now: now, calendar: calendar) == 2)
     }
 
+    @Test func streakSurvivesMidnightDaylightSavingChange() throws {
+        let (calendar, noon) = try #require(midnightDaylightSavingDay())
+        let dates = (-2...1).map { calendar.date(byAdding: .day, value: $0, to: noon)! }
+        #expect(StreakCalculator.consecutiveDays(dates, now: dates[3], calendar: calendar) == 4)
+    }
+
+    @Test func dailyCountsHandleMidnightDaylightSavingChange() throws {
+        let (calendar, noon) = try #require(midnightDaylightSavingDay())
+        let dayBefore = calendar.date(byAdding: .day, value: -1, to: noon)!
+        let counts = DailyCounts.make(from: [dayBefore, dayBefore, noon], days: 3, now: noon, calendar: calendar)
+        #expect(counts.map(\.count) == [0, 2, 1])
+    }
+
     @Test func dailyCountsFillMissingDays() {
         let counts = DailyCounts.make(from: [dayOffset(0), dayOffset(0), dayOffset(-2)], days: 4, now: now, calendar: calendar)
         #expect(counts.map(\.count) == [0, 1, 0, 2])
@@ -185,6 +215,24 @@ struct FormattingTests {
         #expect(HabitDraft.parse(" 8 ") == 8)
         #expect(HabitDraft.parse("abc") == 0)
         #expect(HabitDraft.parse("-4") == 0)
+    }
+
+    @Test func draftRejectsHugeAndNonFiniteNumbers() {
+        #expect(HabitDraft.parse("99999999999999999999") == 1_000_000)
+        #expect(HabitDraft.parse("inf") == 0)
+        #expect(HabitDraft.parse("2000", upTo: HabitDraft.maxDailyMinutes) == 1_440)
+        #expect(HabitDraft.format(.infinity) == "")
+        #expect(HabitDraft.format(1e20) == "1e+20")
+        #expect(HabitDraft.format(2.5) == "2.5")
+    }
+
+    @Test func formattersNeverTrapOnExtremeValues() {
+        #expect(DurationFormatter.minutes(.nan) == "0m")
+        #expect(DurationFormatter.minutes(-30) == "0m")
+        #expect(DurationFormatter.compact(.nan) == "0s")
+        #expect(!DurationFormatter.minutes(.infinity).isEmpty)
+        #expect(Double.infinity.clampedWholeNumber == 1_000_000_000_000_000)
+        #expect(Double(1e20).clampedWholeNumber == 1_000_000_000_000_000)
     }
 
     @Test func draftFromPresetCarriesDefaults() {

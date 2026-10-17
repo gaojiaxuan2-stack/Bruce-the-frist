@@ -198,7 +198,7 @@ struct HabitFormView: View {
         habit.emoji = draft.emoji.isEmpty ? "✨" : draft.emoji
         habit.theme = draft.theme
         habit.dailyCost = HabitDraft.parse(draft.costText)
-        habit.dailyMinutes = HabitDraft.parse(draft.minutesText)
+        habit.dailyMinutes = HabitDraft.parse(draft.minutesText, upTo: HabitDraft.maxDailyMinutes)
         habit.unitsPerDay = HabitDraft.parse(draft.unitsText)
         habit.unitName = draft.unitName.trimmingCharacters(in: .whitespacesAndNewlines)
         habit.reasons = draft.cleanedReasons
