@@ -1,0 +1,679 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Elon Musk 3D Figure</title>
+<meta name="description" content="A stylized, interactive 3D figurine of Elon Musk built with Three.js.">
+<style>
+  :root {
+    --bg: #05060d;
+    --panel: rgba(16, 18, 30, 0.72);
+    --border: rgba(255, 255, 255, 0.12);
+    --text: #eef0f7;
+    --muted: #9aa0b4;
+    --accent: #ff7a45;
+    --accent-ink: #1a0d06;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  canvas { display: block; touch-action: none; }
+  #panel {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    max-width: calc(100% - 32px);
+    padding: 14px 16px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  h1 { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: 0.2px; }
+  .sub { margin: 2px 0 12px; color: var(--muted); font-size: 13px; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+  button {
+    appearance: none;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text);
+    padding: 7px 12px;
+    border-radius: 8px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:hover { background: rgba(255, 255, 255, 0.12); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  #hint {
+    position: fixed;
+    bottom: 16px;
+    left: 16px;
+    right: 16px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    pointer-events: none;
+  }
+  #status {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    text-align: center;
+    color: var(--muted);
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="panel">
+  <h1>Elon Musk</h1>
+  <p class="sub">Stylized 3D figurine · Three.js</p>
+  <div class="buttons">
+    <button id="wave" aria-pressed="false">Wave</button>
+    <button id="spin" aria-pressed="false">Auto-rotate</button>
+    <button id="reset">Reset view</button>
+    <button id="download">Download .glb</button>
+  </div>
+</div>
+<div id="hint">Drag to orbit · Scroll or pinch to zoom · Right-drag to pan</div>
+<div id="status">Loading 3D model…</div>
+<script>
+  // The scene needs Three.js from the jsDelivr CDN; say so if it never arrives.
+  setTimeout(() => {
+    const el = document.getElementById('status');
+    if (el) el.textContent = 'Could not load Three.js from cdn.jsdelivr.net. Check your internet connection and reload.';
+  }, 20000);
+</script>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+
+const { clamp, lerp } = THREE.MathUtils;
+const V = (x, y, z) => new THREE.Vector3(x, y, z);
+// Smooth Hermite ramp from a to b; works for descending ranges (a > b) too.
+const ramp = (a, b, x) => {
+  const t = clamp((x - a) / (b - a), 0, 1);
+  return t * t * (3 - 2 * t);
+};
+const gauss = (d2, s) => Math.exp(-d2 / (2 * s * s));
+
+// Deterministic randomness so every load (and every export) is identical.
+function mulberry32(seed) {
+  return () => {
+    seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const rand = mulberry32(20260617);
+
+// ---------------------------------------------------------------- materials
+
+const mat = (name, color, roughness = 0.6, metalness = 0, extra = {}) =>
+  new THREE.MeshStandardMaterial({ name, color, roughness, metalness, envMapIntensity: 0.7, ...extra });
+
+const M = {
+  skin: mat('Skin', 0xe8b898, 0.52),
+  skinShade: mat('SkinShade', 0xdaa587, 0.6),
+  lip: mat('Lip', 0xc27a6a, 0.45),
+  mouth: mat('MouthLine', 0x6a2e29, 0.6),
+  nostril: mat('Nostril', 0x5a2f27, 0.8),
+  hair: mat('Hair', 0x3b2b21, 0.72),
+  brow: mat('Brow', 0x2e2119, 0.8),
+  eyeWhite: mat('EyeWhite', 0xf3efe9, 0.2),
+  iris: mat('Iris', 0x58798c, 0.25),
+  pupil: mat('Pupil', 0x0c0c0f, 0.15),
+  tee: mat('Tee', 0x1a1b20, 0.88),
+  teeRib: mat('TeeRib', 0x24262c, 0.9),
+  jeans: mat('Jeans', 0x2b3851, 0.82),
+  shoe: mat('Shoe', 0x121214, 0.38),
+  sole: mat('Sole', 0x2c2c30, 0.8),
+  mars: mat('MarsSoil', 0xb4532f, 0.95),
+  crater: mat('Crater', 0x7c331f, 0.97),
+  rock: mat('Rock', 0x6b2d1c, 0.9, 0, { flatShading: true }),
+  steel: mat('Steel', 0xd0d4db, 0.26, 1, { envMapIntensity: 1.1 }),
+  steelDark: mat('SteelDark', 0x80868f, 0.38, 1),
+  engine: mat('Engine', 0x2a2c31, 0.45, 0.8),
+  plaque: mat('Plaque', 0x1c1e24, 0.4, 0.3),
+};
+
+const sphere = new THREE.SphereGeometry(1, 32, 20);
+
+function mesh(geometry, material, parent, { name, pos, rot, scale } = {}) {
+  const m = new THREE.Mesh(geometry, material);
+  if (name) m.name = name;
+  if (pos) m.position.set(...pos);
+  if (rot) m.rotation.set(...rot);
+  if (scale) m.scale.set(...scale);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  if (parent) parent.add(m);
+  return m;
+}
+
+function group(name, parent, pos) {
+  const g = new THREE.Group();
+  g.name = name;
+  if (pos) g.position.set(...pos);
+  if (parent) parent.add(g);
+  return g;
+}
+
+// Displace a unit sphere vertex by vertex. `shape` maps a unit direction to a point.
+function sculpt(shape, widthSegments = 160, heightSegments = 120) {
+  let g = new THREE.SphereGeometry(1, widthSegments, heightSegments);
+  g.deleteAttribute('uv');
+  g.deleteAttribute('normal');
+  g = mergeVertices(g); // weld the UV seam so normals stay smooth
+  const p = g.attributes.position;
+  const d = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    d.fromBufferAttribute(p, i).normalize();
+    const out = shape(d);
+    p.setXYZ(i, out.x, out.y, out.z);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
+// A tube whose radius tapers toward both ends (eyebrows, lips).
+function taperedTube(points, radius, taper = (t) => Math.sin(Math.PI * (0.12 + 0.76 * t))) {
+  const curve = new THREE.CatmullRomCurve3(points);
+  const tubular = 32;
+  const radial = 10;
+  const g = new THREE.TubeGeometry(curve, tubular, radius, radial, false);
+  const p = g.attributes.position;
+  const v = new THREE.Vector3();
+  for (let i = 0; i <= tubular; i++) {
+    const t = i / tubular;
+    const c = curve.getPointAt(t);
+    const k = taper(t);
+    for (let j = 0; j <= radial; j++) {
+      const idx = i * (radial + 1) + j;
+      v.fromBufferAttribute(p, idx).sub(c).multiplyScalar(k).add(c);
+      p.setXYZ(idx, v.x, v.y, v.z);
+    }
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
+// --------------------------------------------------------------------- head
+// Everything on the head is modelled in "unit" space (skull radius ≈ 1) and
+// the whole head group is scaled down afterwards.
+
+const HEAD_SCALE = V(0.8, 1.12, 0.97);
+
+function skull(d) {
+  const { x, y, z } = d;
+  const front = ramp(0.45, 0.95, z);
+  let r = 1;
+  r += 0.055 * gauss((y - 0.3) ** 2, 0.08) * front;                    // brow ridge
+  r -= 0.09 * (gauss(d.distanceToSquared(V(0.34, 0.08, 0.94).normalize()), 0.11) +
+               gauss(d.distanceToSquared(V(-0.34, 0.08, 0.94).normalize()), 0.11)); // eye sockets
+  r += 0.035 * (gauss(d.distanceToSquared(V(0.55, -0.1, 0.83).normalize()), 0.14) +
+                gauss(d.distanceToSquared(V(-0.55, -0.1, 0.83).normalize()), 0.14)); // cheekbones
+  r += 0.06 * (gauss(d.distanceToSquared(V(0.72, -0.55, 0.42).normalize()), 0.2) +
+               gauss(d.distanceToSquared(V(-0.72, -0.55, 0.42).normalize()), 0.2)); // strong jaw corners
+  r += 0.14 * gauss(d.distanceToSquared(V(0, -0.68, 0.73).normalize()), 0.17);        // chin
+  r += 0.04 * gauss(d.distanceToSquared(V(0, -0.47, 0.88).normalize()), 0.12);        // mouth area
+  if (z > 0) {                                                                       // straight, prominent nose
+    const rise = ramp(0.2, -0.14, y);
+    const cut = 1 - ramp(-0.21, -0.3, y);
+    const tip = 0.06 * gauss((y + 0.17) ** 2, 0.06);
+    const width = 0.06 + 0.075 * ramp(0.02, -0.2, y);
+    r += (0.22 * rise + tip) * cut * gauss(x * x, width) * ramp(0.5, 0.9, z);
+  }
+  const p = d.clone().multiplyScalar(r);
+  const below = clamp(-y, 0, 1);
+  p.x *= 1 - 0.2 * below ** 1.6;                  // jaw tapers toward a squared chin
+  if (p.y < -0.84) p.y = -0.84 + (p.y + 0.84) * 0.45; // flatter underside of the jaw
+  if (p.z > 0) p.z *= 1 + 0.08 * below;            // lower face sits forward
+  else p.z *= 1.06 - 0.4 * ramp(-0.3, -0.95, y);   // fuller skull, tucked in at the nape
+  return p.multiply(HEAD_SCALE);
+}
+
+// [around (0 = forehead … 1 = nape), height of hairline]
+const HAIRLINE = [
+  [0.0, 0.56], [0.08, 0.55], [0.16, 0.46], [0.26, 0.4], [0.34, 0.24], [0.4, 0.08],
+  [0.42, -0.02], [0.45, -0.02], [0.5, 0.2], [0.59, 0.14], [0.64, -0.3], [0.72, -0.62], [0.85, -0.72], [1.0, -0.76],
+];
+function hairlineAt(a) {
+  for (let i = 1; i < HAIRLINE.length; i++) {
+    const [a1, y1] = HAIRLINE[i];
+    const [a0, y0] = HAIRLINE[i - 1];
+    if (a <= a1) return lerp(y0, y1, (a - a0) / (a1 - a0));
+  }
+  return HAIRLINE[HAIRLINE.length - 1][1];
+}
+
+function hair(d) {
+  const a = Math.abs(Math.atan2(d.x, d.z)) / Math.PI;
+  const line = hairlineAt(a);
+  const grow = ramp(line - 0.05, line + 0.05, d.y);
+  const inner = ramp(line, line + 0.3, d.y);        // thin at the hairline, fuller further in
+  const top = ramp(0.3, 0.8, d.y);
+  let thick = 0.022 + 0.03 * inner;                  // short back and sides
+  const sides = 1 - 0.55 * ramp(0.45, 0.85, Math.abs(d.x));
+  thick += 0.13 * ramp(0.25, 0.75, d.y) * inner * sides; // volume on top
+  thick += 0.1 * gauss(d.distanceToSquared(V(0, 0.8, 0.6).normalize()), 0.3) * inner; // swept-up front
+  // Combed-back strands: ridges run front-to-back over the top and along the sides.
+  const comb = Math.sin(d.x * 22 + Math.sin(d.z * 3) * 1.5) * top + 0.5 * Math.sin(d.y * 30 - d.z * 6) * (1 - top);
+  thick *= 1 + 0.06 * comb * inner;
+  const n = V(d.x / HEAD_SCALE.x, d.y / HEAD_SCALE.y, d.z / HEAD_SCALE.z).normalize();
+  // Outside the hairline the shell sinks just under the skin, so it stays hidden.
+  return skull(d).addScaledVector(n, grow * thick - (1 - grow) * 0.03);
+}
+
+function buildHead() {
+  const head = group('Head');
+  const skin = mesh(sculpt(skull), M.skin, head, { name: 'Face' });
+
+  const ray = new THREE.Raycaster();
+  // Find the face surface by shooting a ray at the freshly built (untransformed) mesh.
+  const surface = (x, y, from = V(0, 0, 1)) => {
+    ray.set(V(x, y, 0).addScaledVector(from, 5), from.clone().negate());
+    const hit = ray.intersectObject(skin, false)[0];
+    return { point: hit.point.clone(), normal: hit.face.normal.clone() };
+  };
+  const onFace = (x, y, lift) => {
+    const s = surface(x, y);
+    return s.point.addScaledVector(s.normal, lift);
+  };
+
+  mesh(sculpt(hair, 192, 144), M.hair, head, { name: 'Hair' });
+
+  // Eyes: deep-set, slightly hooded, blue-grey.
+  const eyes = [];
+  for (const s of [-1, 1]) {
+    const eye = group(s < 0 ? 'Eye_R' : 'Eye_L', head);
+    eye.position.copy(surface(s * 0.34, 0.06).point).add(V(0, 0, -0.05));
+    const ball = group('Ball', eye);
+    mesh(sphere, M.eyeWhite, ball, { scale: [0.1, 0.068, 0.06] });
+    mesh(sphere, M.iris, ball, { pos: [s * -0.006, -0.002, 0.051], scale: [0.05, 0.05, 0.016] });
+    mesh(sphere, M.pupil, ball, { pos: [s * -0.006, -0.002, 0.063], scale: [0.024, 0.024, 0.008] });
+    mesh(sphere, M.eyeWhite, ball, { pos: [s * -0.022, 0.016, 0.068], scale: [0.009, 0.009, 0.005] });
+    const lidGeo = new THREE.SphereGeometry(1, 28, 12, 0, Math.PI * 2, 0, Math.PI * 0.36);
+    mesh(lidGeo, M.skin, eye, { name: 'Lid', rot: [0.18, 0, 0], scale: [0.112, 0.078, 0.07] });
+    eyes.push(ball);
+  }
+
+  // Straight, fairly thick brows with a slight drop at the outer ends.
+  for (const s of [-1, 1]) {
+    const pts = [[0.1, 0.25], [0.22, 0.285], [0.36, 0.29], [0.5, 0.245]].map(([x, y]) => onFace(s * x, y, 0.012));
+    mesh(taperedTube(pts, 0.036), M.brow, head, { name: s < 0 ? 'Brow_R' : 'Brow_L' });
+  }
+
+  // Closed-mouth half-smile, a touch higher on one side.
+  const mouthPts = [[-0.25, -0.445], [-0.13, -0.47], [0, -0.475], [0.13, -0.465], [0.26, -0.432]];
+  mesh(taperedTube(mouthPts.map(([x, y]) => onFace(x, y, -0.01)), 0.02), M.mouth, head, { name: 'Mouth' });
+  const lipPts = [[-0.15, -0.52], [0, -0.535], [0.15, -0.518]];
+  mesh(taperedTube(lipPts.map(([x, y]) => onFace(x, y, -0.02)), 0.034, (t) => Math.sin(Math.PI * t) ** 0.6),
+    M.lip, head, { name: 'LowerLip' });
+
+  // Nostrils, tucked under the tip of the nose.
+  const tipZ = surface(0, -0.2).point.z;
+  for (const s of [-1, 1]) {
+    ray.set(V(s * 0.055, -0.45, tipZ - 0.07), V(0, 1, 0));
+    const p = ray.intersectObject(skin, false)[0].point;
+    mesh(sphere, M.nostril, head, { pos: [p.x, p.y + 0.004, p.z], scale: [0.026, 0.01, 0.034] });
+  }
+
+  // Ears.
+  for (const s of [-1, 1]) {
+    const ear = group(s < 0 ? 'Ear_R' : 'Ear_L', head);
+    ear.position.copy(surface(0, -0.02, V(s, 0, -0.08).normalize()).point).add(V(s * -0.02, 0, -0.06));
+    ear.rotation.set(0, s * -0.35, s * -0.06);
+    mesh(sphere, M.skin, ear, { scale: [0.07, 0.23, 0.15] });
+    mesh(sphere, M.skinShade, ear, { pos: [s * 0.022, 0.01, 0.01], scale: [0.05, 0.17, 0.1] });
+  }
+
+  head.scale.setScalar(0.27);
+  return { head, eyes };
+}
+
+// --------------------------------------------------------------------- body
+
+function buildArm(parent, s) {
+  const shoulder = group(s < 0 ? 'Arm_R' : 'Arm_L', parent, [s * 0.29, 1.33, 0]);
+  mesh(sphere, M.tee, shoulder, { scale: [0.105, 0.1, 0.1] });
+  mesh(new THREE.CylinderGeometry(0.1, 0.093, 0.25, 28), M.tee, shoulder, { name: 'Sleeve', pos: [0, -0.115, 0] });
+  mesh(new THREE.TorusGeometry(0.093, 0.011, 8, 28), M.teeRib, shoulder, { pos: [0, -0.24, 0], rot: [Math.PI / 2, 0, 0] });
+  mesh(new THREE.CapsuleGeometry(0.062, 0.2, 8, 18), M.skin, shoulder, { name: 'UpperArm', pos: [0, -0.2, 0] });
+  const elbow = group('Elbow', shoulder, [0, -0.33, 0]);
+  mesh(sphere, M.skin, elbow, { scale: [0.06, 0.06, 0.06] });
+  mesh(new THREE.CapsuleGeometry(0.055, 0.22, 8, 18), M.skin, elbow, { name: 'Forearm', pos: [0, -0.14, 0] });
+  const hand = group('Hand', elbow, [0, -0.3, 0]);
+  mesh(sphere, M.skin, hand, { pos: [0, -0.045, 0], scale: [0.056, 0.078, 0.034] });
+  mesh(new THREE.CapsuleGeometry(0.018, 0.05, 6, 10), M.skin, hand, {
+    name: 'Thumb', pos: [s * -0.02, -0.03, 0.04], rot: [0.5, 0, s * 0.3],
+  });
+  shoulder.rotation.z = s * 0.1;
+  return { shoulder, elbow, hand };
+}
+
+function buildFigure() {
+  const figure = group('ElonMusk');
+  const body = group('Body', figure);
+
+  // Black crew-neck tee.
+  const torsoProfile = [
+    [0, 0], [0.25, 0], [0.26, 0.08], [0.265, 0.25], [0.29, 0.41], [0.305, 0.49],
+    [0.29, 0.55], [0.2, 0.61], [0.1, 0.635], [0, 0.635],
+  ].map(([r, y]) => new THREE.Vector2(r, y));
+  const torso = mesh(new THREE.LatheGeometry(torsoProfile, 56), M.tee, body, {
+    name: 'Torso', pos: [0, 0.84, 0], scale: [1, 1, 0.64],
+  });
+  mesh(new THREE.TorusGeometry(0.25, 0.012, 8, 56), M.teeRib, body, {
+    name: 'Hem', pos: [0, 0.845, 0], rot: [Math.PI / 2, 0, 0], scale: [1, 0.64, 1],
+  });
+  mesh(new THREE.TorusGeometry(0.098, 0.02, 10, 36), M.teeRib, body, {
+    name: 'Collar', pos: [0, 1.465, 0.008], rot: [Math.PI / 2 - 0.12, 0, 0], scale: [1, 0.9, 1],
+  });
+  mesh(new THREE.CylinderGeometry(0.09, 0.097, 0.26, 28), M.skin, body, { name: 'Neck', pos: [0, 1.53, 0.0] });
+
+  // Dark jeans and black shoes.
+  mesh(sphere, M.jeans, body, { name: 'Hips', pos: [0, 0.85, 0], scale: [0.255, 0.13, 0.17] });
+  for (const s of [-1, 1]) {
+    const leg = group(s < 0 ? 'Leg_R' : 'Leg_L', body, [s * 0.125, 0, 0]);
+    mesh(new THREE.CylinderGeometry(0.106, 0.088, 0.74, 28), M.jeans, leg, { pos: [0, 0.49, 0] });
+    mesh(new THREE.TorusGeometry(0.088, 0.01, 8, 28), M.jeans, leg, { pos: [0, 0.125, 0], rot: [Math.PI / 2, 0, 0] });
+    mesh(new RoundedBoxGeometry(0.17, 0.1, 0.32, 4, 0.045), M.shoe, leg, { name: 'Shoe', pos: [0, 0.065, 0.05] });
+    mesh(new RoundedBoxGeometry(0.178, 0.035, 0.33, 2, 0.015), M.sole, leg, { name: 'Sole', pos: [0, 0.0175, 0.05] });
+  }
+
+  const arms = { R: buildArm(body, -1), L: buildArm(body, 1) };
+
+  const { head, eyes } = buildHead();
+  const headPivot = group('HeadPivot', body, [0, 1.6, 0]);
+  head.position.set(0, 0.215, 0.012);
+  headPivot.add(head);
+
+  return { figure, torso, headPivot, eyes, arms };
+}
+
+// ------------------------------------------------------------ base & rocket
+
+function buildBase() {
+  const base = group('MarsBase');
+  mesh(new THREE.CylinderGeometry(1.6, 1.6, 0.26, 96), M.mars, base, { name: 'Ground', pos: [0, -0.13, 0] });
+  mesh(new THREE.TorusGeometry(1.6, 0.025, 10, 96), M.crater, base, { pos: [0, -0.005, 0], rot: [Math.PI / 2, 0, 0] });
+
+  const craters = [[-0.95, 0.55, 0.26], [0.55, 0.95, 0.16], [-0.35, -1.05, 0.2], [1.15, 0.35, 0.12], [-1.2, -0.35, 0.1]];
+  for (const [x, z, r] of craters) {
+    mesh(new THREE.TorusGeometry(r, r * 0.22, 10, 36), M.mars, base, {
+      name: 'Crater', pos: [x, 0, z], rot: [Math.PI / 2, 0, 0], scale: [1, 1, 0.45],
+    });
+    mesh(new THREE.CircleGeometry(r, 36), M.crater, base, { pos: [x, 0.002, z], rot: [-Math.PI / 2, 0, 0] });
+  }
+
+  for (let i = 0; i < 22; i++) {
+    const a = rand() * Math.PI * 2;
+    const d = 0.45 + rand() * 1.05;
+    const size = 0.025 + rand() * 0.06;
+    mesh(new THREE.DodecahedronGeometry(size, 0), M.rock, base, {
+      name: 'Rock', pos: [Math.cos(a) * d, size * 0.35, Math.sin(a) * d],
+      rot: [rand() * 3, rand() * 3, rand() * 3], scale: [1, 0.7, 1.2],
+    });
+  }
+
+  // Nameplate on the front of the base.
+  const plate = group('Nameplate', base, [0, -0.13, 1.6]);
+  mesh(new RoundedBoxGeometry(1.0, 0.18, 0.05, 3, 0.015), M.plaque, plate);
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024;
+  canvas.height = 184;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#1c1e24';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = '#d9b56a';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(18, 18, canvas.width - 36, canvas.height - 36);
+  ctx.fillStyle = '#e3c27a';
+  ctx.font = '700 92px "Helvetica Neue", Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  if ('letterSpacing' in ctx) ctx.letterSpacing = '18px';
+  ctx.fillText('ELON MUSK', canvas.width / 2 + 9, canvas.height / 2 + 4);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  const label = mesh(new THREE.PlaneGeometry(0.94, 0.94 * 184 / 1024),
+    new THREE.MeshStandardMaterial({ name: 'NameplateLabel', map: tex, roughness: 0.4, metalness: 0.2 }),
+    plate, { name: 'Label', pos: [0, 0, 0.026] });
+  label.castShadow = false;
+  return base;
+}
+
+function buildRocket() {
+  const rocket = group('Rocket');
+  const R = 0.17;
+  const H = 1.75;
+  const y0 = 0.24;
+
+  // Launch mount.
+  mesh(new THREE.CylinderGeometry(0.3, 0.32, 0.06, 40), M.steelDark, rocket, { name: 'Mount', pos: [0, 0.03, 0] });
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+    mesh(new THREE.CylinderGeometry(0.014, 0.018, 0.2, 10), M.steelDark, rocket, {
+      pos: [Math.cos(a) * 0.2, 0.15, Math.sin(a) * 0.2], rot: [Math.sin(a) * 0.35, 0, -Math.cos(a) * 0.35],
+    });
+  }
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2;
+    mesh(new THREE.CylinderGeometry(0.03, 0.06, 0.11, 20, 1, true), M.engine, rocket, {
+      name: 'Engine', pos: [Math.cos(a) * 0.075, y0 - 0.05, Math.sin(a) * 0.075],
+    }).material.side = THREE.DoubleSide;
+  }
+
+  // Stainless-steel body with weld bands.
+  mesh(new THREE.CylinderGeometry(R, R, H, 64), M.steel, rocket, { name: 'Body', pos: [0, y0 + H / 2, 0] });
+  for (let y = 0.22; y < H; y += 0.22) {
+    mesh(new THREE.TorusGeometry(R, 0.0035, 6, 64), M.steelDark, rocket, { pos: [0, y0 + y, 0], rot: [Math.PI / 2, 0, 0] });
+  }
+  const nose = [];
+  for (let i = 0; i <= 32; i++) {
+    const t = i / 32;
+    nose.push(new THREE.Vector2(R * Math.pow(1 - t * t, 0.62), t * 0.58));
+  }
+  mesh(new THREE.LatheGeometry(nose, 64), M.steel, rocket, { name: 'Nose', pos: [0, y0 + H, 0] });
+
+  // Forward and aft flaps.
+  for (const s of [-1, 1]) {
+    mesh(new RoundedBoxGeometry(0.13, 0.28, 0.022, 2, 0.01), M.steelDark, rocket, {
+      name: 'ForwardFlap', pos: [s * (R + 0.05), y0 + H + 0.08, 0], rot: [0, 0, s * -0.22],
+    });
+    mesh(new RoundedBoxGeometry(0.2, 0.38, 0.026, 2, 0.012), M.steelDark, rocket, {
+      name: 'AftFlap', pos: [s * (R + 0.085), y0 + 0.24, 0], rot: [0, 0, s * 0.06],
+    });
+  }
+  return rocket;
+}
+
+// -------------------------------------------------------------------- scene
+
+const status = document.getElementById('status');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05060d);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 500);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.minDistance = 1.5;
+controls.maxDistance = 14;
+controls.maxPolarAngle = Math.PI * 0.56;
+controls.autoRotateSpeed = 1.2;
+
+function frameView() {
+  const aspect = window.innerWidth / window.innerHeight;
+  const dist = 6.8 * Math.max(1, 0.95 / aspect);
+  controls.target.set(0.3, 0.92, 0);
+  camera.position.copy(controls.target).addScaledVector(V(0.42, 0.16, 1).normalize(), dist);
+  controls.update();
+}
+
+scene.add(new THREE.HemisphereLight(0xc4d4ff, 0x5a2a1a, 0.7));
+const key = new THREE.DirectionalLight(0xfff1e0, 2.6);
+key.position.set(3, 5.5, 4.5);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.left = -2.5;
+key.shadow.camera.right = 2.5;
+key.shadow.camera.top = 3.5;
+key.shadow.camera.bottom = -1;
+key.shadow.camera.far = 20;
+key.shadow.bias = -0.0004;
+key.shadow.normalBias = 0.02;
+scene.add(key);
+const rim = new THREE.DirectionalLight(0xff8a5c, 1.6);
+rim.position.set(-4, 3, -4);
+scene.add(rim);
+const fill = new THREE.DirectionalLight(0x9db8ff, 0.6);
+fill.position.set(-3.5, 2, 3);
+scene.add(fill);
+
+// Starfield and a distant red planet (decor only — not part of the export).
+{
+  const n = 2600;
+  const pos = new Float32Array(n * 3);
+  const col = new Float32Array(n * 3);
+  const c = new THREE.Color();
+  for (let i = 0; i < n; i++) {
+    const u = rand() * 2 - 1;
+    const a = rand() * Math.PI * 2;
+    const r = 90 + rand() * 60;
+    const s = Math.sqrt(1 - u * u);
+    pos.set([Math.cos(a) * s * r, u * r, Math.sin(a) * s * r], i * 3);
+    c.setHSL(0.58 + rand() * 0.1, 0.4, 0.6 + rand() * 0.4);
+    col.set([c.r, c.g, c.b], i * 3);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ size: 1.6, sizeAttenuation: false, vertexColors: true })));
+  const planet = new THREE.Mesh(new THREE.SphereGeometry(7, 48, 32),
+    new THREE.MeshStandardMaterial({ color: 0xc1562f, roughness: 1, emissive: 0x2a0d05 }));
+  planet.position.set(48, 34, -70);
+  scene.add(planet);
+}
+
+const model = group('ElonMuskFigurine', scene);
+const { figure, torso, headPivot, eyes, arms } = buildFigure();
+model.add(figure);
+model.add(buildBase());
+const rocket = buildRocket();
+rocket.position.set(1.0, 0, -0.5);
+model.add(rocket);
+frameView();
+status.remove();
+
+// -------------------------------------------------------------- animation
+
+let waving = false;
+let wave = 0;
+let exporting = false;
+let nextBlink = 2;
+
+function pose(t, w, blink) {
+  torso.scale.y = 1 + 0.008 * Math.sin(t * 2.1);
+  headPivot.rotation.set(0.03 * Math.sin(t * 0.7) - 0.04 * w, 0.14 * Math.sin(t * 0.45) - 0.12 * w, 0.03 * w);
+  for (const e of eyes) e.scale.y = blink ? 0.12 : 1;
+  const r = arms.R;
+  r.shoulder.rotation.set(-0.15 * w, 0, lerp(-0.1, -2.55, w));
+  r.elbow.rotation.set(0, 0, -w * (0.55 + 0.38 * Math.sin(t * 9)));
+  r.hand.rotation.set(0, -0.6 * w, 0);
+  arms.L.shoulder.rotation.z = 0.1 + 0.015 * Math.sin(t * 2.1);
+}
+
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+  wave += ((waving ? 1 : 0) - wave) * Math.min(1, dt * 5);
+  if (t > nextBlink + 0.13) nextBlink = t + 2.5 + rand() * 3;
+  if (!exporting) pose(t, wave, t > nextBlink);
+  controls.update();
+  renderer.render(scene, camera);
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ------------------------------------------------------------------ export
+
+async function exportGLB() {
+  exporting = true;
+  try {
+    pose(0, 0, false);
+    model.updateMatrixWorld(true);
+    return await new GLTFExporter().parseAsync(model, { binary: true });
+  } finally {
+    exporting = false;
+  }
+}
+window.exportGLB = exportGLB;
+
+// ------------------------------------------------------------------- UI
+
+const toggle = (btn, on) => btn.setAttribute('aria-pressed', String(on));
+const waveBtn = document.getElementById('wave');
+waveBtn.addEventListener('click', () => toggle(waveBtn, (waving = !waving)));
+const spinBtn = document.getElementById('spin');
+spinBtn.addEventListener('click', () => toggle(spinBtn, (controls.autoRotate = !controls.autoRotate)));
+document.getElementById('reset').addEventListener('click', frameView);
+const dlBtn = document.getElementById('download');
+dlBtn.addEventListener('click', async () => {
+  dlBtn.disabled = true;
+  try {
+    const glb = await exportGLB();
+    const url = URL.createObjectURL(new Blob([glb], { type: 'model/gltf-binary' }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: 'elon-musk.glb' });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } finally {
+    dlBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
