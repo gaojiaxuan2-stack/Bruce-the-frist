@@ -111,9 +111,15 @@ export class App {
   /** Switch to a scene by id (fades out, lazy-loads, fades in). Latest call wins. */
   async goTo(id) {
     if (!SCENES.some((s) => s.id === id)) id = SCENES[0].id;
-    if (id === this.activeId) return;
-    const token = ++this.navToken;
     const fade = document.getElementById('fade');
+    if (id === this.activeId) {
+      // Cancel any switch still loading (e.g. swiped away and straight back).
+      this.navToken++;
+      fade.classList.remove('on');
+      this.hud.setActive(id, this.active.meta);
+      return;
+    }
+    const token = ++this.navToken;
     const first = !this.active;
     if (!first) fade.classList.add('on');
     this.hud.setActive(id, SCENES.find((s) => s.id === id));
