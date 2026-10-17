@@ -1,0 +1,391 @@
+// portal-filters.js — the ten window filters of PORTAL mode.
+//
+// Every filter is a GLSL body defining `vec3 filt(vec2 px)` (px = device
+// pixels, so the window is a lens over the camera at the same spot). It is
+// wrapped by COMMON (window uniforms + helpers) and MAIN (inner vignette,
+// edge glow, open reveal, wipe transition, flash), then gfx.js adds PRELUDE.
+
+export const FILTERS = [
+  { id: 'dots', label: 'DOT MATRIX', short: 'DOTS', sym: '◉', color: [0.32, 0.5, 1.0] },
+  { id: 'verse', label: 'SPIDER-VERSE', short: 'VERSE', sym: '✶', color: [1.0, 0.17, 0.25] },
+  { id: 'thermal', label: 'THERMAL', short: 'HEAT', sym: '✹', color: [1.0, 0.5, 0.1] },
+  { id: 'matrix', label: 'MATRIX', short: 'CODE', sym: '⌗', color: [0.15, 1.0, 0.45] },
+  { id: 'ascii', label: 'ASCII', short: 'ASCII', sym: '▤', color: [1.0, 0.68, 0.05] },
+  { id: 'neon', label: 'NEON EDGES', short: 'NEON', sym: '✦', color: null },  // hue cycles
+  { id: 'xray', label: 'X-RAY', short: 'X-RAY', sym: '◎', color: [0.48, 0.85, 1.0] },
+  { id: 'pixel', label: '8-BIT', short: '8-BIT', sym: '▦', color: [0.62, 0.78, 0.1] },
+  { id: 'glitch', label: 'GLITCH', short: 'GLITCH', sym: '▚', color: [1.0, 0.16, 0.45] },
+  { id: 'kaleido', label: 'KALEIDO', short: 'KALEI', sym: '❋', color: [0.72, 0.45, 1.0] },
+];
+
+// Frame colour of a filter at time t, as [r,g,b] 0..1. Neon cycles its hue
+// in 24 steps so CSS strings (and cached glow sprites) stay bounded.
+export function filterColor(f, t) {
+  if (f.color) return f.color;
+  const h = Math.floor(((t * 0.07) % 1) * 24) / 24;
+  const k = (n) => { const x = (n + h * 6) % 6; return 1 - Math.max(0, Math.min(1, Math.min(x, 4 - x))) * 0.8; };
+  return [k(5), k(3), k(1)];
+}
+
+// --- GLSL ------------------------------------------------------------------
+
+const COMMON = `
+uniform vec2 u_quad[4];   // window corners, device px, clockwise on screen
+uniform vec2 u_center;    // window centre, device px
+uniform float u_span;     // window size, device px
+uniform float u_alpha;    // overall opacity
+uniform float u_reveal;   // open animation 0..1
+uniform float u_wipe;     // filter-change wipe front 0..1 (>= 1: idle)
+uniform float u_wipeDir;  // +1 top -> bottom, -1 bottom -> top
+uniform float u_wipeInv;  // 1 = draw only the part not yet wiped (old filter)
+uniform float u_flash;    // white flash 0..1
+uniform vec3 u_tint;      // frame colour
+uniform float u_open;     // background: how open the portal is
+uniform vec2 u_fade;      // phantom preview: (amount, 1 = real hand on the right)
+
+// Signed distance to the edge a->b (positive = outside a clockwise quad).
+float edgeSD(vec2 p, vec2 a, vec2 b) {
+  vec2 d = b - a;
+  return dot(p - a, vec2(d.y, -d.x)) / max(length(d), 1e-3);
+}
+float quadSD(vec2 p) {
+  return max(max(edgeSD(p, u_quad[0], u_quad[1]), edgeSD(p, u_quad[1], u_quad[2])),
+             max(edgeSD(p, u_quad[2], u_quad[3]), edgeSD(p, u_quad[3], u_quad[0])));
+}
+`;
+
+const MAIN = `
+void main() {
+  vec2 px = v_px;
+  float w = u_wipeDir > 0.0 ? v_local.y : 1.0 - v_local.y;
+  float shown = smoothstep(u_wipe + 0.012, u_wipe - 0.012, w);  // u_wipe = 9 when idle
+  float band = exp(-abs(w - u_wipe) * 22.0);
+  if (u_wipeInv > 0.5) { shown = 1.0 - shown; band = 0.0; }
+  // Glitchy row tearing right at the wipe front.
+  float row = floor(v_px.y / (5.0 * u_dpr));
+  px.x += (hash12(vec2(row, floor(u_time * 40.0))) - 0.5) * 70.0 * u_dpr * band * band;
+
+  vec3 c = filt(px);
+
+  float inner = max(-quadSD(v_px), 0.0);
+  c *= mix(0.6, 1.0, smoothstep(0.0, 0.09 * u_span + 6.0 * u_dpr, inner));
+  c += u_tint * exp(-inner / (4.0 * u_dpr)) * 0.55;
+
+  // Open: a square grows from the centre with a bright rim.
+  vec2 q = abs(v_local - 0.5) * 2.0;
+  float r = max(q.x, q.y);
+  float rr = u_reveal * 1.25;
+  float rev = smoothstep(rr, rr - 0.12, r);
+  c += u_tint * exp(-abs(r - rr + 0.06) * 26.0) * (1.0 - u_reveal) * 2.0;
+
+  c += (u_tint * 0.9 + 0.35) * band;
+  c = mix(c, vec3(1.0), u_flash);
+  float a = u_alpha * rev * max(shown, band * 0.85);
+  // Phantom preview: solid at the real hand, dissolving into flickering
+  // blocks toward the missing one.
+  float g = u_fade.y > 0.5 ? 1.0 - v_local.x : v_local.x;
+  float blk = hash12(floor(v_px / (9.0 * u_dpr)) + floor(u_time * 4.0) * 0.731);
+  a *= mix(1.0, step(blk, 1.15 - g) * (1.0 - 0.7 * g), u_fade.x);
+  outColor = vec4(c, a);
+}
+`;
+
+// Outside the window: the camera, a little darker and desaturated while the
+// portal is open, with the frame colour bleeding out around the edges.
+const BG = `
+void main() {
+  vec3 c = cam(v_px);
+  float d = max(quadSD(v_px), 0.0);
+  float near = exp(-d / (40.0 * u_dpr));
+  c = mix(c, vec3(luma(c)), 0.3 * u_open);
+  c *= 1.0 - u_open * (0.26 - 0.14 * near);
+  c += u_tint * near * near * 0.3 * u_open;
+  outColor = vec4(c, 1.0);
+}
+`;
+
+const BODIES = {
+  // 1. The reference clip: electric-blue panel, luminance halftone dots.
+  dots: `
+vec3 filt(vec2 px) {
+  float cs = 11.0 * u_dpr;
+  vec2 cell = floor(px / cs);
+  vec2 cc = (cell + 0.5) * cs;
+  float o = 0.25 * cs;
+  float l = 0.25 * (luma(cam(cc + vec2(-o, -o))) + luma(cam(cc + vec2(o, -o)))
+                  + luma(cam(cc + vec2(-o, o))) + luma(cam(cc + vec2(o, o))));
+  l = smoothstep(0.08, 0.9, l);
+  float d = length(px - cc);
+  float rad = mix(0.06, 0.48, pow(l, 1.1)) * cs;
+  float aa = 0.8 * u_dpr;
+  float dm = 1.0 - smoothstep(rad - aa, rad + aa, d);
+  vec3 navy = vec3(0.02, 0.05, 0.32);
+  vec3 blue = mix(vec3(0.12, 0.235, 1.0), vec3(0.17, 0.36, 1.0), v_local.x * 0.6 + v_local.y * 0.4);
+  vec3 bg = mix(navy, blue, 0.35 + 0.65 * smoothstep(0.0, 0.45, l));
+  float e = sobel(px, 1.5 * u_dpr);
+  bg = mix(bg, vec3(0.01, 0.02, 0.16), smoothstep(0.2, 0.7, e) * 0.75);
+  vec3 dc = mix(vec3(0.42, 0.66, 1.0), vec3(0.92, 0.99, 1.0), smoothstep(0.2, 0.75, l));
+  vec3 c = mix(bg, dc, dm);
+  c += vec3(0.35, 0.6, 1.0) * exp(-max(d - rad, 0.0) / (0.15 * cs)) * l * 0.5 * (1.0 - dm);
+  return c;
+}`,
+
+  // 2. Spider-Verse comic: posterized, CMY halftone in shadows, ink lines,
+  // red/cyan misregistration and the odd glitch frame.
+  verse: `
+float ht(vec2 px, float ang, float cs, float amt) {
+  float s = sin(ang), c = cos(ang);
+  vec2 p = vec2(c * px.x - s * px.y, s * px.x + c * px.y) / cs;
+  float r = sqrt(clamp(amt, 0.0, 1.0)) * 0.62;
+  return 1.0 - smoothstep(r - 0.08, r + 0.08, length(fract(p) - 0.5));
+}
+vec3 filt(vec2 px) {
+  float slot = floor(u_time * 7.0);
+  float gl = step(0.9, hash12(vec2(slot, 4.7)));
+  float bandY = floor(px.y / (22.0 * u_dpr));
+  px.x += gl * step(0.55, hash12(vec2(bandY, slot))) * (hash12(vec2(slot, bandY)) - 0.5) * 60.0 * u_dpr;
+  float mis = (3.0 + gl * 8.0) * u_dpr;
+  vec3 base = cam(px);
+  vec3 col = vec3(cam(px + vec2(mis, mis * 0.5)).r, base.g, cam(px - vec2(mis, mis * 0.5)).b);
+  float l = luma(base);
+  col = clamp(mix(vec3(l), col, 1.8) * 1.15, 0.0, 1.0);
+  col = floor(col * 3.0 + 0.45) / 3.0;
+  // Shadows: magenta + cyan Ben-Day dots on a deep purple ink.
+  float sh = 1.0 - smoothstep(0.1, 0.48, l);
+  float cs = 7.0 * u_dpr;
+  float mD = ht(px, 1.31, cs, sh * 0.5);
+  float cD = ht(px + 0.5 * cs, 0.26, cs, sh * 0.32);
+  col = mix(col, vec3(0.2, 0.03, 0.32), sh * 0.85);
+  col = mix(col, vec3(1.0, 0.12, 0.55), mD * sh);
+  col = mix(col, vec3(0.0, 0.72, 1.0), cD * (1.0 - mD) * sh * 0.85);
+  // Midtone hatching.
+  float mid = smoothstep(0.28, 0.42, l) * (1.0 - smoothstep(0.5, 0.64, l));
+  col *= 1.0 - step(0.66, fract((px.x + px.y) / (5.0 * u_dpr))) * mid * 0.4;
+  // Thick ink outlines.
+  float e = sobel(px, 2.2 * u_dpr);
+  col *= 1.0 - smoothstep(0.28, 0.55, e);
+  return col;
+}`,
+
+  // 3. Heat camera palette from blurred luminance (+ a little skin warmth).
+  thermal: `
+vec3 heat(float t) {
+  t = clamp(t, 0.0, 1.0) * 6.0;
+  vec3 c = mix(vec3(0.0, 0.0, 0.03), vec3(0.13, 0.02, 0.45), clamp(t, 0.0, 1.0));
+  c = mix(c, vec3(0.52, 0.04, 0.62), clamp(t - 1.0, 0.0, 1.0));
+  c = mix(c, vec3(0.93, 0.1, 0.22), clamp(t - 2.0, 0.0, 1.0));
+  c = mix(c, vec3(1.0, 0.5, 0.02), clamp(t - 3.0, 0.0, 1.0));
+  c = mix(c, vec3(1.0, 0.9, 0.12), clamp(t - 4.0, 0.0, 1.0));
+  c = mix(c, vec3(1.0, 1.0, 0.94), clamp(t - 5.0, 0.0, 1.0));
+  return c;
+}
+vec3 filt(vec2 px) {
+  float s1 = 3.0 * u_dpr, s2 = 7.0 * u_dpr;
+  vec3 b = cam(px) * 0.2;
+  b += (cam(px + vec2(s1, 0.0)) + cam(px - vec2(s1, 0.0)) + cam(px + vec2(0.0, s1)) + cam(px - vec2(0.0, s1))) * 0.12;
+  b += (cam(px + vec2(s2, s2)) + cam(px - vec2(s2, s2)) + cam(px + vec2(s2, -s2)) + cam(px + vec2(-s2, s2))) * 0.08;
+  float warm = clamp((b.r - b.b) * 2.2, 0.0, 0.45) * smoothstep(0.12, 0.35, b.r);
+  float h = luma(b) * 0.8 + warm * 0.7;
+  h += (noise(px / (40.0 * u_dpr) + vec2(0.0, u_time * 0.5)) - 0.5) * 0.08;
+  h += (hash12(px + fract(u_time) * 311.0) - 0.5) * 0.035;
+  vec3 col = heat(smoothstep(0.04, 0.95, h));
+  return col * (0.93 + 0.07 * sin(px.y * 2.1 / u_dpr));
+}`,
+
+  // 4. Green code rain: luminance x falling streaks, bright leading glyphs.
+  matrix: `
+uniform sampler2D u_glyphs;  // 8x8 glyph atlas, 32 px per glyph
+vec3 filt(vec2 px) {
+  vec2 cs = vec2(12.0, 16.0) * u_dpr;
+  vec2 cell = floor(px / cs);
+  vec2 f = fract(px / cs);
+  float l = smoothstep(0.03, 0.6, luma(cam((cell + 0.5) * cs)));
+  float ch = hash12(vec2(cell.x, 11.0));
+  float speed = 5.0 + ch * 13.0;
+  float rows = u_res.y / cs.y + 24.0;
+  float trail = 0.0, head = 0.0;
+  for (int k = 0; k < 3; k++) {
+    float off = hash12(vec2(cell.x, float(k) * 7.0 + 1.0)) * rows;
+    float d = mod(u_time * speed * (1.0 + float(k) * 0.3) + off, rows) - cell.y;
+    if (d >= 0.0) {
+      trail = max(trail, exp(-d / (7.0 + ch * 12.0)));
+      head = max(head, 1.0 - smoothstep(0.0, 1.2, d));
+    }
+  }
+  float rate = 1.5 + hash12(cell) * 7.0;
+  float g = floor(hash12(cell + floor(u_time * rate + hash12(cell.yx) * 9.0) * 0.137) * 64.0);
+  vec2 guv = (vec2(mod(g, 8.0), floor(g / 8.0)) + f) / 8.0;
+  float lod = max(0.0, log2(32.0 / cs.y * 1.25));
+  float gl = textureLod(u_glyphs, guv, lod).r;
+  gl += textureLod(u_glyphs, guv, lod + 2.0).r * 0.45;  // blurry mip = cheap glyph glow
+  float b = gl * (0.3 + trail * 0.9) * (0.06 + 1.2 * l);
+  vec3 col = vec3(0.1, 1.0, 0.42) * b + vec3(0.8, 1.0, 0.88) * gl * head * (0.3 + 0.7 * l);
+  return col + vec3(0.0, 0.14, 0.05) * l * l;
+}`,
+
+  // 5. Terminal ASCII art (amber phosphor).
+  ascii: `
+uniform sampler2D u_ascii;  // ramp " .:-=+*#%@", 10 glyphs in a row
+vec3 filt(vec2 px) {
+  vec2 cs = vec2(8.0, 12.0) * u_dpr;
+  vec2 cell = floor(px / cs);
+  vec2 f = fract(px / cs);
+  vec2 cc = (cell + 0.5) * cs;
+  float l = 0.5 * (luma(cam(cc - vec2(0.0, cs.y * 0.25))) + luma(cam(cc + vec2(0.0, cs.y * 0.25))));
+  l = smoothstep(0.08, 0.78, l);
+  float idx = min(floor(l * 10.0), 9.0);
+  float g = textureLod(u_ascii, vec2((idx + f.x) / 10.0, f.y), max(0.0, log2(48.0 / cs.y))).r;
+  vec3 col = vec3(1.0, 0.66, 0.08) * g * (0.45 + 0.8 * l) + vec3(1.0, 0.93, 0.72) * g * smoothstep(0.75, 1.0, l) * 0.5;
+  col += vec3(0.07, 0.03, 0.0);
+  return col * (0.84 + 0.16 * step(0.5, fract(px.y / (2.0 * u_dpr))));
+}`,
+
+  // 6. Glowing sobel edges with a travelling hue on black.
+  neon: `
+vec3 filt(vec2 px) {
+  float e1 = sobel(px, 1.5 * u_dpr);
+  float e2 = sobel(px, 4.5 * u_dpr);
+  float hue = fract(u_time * 0.07 + (px.x * 0.6 + px.y) / max(u_res.x, u_res.y) * 0.9);
+  vec3 nc = hsv2rgb(vec3(hue, 0.8, 1.0));
+  vec3 col = nc * (smoothstep(0.14, 0.5, e1) * 1.3 + smoothstep(0.05, 1.0, e2) * 0.6);
+  col += vec3(1.0) * smoothstep(0.5, 1.1, e1) * 0.7;
+  vec2 gp = fract(px / (26.0 * u_dpr));
+  col += nc * min(step(gp.x, 0.045) + step(gp.y, 0.045), 1.0) * 0.07;
+  return col;
+}`,
+
+  // 7. Inverted cool-blue, hard contrast, scanlines, noise and a scan bar.
+  xray: `
+vec3 filt(vec2 px) {
+  float l = luma(cam(px));
+  float e = sobel(px, 1.5 * u_dpr);
+  float v = pow(1.0 - smoothstep(0.08, 0.9, l), 1.5);
+  vec3 col = mix(vec3(0.0, 0.03, 0.08), vec3(0.62, 0.9, 1.0), v);
+  col += vec3(0.5, 0.85, 1.0) * smoothstep(0.15, 0.6, e) * 0.45;
+  col *= 0.86 + 0.14 * sin(px.y * 3.14159 / (2.0 * u_dpr));
+  col += vec3(0.4, 0.8, 1.0) * exp(-abs(v_local.y - fract(u_time * 0.3)) * 35.0) * 0.25;
+  return col + (hash12(px + fract(u_time * 7.0) * 517.0) - 0.5) * 0.09;
+}`,
+
+  // 8. Game Boy: chunky pixels, 4 greens, Bayer ordered dither, LCD grid.
+  pixel: `
+float bayer2(vec2 a) { a = floor(a); return fract(a.x / 2.0 + a.y * a.y * 0.75); }
+float bayer4(vec2 a) { return bayer2(0.5 * a) * 0.25 + bayer2(a); }
+vec3 filt(vec2 px) {
+  float bs = 6.0 * u_dpr;
+  vec2 b = floor(px / bs);
+  vec2 bc = (b + 0.5) * bs;
+  float o = bs * 0.3;
+  float l = luma(cam(bc)) * 0.5 + 0.125 * (luma(cam(bc + vec2(o, 0.0))) + luma(cam(bc - vec2(o, 0.0)))
+                                         + luma(cam(bc + vec2(0.0, o))) + luma(cam(bc - vec2(0.0, o))));
+  l = smoothstep(0.05, 0.85, l);
+  float lv = clamp(floor(l * 3.0 + 0.5 + (bayer4(b) - 0.5) * 0.9), 0.0, 3.0);
+  vec3 col = lv < 0.5 ? vec3(0.059, 0.22, 0.059) : lv < 1.5 ? vec3(0.19, 0.384, 0.19)
+           : lv < 2.5 ? vec3(0.545, 0.675, 0.059) : vec3(0.79, 0.86, 0.5);
+  vec2 g = fract(px / bs);
+  return col * (0.8 + 0.2 * step(0.13, min(g.x, g.y)));
+}`,
+
+  // 9. Datamosh: RGB split, slice displacement, block corruption, bursts.
+  glitch: `
+vec3 filt(vec2 px) {
+  float t = u_time;
+  float burst = smoothstep(0.55, 0.8, noise(vec2(t * 2.3, 9.1)));
+  float tick = floor(t * 14.0);
+  float slice = floor(px.y / (mix(6.0, 34.0, hash12(vec2(tick, 2.0))) * u_dpr));
+  float on = step(0.8 - burst * 0.45, hash12(vec2(slice, tick)));
+  px.x += on * (hash12(vec2(tick, slice)) - 0.5) * (16.0 + 110.0 * burst) * u_dpr;
+  float sp = (3.0 + 12.0 * burst) * u_dpr;
+  vec3 col = vec3(cam(px + vec2(sp, 0.0)).r, cam(px).g, cam(px - vec2(sp, 0.0)).b);
+  float bn = hash12(floor(px / (vec2(52.0, 18.0) * u_dpr)) + vec2(tick * 1.7, tick));
+  if (bn > 0.975 - burst * 0.1) col = vec3(1.0) - col.gbr;
+  else if (bn > 0.955 - burst * 0.1) col = floor(col * 2.0 + 0.5) * 0.5 * vec3(0.3, 1.0, 1.0);
+  col += step(0.988, hash12(vec2(floor(px.y / (2.0 * u_dpr)), floor(t * 50.0)))) * 0.5;
+  col = (col - 0.5) * 1.2 + 0.5;
+  return clamp(col * (0.9 + 0.1 * sin(px.y / u_dpr * 1.7)), 0.0, 1.0);
+}`,
+
+  // 10. Eight mirrored wedges around the window centre, slowly turning.
+  kaleido: `
+vec3 filt(vec2 px) {
+  vec2 p = px - u_center;
+  float r = length(p);
+  float seg = 6.2831853 / 8.0;
+  float a0 = mod(atan(p.y, p.x) + u_time * 0.25, seg);
+  float a = abs(a0 - 0.5 * seg) - u_time * 0.12;
+  float zr = r * (0.85 + 0.12 * sin(u_time * 0.6)) + 6.0 * u_dpr;
+  vec3 col = cam(u_center + vec2(cos(a), sin(a)) * zr);
+  col = clamp(mix(vec3(luma(col)), col, 1.5), 0.0, 1.0);
+  col *= 0.8 + 0.35 * hsv2rgb(vec3(fract(r / (u_span + 1.0) * 0.7 - u_time * 0.05), 0.55, 1.0));
+  float seam = min(a0, seg - a0) * r;
+  col += exp(-seam / (1.5 * u_dpr)) * 0.18;
+  return col;
+}`,
+};
+
+const FALLBACK = 'vec3 filt(vec2 px) { return cam(px) * vec3(0.6, 0.85, 1.2); }';
+
+// Compiled program for a filter id (cached by gfx). A shader that fails to
+// compile on some GPU falls back to a tinted camera instead of breaking.
+const broken = new Set();
+export function filterProgram(gfx, id) {
+  if (!broken.has(id)) {
+    try { return gfx.program('portal-' + id, COMMON + (BODIES[id] || FALLBACK) + MAIN); } catch (e) {
+      broken.add(id);
+      console.warn('[portal] filter shader failed, using fallback:', id, e.message);
+    }
+  }
+  return gfx.program('portal-fallback', COMMON + FALLBACK + MAIN);
+}
+
+export function bgProgram(gfx) { return gfx.program('portal-bg', COMMON + BG); }
+
+// --- glyph atlases (built once) -------------------------------------------
+
+function mipTexture(gfx, canvas) {
+  const gl = gfx.gl;
+  const tex = gfx.textureFrom(canvas);
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  return tex;
+}
+
+const KATAKANA = 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ';
+const MATRIX_CHARS = KATAKANA + '0123456789Z=*+<>:¦|';  // 64 glyphs
+const ASCII_RAMP = ' .:-=+*#%@';
+
+export function buildAtlases(gfx) {
+  // Matrix: 8x8 grid of 32 px glyphs, katakana mirrored like the film.
+  const G = 32;
+  const m = document.createElement('canvas');
+  m.width = m.height = G * 8;
+  let g = m.getContext('2d');
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, m.width, m.height);
+  g.fillStyle = '#fff';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.font = `bold ${Math.round(G * 0.78)}px "IPAGothic", "Hiragino Kaku Gothic ProN", "Yu Gothic", "MS Gothic", "Noto Sans CJK JP", "Noto Sans JP", monospace`;
+  [...MATRIX_CHARS].slice(0, 64).forEach((ch, i) => {
+    g.save();
+    g.translate((i % 8) * G + G / 2, Math.floor(i / 8) * G + G / 2 + 1);
+    if (i < KATAKANA.length) g.scale(-1, 1);
+    g.fillText(ch, 0, 0);
+    g.restore();
+  });
+
+  // ASCII: 10 glyphs of 32x48 px in a row.
+  const a = document.createElement('canvas');
+  a.width = 32 * 10; a.height = 48;
+  g = a.getContext('2d');
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, a.width, a.height);
+  g.fillStyle = '#fff';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.font = 'bold 40px "DejaVu Sans Mono", Menlo, Consolas, "Courier New", monospace';
+  [...ASCII_RAMP].forEach((ch, i) => g.fillText(ch, i * 32 + 16, 26));
+
+  return { glyphs: mipTexture(gfx, m), ascii: mipTexture(gfx, a) };
+}
