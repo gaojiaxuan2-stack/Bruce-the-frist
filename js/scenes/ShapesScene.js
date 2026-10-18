@@ -104,17 +104,20 @@ export default class ShapesScene extends BaseScene {
   static meta = {
     id: 'shapes',
     title: 'Shapes',
-    subtitle: 'Hold fingers still to pick a shape (mouse: click)',
+    subtitle: 'Show 1–5 fingers and hold still to pick a shape · 👍 shows your text',
     icon: '💠',
+    // Phones show only icon + gesture, so the gesture names carry the key words.
     hints: [
-      { icon: '✌️', gesture: 'Hold fingers', text: '1 → Sphere · 2 → Knot · 3 → Heart' },
-      { icon: '🖐️', gesture: 'Hold fingers', text: '4 → DNA · 5 → Planet · 👍 → Text' },
-      { icon: '☝️', gesture: 'Point + move', text: 'push the particles' },
-      { icon: '🤏', gesture: 'Pinch + drag', text: 'rotate' },
-      { icon: '✋', gesture: 'Tilt open hand', text: 'turn the shape' },
-      { icon: '✊', gesture: 'Fist, then open ✋', text: 'squeeze, then explode' },
+      { icon: '☝️', gesture: 'Point', text: 'push the particles' },
+      { icon: '🤏', gesture: 'Pinch + move', text: 'rotate' },
+      { icon: '✊', gesture: 'Fist, then open hand', text: 'squeeze, then explode' },
       { icon: '↕️', gesture: 'Hand closer / farther', text: 'bigger / smaller' },
+      { icon: '🔢', gesture: '1–5 fingers', text: 'Sphere · Knot · Heart · DNA · Planet' },
+      { icon: '✋', gesture: 'Tilt open hand', text: 'turn the shape' },
     ],
+    // Appended by the HUD to its mouse / touch line (touchHint: for touch screens, if the HUD reads it).
+    mouseHint: 'click = next shape',
+    touchHint: 'tap = next shape',
     bloom: { strength: 0.9, radius: 0.5, threshold: 0.05 },
   };
 

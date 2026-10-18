@@ -8,16 +8,22 @@ import { register } from 'node:module';
 
 // ------------------------------------------------------------------ environment
 
-// '@mediapipe/tasks-vision' is a browser import-map name: stub it (tests drive detection).
+// '@mediapipe/tasks-vision' and 'three' are browser import-map names: stub them (tests
+// drive detection / segmentation; the landmarker stub records the options it was made with).
 const HOOKS = `
-const STUB = 'export class HandLandmarker { static async createFromOptions() { return { detectForVideo: () => ({ landmarks: [], handedness: [] }), close() {} }; } }\\n'
+const STUB = 'export class HandLandmarker { static async createFromOptions(fileset, options) { globalThis.__handOptions = options; return { detectForVideo: () => ({ landmarks: [], handedness: [] }), setOptions(o) { (globalThis.__setOptions ||= []).push(o); return Promise.resolve(); }, close() {} }; } }\\n'
+  + 'export class ImageSegmenter { static async createFromOptions() { return { segmentForVideo() {}, close() {} }; } }\\n'
   + 'export class FilesetResolver { static async forVisionTasks() { return {}; } }\\n';
+const THREE = 'export class DataTexture { constructor(data, width, height) { this.image = { data, width, height }; } dispose() {} }\\n'
+  + 'export const RedFormat = 1028, UnsignedByteType = 1009, LinearFilter = 1006, ClampToEdgeWrapping = 1001;\\n';
 export async function resolve(specifier, context, next) {
   if (specifier === '@mediapipe/tasks-vision') return { url: 'stub:mediapipe', shortCircuit: true };
+  if (specifier === 'three') return { url: 'stub:three', shortCircuit: true };
   return next(specifier, context);
 }
 export async function load(url, context, next) {
   if (url === 'stub:mediapipe') return { format: 'module', source: STUB, shortCircuit: true };
+  if (url === 'stub:three') return { format: 'module', source: THREE, shortCircuit: true };
   return next(url, context);
 }`;
 register(`data:text/javascript,${encodeURIComponent(HOOKS)}`);
@@ -27,10 +33,17 @@ Object.defineProperty(globalThis, 'performance', { value: { now: () => clock }, 
 const noop = () => {};
 const fakeEl = { addEventListener: noop, setPointerCapture: noop };
 globalThis.window = { addEventListener: noop, innerWidth: 1280, innerHeight: 800 };
-globalThis.document = { hidden: false, getElementById: () => null, addEventListener: noop, documentElement: fakeEl };
+globalThis.document = {
+  hidden: false,
+  getElementById: () => null,
+  addEventListener: noop,
+  documentElement: fakeEl,
+  createElement: () => ({ width: 0, height: 0, getContext: () => ({ drawImage: noop }) }),
+};
 
-const { HandInput } = await import('../js/input/HandInput.js');
+const { HandInput, VISION_SHARE } = await import('../js/input/HandInput.js');
 const { InputManager } = await import('../js/input/InputManager.js');
+const { PersonSegmenter } = await import('../js/scenes/mirror/PersonSegmenter.js');
 
 // ------------------------------------------------------------------ synthetic hands
 
@@ -111,15 +124,23 @@ const toRaw = (pts) => pts.map((p) => ({ x: 1 - p.x / ASPECT, y: 1 - p.y, z: -p.
  *   scene(t) returns the hands in the camera frame at t ms: [{pts, label?}] (label is
  *   MediaPipe's, i.e. 'Left' for the user's right hand).
  */
-function makeSim({ camFps = 30, renderFps = 60 } = {}) {
+function makeSim({ camFps = 30, renderFps = 60, app: extra = {} } = {}) {
   clock = 10000;
   const t0 = clock;
-  const app = { settings: { showPreview: false }, params: new URLSearchParams(), renderer: { domElement: fakeEl } };
+  const app = { settings: { showPreview: false }, params: new URLSearchParams(), renderer: { domElement: fakeEl }, ...extra };
   const hi = new HandInput(app);
   hi._running = true;
   hi.delegate = 'CPU';
   let current = { landmarks: [], handedness: [] };
-  hi.landmarker = { detectForVideo: () => current, close: noop };
+  /** times (ms since the start) at which detection ran */
+  const detections = [];
+  hi.landmarker = {
+    detectForVideo: () => {
+      detections.push(Math.round(clock - t0));
+      return current;
+    },
+    close: noop,
+  };
   const video = { readyState: 4, videoWidth: 640, videoHeight: 480, currentTime: 0 };
   hi._video = video;
   const im = new InputManager(app);
@@ -129,6 +150,7 @@ function makeSim({ camFps = 30, renderFps = 60 } = {}) {
   return {
     hi,
     log,
+    detections,
     /** The main thread is blocked for `ms` (GC, shader compile): no update() runs at all. */
     stall(ms) {
       clock += ms;
@@ -423,4 +445,199 @@ test("left-handed users: after a dropout the user's left hand gets control back"
   sim.run(2500, () => [right]);
   sim.run(800, () => [left(), right]);
   assert.equal(sim.hi.primary.handedness, 'Right', 'a deliberate switch of hands sticks');
+});
+
+// ------------------------------------------------------------------ main-thread budget
+
+/** Detections per second in [a, b) ms, and the shortest gap between two of them there. */
+function rate(times, a, b) {
+  const inside = times.filter((t) => t >= a && t < b);
+  let minGap = Infinity;
+  for (let i = 1; i < inside.length; i++) minGap = Math.min(minGap, inside[i] - inside[i - 1]);
+  return { hz: (inside.length * 1000) / (b - a), minGap, count: inside.length };
+}
+
+test('no hand in view: detection idles at <= ~9 Hz, and is back at the camera rate as soon as a hand shows', () => {
+  const sim = makeSim();
+  const open = place('open');
+  sim.run(3000, () => []);
+  const idle = rate(sim.detections, 0, 3000);
+  assert.ok(idle.minGap >= 110, `idle detections at least 110 ms apart (${idle.minGap} ms)`);
+  assert.ok(idle.hz <= 9.1 && idle.hz >= 6, `idle rate ${idle.hz.toFixed(1)} Hz`);
+  assert.equal(sim.hi.debug.idle, true);
+  // A hand comes into view at 3 s: found by the next idle detection, then tracked at 30 Hz.
+  sim.run(1500, () => [{ pts: open }]);
+  const found = sim.log.find((r) => r.t >= 3000 && r.source === 'hand');
+  assert.ok(found && found.t <= 3000 + 110 + 34, `hand picked up at ${found?.t} ms`);
+  const back = rate(sim.detections, found.t + 1, 4500);
+  assert.ok(back.hz >= 28, `tracking rate ${back.hz.toFixed(1)} Hz`);
+  assert.equal(sim.hi.debug.idle, false);
+  // The tracking-rate average starts afresh (it drives the loss timeouts and the debounce).
+  const fps = sim.hi.debug.fps;
+  assert.ok(fps > 27 && fps < 33, `debug.fps ${fps.toFixed(1)}`);
+  assert.ok(firstEvent(sim.log, 'openstart').t - found.t < 150, 'the gesture is recognised at the usual speed');
+});
+
+test('a hand gone for more than ~1 s slows detection to the idle rate; a shorter dropout does not', () => {
+  const sim = makeSim();
+  const fist = place('fist');
+  sim.run(1000, () => [{ pts: fist }]);
+  sim.run(3000, () => []);
+  // The first second without the hand: full rate (a hand that comes right back is picked up at once).
+  const lost = rate(sim.detections, 1000, 1900);
+  assert.ok(lost.hz >= 28, `just lost: ${lost.hz.toFixed(1)} Hz`);
+  const idle = rate(sim.detections, 2200, 4000);
+  assert.ok(idle.minGap >= 110 && idle.hz <= 9.1, `long gone: ${idle.hz.toFixed(1)} Hz, gaps >= ${idle.minGap} ms`);
+  // Back: tracked again at the camera rate, the fist reported fresh.
+  const n = sim.log.length;
+  sim.run(1000, () => [{ pts: fist }]);
+  const after = sim.log.slice(n);
+  assert.ok(after.slice(9).every((r) => r.source === 'hand'), 'tracked within ~150 ms');
+  assert.ok(rate(sim.detections, 4300, 5000).hz >= 28, 'back at the camera rate');
+  assert.ok(after[after.length - 1].fist);
+});
+
+test('two-hand tracking only on a desktop at high quality; a later quality change switches it', async () => {
+  const cases = [
+    [{ quality: 'high', isMobile: false }, 2],
+    [{ quality: 'medium', isMobile: false }, 1],
+    [{ quality: 'low', isMobile: false }, 1],
+    [{ quality: 'high', isMobile: true }, 1],
+  ];
+  for (const [extra, n] of cases) {
+    const hi = new HandInput({ settings: {}, params: new URLSearchParams(), renderer: null, ...extra });
+    await hi._createLandmarker('CPU');
+    assert.equal(globalThis.__handOptions.numHands, n, JSON.stringify(extra));
+    assert.equal(hi.numHands, n);
+  }
+  // Quality lowered while tracking (e.g. the automatic step-down): one hand from then on.
+  const sim = makeSim({ app: { quality: 'high', isMobile: false } });
+  const calls = [];
+  sim.hi.landmarker.setOptions = (o) => {
+    calls.push(o);
+    return Promise.resolve();
+  };
+  sim.hi.numHands = 2;
+  const open = place('open');
+  sim.run(500, () => [{ pts: open }]);
+  assert.equal(calls.length, 0);
+  sim.hi.app.quality = 'medium';
+  sim.run(500, () => [{ pts: open }]);
+  assert.deepEqual(calls, [{ numHands: 1 }]);
+  assert.equal(sim.hi.numHands, 1);
+  assert.ok(sim.log.slice(-20).every((r) => r.source === 'hand' && r.open), 'tracking goes on');
+});
+
+/**
+ * The Live Mirror case: hand detection (InputManager) then segmentation (the scene) in every
+ * render frame, with each model blocking the main thread for its cost. Frames take the next
+ * vsync after their work (like requestAnimationFrame).
+ */
+function makeMirrorSim({ detCost, segCost, renderFps = 60, camFps = 30 }) {
+  clock = 10000;
+  const t0 = clock;
+  const frameMs = 1000 / renderFps;
+  const app = {
+    quality: 'high', isMobile: false, settings: { showPreview: false },
+    params: new URLSearchParams(), renderer: { domElement: fakeEl },
+  };
+  const hi = new HandInput(app);
+  hi._running = true;
+  hi.delegate = 'CPU';
+  hi.numHands = 2;
+  const busy = []; // [start ms, cost ms, 'hand' | 'seg']
+  let current = { landmarks: [], handedness: [] };
+  hi.landmarker = {
+    detectForVideo: () => {
+      busy.push([clock - t0, detCost, 'hand']);
+      clock += detCost;
+      return current;
+    },
+    close: noop,
+  };
+  const video = { readyState: 4, videoWidth: 640, videoHeight: 480, currentTime: 0 };
+  hi._video = video;
+  const im = new InputManager(app);
+  im.hand = hi;
+  app.input = im;
+  const seg = new PersonSegmenter(app);
+  const mask = { width: 16, height: 16, getAsFloat32Array: () => new Float32Array(256).fill(0.7) };
+  seg.segmenter = {
+    segmentForVideo: (_canvas, _ts, cb) => {
+      busy.push([clock - t0, segCost, 'seg']);
+      clock += segCost;
+      cb({ confidenceMasks: [mask] });
+    },
+    close: noop,
+  };
+  let lastCam = -1;
+  const frames = [];
+  return {
+    hi, seg, busy, frames,
+    run(ms, scene) {
+      const end = clock + ms;
+      while (clock < end) {
+        const start = clock;
+        const cam = Math.floor((clock - t0) / (1000 / camFps));
+        if (cam !== lastCam) {
+          lastCam = cam;
+          video.currentTime = cam / camFps;
+          const hands = scene(clock - t0) || [];
+          current = {
+            landmarks: hands.map((h) => toRaw(h.pts)),
+            handedness: hands.map(() => [{ categoryName: 'Left', score: 0.98 }]),
+          };
+        }
+        const n = busy.length;
+        const s = im.update(frameMs / 1000);
+        seg.update(video, performance.now());
+        frames.push({ t: start - t0, ran: busy.slice(n).map((b) => b[2]), source: s.source });
+        clock = start + Math.max(1, Math.ceil((clock - start) / frameMs - 1e-9)) * frameMs;
+      }
+    },
+  };
+}
+
+/** Share of [a, b) ms the models kept the main thread busy, and each one's rate in Hz. */
+function load(busy, a, b) {
+  const inside = busy.filter(([t]) => t >= a && t < b);
+  const sum = (k) => inside.filter((x) => x[2] === k).reduce((acc, x) => acc + x[1], 0);
+  const hz = (k) => (inside.filter((x) => x[2] === k).length * 1000) / (b - a);
+  return { share: (sum('hand') + sum('seg')) / (b - a), hand: hz('hand'), seg: hz('seg') };
+}
+
+test('Live Mirror: segmentation never runs in a detection frame, <= 10 Hz while a hand is tracked, both within half the main thread', () => {
+  // laptop GPU, laptop CPU, phone CPU, a slow phone
+  for (const [detCost, segCost] of [[6, 4], [15, 8], [35, 20], [70, 45]]) {
+    const sim = makeMirrorSim({ detCost, segCost });
+    const open = place('open');
+    const label = `detect ${detCost} ms, segment ${segCost} ms`;
+    sim.run(6000, () => []); // nobody's hand in view
+    sim.run(8000, () => [{ pts: open }]); // a hand is tracked
+    assert.ok(sim.frames.every((f) => f.ran.length <= 1), `${label}: a frame ran both`);
+    const idle = load(sim.busy, 3000, 6000);
+    const tracked = load(sim.busy, 9000, 14000);
+    const slack = 0.03; // EMA noise
+    assert.ok(idle.share <= VISION_SHARE + slack, `${label}: no hand: ${(idle.share * 100).toFixed(0)}% busy`);
+    assert.ok(tracked.share <= VISION_SHARE + slack, `${label}: tracking: ${(tracked.share * 100).toFixed(0)}% busy`);
+    assert.ok(tracked.seg <= 10.2, `${label}: segmentation ${tracked.seg.toFixed(1)} Hz while tracking`);
+    assert.ok(idle.hand <= 9.1, `${label}: idle detection ${idle.hand.toFixed(1)} Hz`);
+    // Both still do their job: the mask keeps following (near 10 Hz on a laptop, >= 2 Hz on
+    // the slowest phone), the hand stays usable.
+    const minSeg = segCost <= 8 ? 8 : 2;
+    assert.ok(tracked.seg >= minSeg && idle.seg >= minSeg, `${label}: mask at ${tracked.seg.toFixed(1)} / ${idle.seg.toFixed(1)} Hz`);
+    assert.ok(tracked.hand >= Math.min(25, 1000 / (detCost / 0.35) - 1), `${label}: hand at ${tracked.hand.toFixed(1)} Hz`);
+    assert.ok(sim.frames.slice(-60).every((f) => f.source === 'hand'), `${label}: hand tracked`);
+    assert.ok(sim.seg.hasMask);
+  }
+});
+
+test('Live Mirror on slow rendering (detection due every frame): segmentation still gets frames', () => {
+  const sim = makeMirrorSim({ detCost: 8, segCost: 6, renderFps: 30 });
+  const open = place('open');
+  sim.run(6000, () => [{ pts: open }]);
+  const tracked = load(sim.busy, 2000, 6000);
+  assert.ok(sim.frames.every((f) => f.ran.length <= 1), 'never both in one frame');
+  assert.ok(tracked.seg >= 8 && tracked.seg <= 10.2, `segmentation ${tracked.seg.toFixed(1)} Hz`);
+  assert.ok(tracked.hand >= 18, `hand detection ${tracked.hand.toFixed(1)} Hz`);
 });

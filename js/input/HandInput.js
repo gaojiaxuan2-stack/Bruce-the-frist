@@ -41,6 +41,22 @@ const RETAIN_MS = 1500;
  * is not the hand leaving, up to this long (or 3 detection intervals on a very slow device).
  */
 const STALL_MS = 1500;
+/**
+ * No hand seen for this long: look for one only every IDLE_INTERVAL_MS (~9 Hz is plenty to
+ * pick up a hand that comes into view; the palm detector that searches for it is the costly
+ * part of a detection). Back to the full rate as soon as a hand is found.
+ */
+const IDLE_AFTER_MS = 1000;
+const IDLE_INTERVAL_MS = 110;
+/**
+ * Share of the main thread the vision models may take together. Detection (and the Live
+ * Mirror's person segmentation) run on the main thread and block the frame they run in.
+ */
+export const VISION_SHARE = 0.5;
+/** The most of VISION_SHARE that other vision work can reserve; hand tracking keeps the rest. */
+const SIDE_SHARE_MAX = 0.15;
+/** A reservation lapses when it is not renewed for this long (the other work has stopped). */
+const SIDE_SHARE_TTL = 1500;
 /** Hand scale (image heights) of a comfortable distance (swipe thresholds are relative to it). */
 const DEPTH_NEUTRAL_SCALE = 0.22;
 /** Closeness gained per doubling of the apparent hand size (see RelativeDepth). */
@@ -64,6 +80,14 @@ const ndcX = (mx) => ((mx - REGION.x0) / (REGION.x1 - REGION.x0)) * 2 - 1;
 const ndcY = (y) => -(((y - REGION.y0) / (REGION.y1 - REGION.y0)) * 2 - 1);
 const damp = (k, dt) => 1 - Math.exp(-k * dt);
 const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+
+/** The page's hand tracker (InputManager makes one), for vision work that shares its budget. */
+let instance = null;
+
+/** The hand tracker while the camera is running, else null. */
+export function runningHandInput() {
+  return instance?.running ? instance : null;
+}
 
 /** Apparent hand size of filtered, normalised image landmarks, in image heights. */
 function imageHandSize(L, aspect) {
@@ -297,6 +321,24 @@ export class HandInput {
     this._lastGesture = 'none';
     this._lastPinching = false;
     this._t0 = performance.now();
+    /** Hands MediaPipe looks for (see _wantedHands); 0 until the model is created. */
+    this.numHands = 0;
+    /**
+     * True during a render frame in which update() ran a detection. Other main-thread vision
+     * work (the Live Mirror's segmentation) skips such a frame, so no frame is blocked twice.
+     */
+    this.detectedThisFrame = false;
+    this._yieldRequested = false;
+    this._sideShare = 0;
+    this._sideShareAt = -Infinity;
+    /** the last detection ran at the idle rate (no hand tracked) */
+    this._detectIdle = false;
+    /** when a detection last found a hand */
+    this._lastHandAt = -Infinity;
+    /** main-thread time (ms) detection may still spend, see _maybeDetect */
+    this._credit = 0;
+    this._previewVideoTime = -1;
+    this._previewAt = 0;
 
     /** The object returned by update(); reused every frame. */
     this.frame = {
@@ -332,6 +374,13 @@ export class HandInput {
       video: null,
       errors: 0,
       lastEvents: [],
+      /** hands MediaPipe looks for (1, or 2 on a desktop at high quality) */
+      numHands: 0,
+      /** true while no hand is tracked and detection runs at the idle rate */
+      idle: true,
+      /** measured share of the main thread taken by detection, and reserved by other vision work */
+      share: 0,
+      sideShare: 0,
       /** absolute closeness of the primary hand, and the reference input.depth is relative to */
       depthRaw: null,
       depthRef: null,
@@ -347,10 +396,87 @@ export class HandInput {
     this.ctx = this.canvas?.getContext('2d', { alpha: false }) || null;
     this._captionText = '';
     this._previewShown = false;
+    instance = this;
   }
 
   get running() {
     return this._running;
+  }
+
+  // ------------------------------------------------------------------ main-thread budget
+
+  /** When (performance.now()) the last detection ran. */
+  get lastDetectAt() {
+    return this._lastDetectAt;
+  }
+
+  /** Measured cost of one detection in ms (running average). */
+  get detectMs() {
+    return this._detectMs;
+  }
+
+  /** Measured share of the main thread hand detection takes (cost x rate, 0..1). */
+  get detectShare() {
+    if (!this._running || !(this.debug.fps > 0) || performance.now() - this._lastDetectAt > 1000) return 0;
+    return Math.min(1, (this._detectMs * this.debug.fps) / 1000);
+  }
+
+  /** A hand is being tracked (seen within the last IDLE_AFTER_MS). */
+  get tracking() {
+    return this._running && !this._isIdle(performance.now());
+  }
+
+  /**
+   * Other vision work on the main thread (the Live Mirror's segmentation) reserves `share`
+   * of VISION_SHARE; detection keeps to the rest (at most SIDE_SHARE_MAX is given away).
+   * Renew it at least every SIDE_SHARE_TTL ms while that work runs.
+   */
+  reserveShare(share, now = performance.now()) {
+    this._sideShare = clamp(Number(share) || 0, 0, SIDE_SHARE_MAX);
+    this._sideShareAt = now;
+  }
+
+  /**
+   * Other vision work was due in a frame where detection ran: skip detection in the next
+   * frame (only that one) and leave it to that work. This matters when detection would run
+   * in every frame (slow rendering); at 60 fps the next frame rarely has a new camera frame.
+   */
+  yieldFrame() {
+    this._yieldRequested = true;
+  }
+
+  _reservedShare(now) {
+    return now - this._sideShareAt < SIDE_SHARE_TTL ? this._sideShare : 0;
+  }
+
+  /** No hand found for IDLE_AFTER_MS (or ever): detection looks for one at the idle rate. */
+  _isIdle(now) {
+    return now - this._lastHandAt > IDLE_AFTER_MS;
+  }
+
+  /**
+   * Two hands (two-hand zoom) only on a desktop at high quality: while fewer hands than this
+   * are tracked, MediaPipe runs its palm detector on every frame (~25% more time per
+   * detection with one hand up).
+   */
+  _wantedHands() {
+    return this.app.isMobile || this.app.quality !== 'high' ? 1 : 2;
+  }
+
+  /** The quality changed: switch between one- and two-hand tracking (rebuilds MediaPipe's graph once). */
+  _applyNumHands(lm) {
+    const n = this._wantedHands();
+    // Set first: a failure is not retried every frame (a broken graph makes detection throw,
+    // which rebuilds the landmarker with the right value, see _fallbackToCpu).
+    this.numHands = this.debug.numHands = n;
+    try {
+      Promise.resolve(lm.setOptions?.({ numHands: n })).catch((err) => {
+        console.warn('Hand tracking: could not change the number of hands', err);
+      });
+    } catch (err) {
+      console.warn('Hand tracking: could not change the number of hands', err);
+    }
+    this._log('numHands', n);
   }
 
   /** The hidden, playing webcam <video> (null before the first start). */
@@ -382,6 +508,7 @@ export class HandInput {
   /** Stop the camera (the model stays loaded so a restart is instant). */
   stop() {
     this._running = false;
+    this.detectedThisFrame = false;
     this._releaseCamera();
     this._resetTracking();
     this._showPreview(false);
@@ -469,7 +596,7 @@ export class HandInput {
 
   _ensureLandmarker() {
     if (this.landmarker) return Promise.resolve(this.landmarker);
-    this._landmarkerPromise ??= this._createLandmarker(this._preferredDelegate())
+    this._landmarkerPromise ??= this._createLandmarker(this.preferredDelegate())
       .then((lm) => (this.landmarker = lm))
       .finally(() => {
         this._landmarkerPromise = null;
@@ -477,8 +604,11 @@ export class HandInput {
     return this._landmarkerPromise;
   }
 
-  /** GPU unless asked otherwise (?delegate=cpu) or WebGL is a software renderer. */
-  _preferredDelegate() {
+  /**
+   * GPU unless asked otherwise (?delegate=cpu), WebGL is a software renderer, or the GPU
+   * delegate already failed / was too slow here. (The Live Mirror's segmenter follows this.)
+   */
+  preferredDelegate() {
     if (this._cpuOnly) return 'CPU';
     const forced = this.app.params?.get?.('delegate');
     if (forced && /^(cpu|gpu)$/i.test(forced)) return forced.toUpperCase();
@@ -499,10 +629,11 @@ export class HandInput {
 
   async _createLandmarker(delegate) {
     const fileset = await getVisionFileset();
+    const numHands = this._wantedHands();
     const options = (d) => ({
       baseOptions: { modelAssetPath: MODEL_URLS.hand, delegate: d },
       runningMode: 'VIDEO',
-      numHands: 2,
+      numHands,
       // MediaPipe's defaults: stricter values never find the hand in a dim room. An
       // occasional false detection is absorbed by the gesture debounce and LOST_MS.
       minHandDetectionConfidence: 0.5,
@@ -513,6 +644,7 @@ export class HandInput {
       try {
         const lm = await HandLandmarker.createFromOptions(fileset, options('GPU'));
         this.delegate = this.debug.delegate = 'GPU';
+        this.numHands = this.debug.numHands = numHands;
         return lm;
       } catch (err) {
         console.warn('Hand tracking: GPU delegate unavailable, using CPU.', err);
@@ -520,6 +652,7 @@ export class HandInput {
     }
     const lm = await HandLandmarker.createFromOptions(fileset, options('CPU'));
     this.delegate = this.debug.delegate = 'CPU';
+    this.numHands = this.debug.numHands = numHands;
     return lm;
   }
 
@@ -562,6 +695,11 @@ export class HandInput {
     this._displayValid = false;
     this._lastGesture = 'none';
     this._lastPinching = false;
+    this._detectIdle = false;
+    this._lastHandAt = -Infinity;
+    this._credit = 0;
+    this._yieldRequested = false;
+    this.detectedThisFrame = false;
     this.frame.hands.length = 0;
   }
 
@@ -577,7 +715,11 @@ export class HandInput {
     f.events.length = 0;
     f.zoom = 0;
 
-    const detected = this._maybeDetect(performance.now());
+    // A frame asked for by other vision work (yieldFrame) is this one only.
+    const yieldNow = this._yieldRequested;
+    this._yieldRequested = false;
+    const detected = this._maybeDetect(performance.now(), yieldNow);
+    this.detectedThisFrame = detected;
     const now = performance.now();
     this._syncPreview(detected, now);
 
@@ -695,8 +837,11 @@ export class HandInput {
     return list;
   }
 
-  /** Run the landmarker on a new camera frame (if any). Returns true when it ran. */
-  _maybeDetect(now) {
+  /**
+   * Run the landmarker on a new camera frame (if any). Returns true when it ran.
+   * @param {boolean} [yieldFrame] leave this frame to other vision work (see yieldFrame())
+   */
+  _maybeDetect(now, yieldFrame = false) {
     const video = this._video;
     const lm = this.landmarker;
     if (!lm && !this._swapping && !this._landmarkerPromise && now >= this._pausedUntil) {
@@ -713,12 +858,26 @@ export class HandInput {
     if (video.currentTime === this._lastVideoTime && now - this._lastDetectAt < 200) return false;
     if (now < this._pausedUntil) return false;
     // Detection runs on the main thread and blocks the render frame it runs in. Give it at
-    // most half of the main thread (detection every >= 2x its cost), but never less than
-    // 4 detections per second, below which hand control is unusable anyway. So on a device
-    // where one detection costs > 125 ms (much slower than any phone's CPU delegate), its
-    // share goes above 50%.
-    const minInterval = Math.min(250, this._detectMs / 0.5);
-    if (now - this._lastDetectAt < minInterval) return false;
+    // most half of the main thread, less the part other vision work has reserved (Live
+    // Mirror segmentation, at most SIDE_SHARE_MAX): detection time accrues at that share of
+    // the time passing (up to 1.5 detections' worth, so the camera's frame timing does not
+    // waste it) and each detection spends its measured cost. But never fewer than 4
+    // detections per second, below which hand control is unusable anyway: on a device where
+    // one detection costs > 90-125 ms (much slower than any phone's CPU delegate), its share
+    // goes above that. While no hand is tracked, ~9 Hz is enough.
+    const sideShare = this._reservedShare(now);
+    const idle = this._isIdle(now);
+    const cost = this._detectMs;
+    const since = now - this._lastDetectAt;
+    const credit = Math.min(this._credit + since * (VISION_SHARE - sideShare), cost * 1.5);
+    if (credit < cost && since < 250) return false;
+    if (idle && since < IDLE_INTERVAL_MS) return false;
+    if (yieldFrame) return false;
+    if (this.numHands && this.numHands !== this._wantedHands()) {
+      // (In place of this frame's detection: one stall per frame.)
+      this._applyNumHands(lm);
+      return false;
+    }
 
     const ts = Math.max(Math.round(now), this._lastTimestamp + 1);
     let result;
@@ -735,6 +894,7 @@ export class HandInput {
       return false;
     }
     const spent = performance.now() - t0;
+    this._credit = Math.max(0, credit - cost);
     this._errors = 0;
     this._lastTimestamp = ts;
     this._lastVideoTime = video.currentTime;
@@ -745,9 +905,17 @@ export class HandInput {
     // the loss / stall timeouts must grow with it. A hidden tab's pause does not count.)
     if (interval > 0 && interval < 10000) {
       const fps = 1000 / interval;
-      this.debug.fps = this.debug.fps ? this.debug.fps + (fps - this.debug.fps) * 0.12 : fps;
+      // The idle rate (no hand) and the tracking rate are separate regimes: on a switch the
+      // average starts afresh, so a hand that shows up gets the real tracking rate's loss
+      // timeouts and debounce from its second detection on.
+      const fresh = !this.debug.fps || idle !== this._detectIdle;
+      this.debug.fps = fresh ? fps : this.debug.fps + (fps - this.debug.fps) * 0.12;
     }
+    this._detectIdle = idle;
+    this.debug.idle = idle;
+    this.debug.sideShare = Math.round(sideShare * 100) / 100;
     this.debug.detectMs = Math.round(this._detectMs * 10) / 10;
+    this.debug.share = Math.round(this.detectShare * 100) / 100;
     this.debug.frames++;
     // A GPU delegate this slow after warm-up means software WebGL hiding behind a masked
     // renderer name: the CPU (WASM SIMD) path is several times faster there.
@@ -818,6 +986,7 @@ export class HandInput {
       d.hand.update(d.raw, d.handedness, aspect, now, lost, stall);
     }
     this.debug.handsVisible = dets.length;
+    if (dets.length) this._lastHandAt = now;
 
     // Primary: keep the same hand while it is tracked, else a hand of the same side as the
     // last primary (left-handed users), else the user's right hand, else the first.
@@ -920,7 +1089,12 @@ export class HandInput {
     const show = this._running && !!this.app.settings?.showPreview && !!this.ctx;
     this._showPreview(show);
     if (!show) return;
-    if (detected || !this._previewDrawn) this._drawPreview(now);
+    // The preview follows the detections (the skeleton matches the picture). While detection
+    // idles (no hand), new camera frames are drawn anyway (cheap, <= ~30 Hz) so the picture
+    // does not stutter at the idle rate.
+    const video = this._video;
+    const fresh = !!video && video.currentTime !== this._previewVideoTime && now - this._previewAt >= 30;
+    if (detected || !this._previewDrawn || (fresh && this._isIdle(now))) this._drawPreview(now);
   }
 
   _drawPreview(now) {
@@ -934,6 +1108,8 @@ export class HandInput {
       this.canvas.height = H;
     }
     this._previewDrawn = true;
+    this._previewVideoTime = video.currentTime;
+    this._previewAt = now;
 
     // Mirrored video, dimmed so the skeleton reads well.
     ctx.setTransform(-1, 0, 0, 1, W, 0);

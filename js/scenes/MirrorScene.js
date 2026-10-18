@@ -4,13 +4,14 @@
 // floats in front while the rest drifts away as dust.
 //
 // Hand:  point = push a hole, pinch + move = tilt the relief, fist = pull all
-// particles into a swirling ball, open palm after a fist = explode,
+// particles into a swirling ball, open hand after a fist = explode,
 // hand closer / farther = more / less depth, peace sign = next style.
 import * as THREE from 'three';
 import { BaseScene } from '../core/BaseScene.js';
 import { vertexShader, fragmentShader, VOID_COUNT, STYLE_IDS } from './mirror/shaders.js';
 import { PersonSegmenter } from './mirror/PersonSegmenter.js';
 import { MirrorUi } from './mirror/ui.js';
+import { loadImageTexture, VideoCanvasTexture } from './mirror/media.js';
 
 const STYLES = Object.keys(STYLE_IDS);
 const PHOTO_URL = new URL('../../assets/face/color.jpg', import.meta.url).href;
@@ -24,7 +25,7 @@ let lastFile = null;
 const BASE_COUNT = 110000;
 const BASE_DEPTH = 2.2; // world units of relief at "3D depth" = 1
 const INTRO_SECONDS = 1.8;
-const CHARGE_SECONDS = 1.6; // after a fist, an open palm within this time explodes
+const CHARGE_SECONDS = 1.6; // after a fist, an open hand within this time explodes
 const BLAST_SECONDS = 5;
 const BALL_Z = 1.2; // the ball floats this far in front of the sheet
 // Background removal switches on only when a real person (head + shoulders ~ 0.3 of
@@ -42,8 +43,9 @@ const clamp = THREE.MathUtils.clamp;
 const damp = (x, target, k, dt) => x + (target - x) * (1 - Math.exp(-k * dt));
 
 /**
- * Webcam / file video as a texture. Mipmaps are on so the shader can read a cheap,
- * smooth blur (relief) and an anti-aliased colour for any particle density.
+ * Webcam as a texture. Mipmaps are on so the shader can read a cheap, smooth blur
+ * (relief) and an anti-aliased colour for any particle density. (Video files go
+ * through a small canvas instead, see mirror/media.js.)
  */
 function videoTexture(video) {
   const tex = new THREE.VideoTexture(video);
@@ -83,9 +85,9 @@ export default class MirrorScene extends BaseScene {
       { icon: '☝️', gesture: 'Point', text: 'push a hole in the particles' },
       { icon: '🤏', gesture: 'Pinch + move', text: 'tilt the 3D picture' },
       { icon: '✊', gesture: 'Fist', text: 'pull all particles into a ball' },
-      { icon: '✋', gesture: 'Open hand', text: 'after a fist: explode!' },
-      { icon: '↕️', gesture: 'Hand closer / farther', text: 'more / less 3D depth' },
+      { icon: '✋', gesture: 'Open hand after fist', text: 'explode!' },
       { icon: '✌️', gesture: 'Peace', text: 'change the colour style' },
+      { icon: '↕️', gesture: 'Hand closer / farther', text: 'more / less 3D depth' },
     ],
     bloom: { strength: 0.7, radius: 0.45, threshold: 0.85 },
   };
@@ -268,7 +270,7 @@ export default class MirrorScene extends BaseScene {
       .then(() => this.ui.setNote(null))
       .catch(() => {
         // App.startHands has already explained why in a toast; only update the note under the button
-        this.ui.setNote('No camera yet — this is your photo. The mouse works too.');
+        this.ui.setNote('No camera yet — this is your photo. Touch and mouse work too.');
       })
       .finally(() => {
         this.cameraBusy = false;
@@ -293,22 +295,22 @@ export default class MirrorScene extends BaseScene {
           video.addEventListener('error', () => reject(new Error('unsupported video')), { once: true });
         });
         await video.play().catch(() => {});
-        const tex = videoTexture(video);
-        src = { kind: 'file', texture: tex, video, width: video.videoWidth, height: video.videoHeight, flipX: false, linear: false, url };
+        if (!video.videoWidth || !video.videoHeight) throw new Error('empty video');
+        // A <= 1024 px canvas copy, refreshed once per new video frame (not the full-size video).
+        const feed = new VideoCanvasTexture(video);
+        src = { kind: 'file', texture: feed.texture, feed, video, width: feed.width, height: feed.height, flipX: false, linear: true, url };
       } else {
-        const img = new Image();
-        img.src = url;
-        await img.decode();
-        const tex = new THREE.Texture(img);
-        tex.colorSpace = THREE.SRGBColorSpace;
-        tex.needsUpdate = true;
-        src = { kind: 'file', texture: tex, width: img.naturalWidth, height: img.naturalHeight, flipX: false, linear: true, url };
+        // Decoded at <= 2048 px on the long side; width / height are the texture's (for the mip level).
+        const pic = await loadImageTexture(file, url);
+        URL.revokeObjectURL(url); // the pixels are in the canvas now
+        src = { kind: 'file', texture: pic.texture, width: pic.width, height: pic.height, flipX: false, linear: true, url: null };
       }
       if (!src.width || !src.height) throw new Error('empty picture');
       if (this.disposed) {
+        src.feed?.dispose();
         src.texture.dispose();
         src.video?.removeAttribute('src');
-        URL.revokeObjectURL(url);
+        if (src.url) URL.revokeObjectURL(src.url);
         return;
       }
       this.dropFile();
@@ -329,13 +331,14 @@ export default class MirrorScene extends BaseScene {
     const f = this.file;
     if (!f) return;
     if (this.current === f) this.current = null;
+    f.feed?.dispose();
     f.texture.dispose();
     if (f.video) {
       f.video.pause();
       f.video.removeAttribute('src');
       f.video.load();
     }
-    URL.revokeObjectURL(f.url);
+    if (f.url) URL.revokeObjectURL(f.url);
     this.file = null;
   }
 
@@ -422,9 +425,12 @@ export default class MirrorScene extends BaseScene {
     u.uGrid.value.set(cols, rows);
     u.uUvRect.value.set((1 - cw / W) / 2, (1 - ch / H) / 2, cw / W, ch / H);
     u.uSpacing.value = cw / cols;
-    // mip level where one texel ~ one particle (keeps big photos from sparkling)
+    // Mip level where one texel ~ one particle (keeps big photos from sparkling). src.width is
+    // the TEXTURE's width (files are downscaled on load). It may go below 0 for a small
+    // picture: the colour sample then simply reads level 0, while the relief blur
+    // (uLod + 2 / + 3.5 in the shader) keeps the same size in particles.
     const texelsPerParticle = ((cw / W) * src.width) / cols;
-    u.uLod.value = Math.max(0, Math.log2(texelsPerParticle));
+    u.uLod.value = Math.max(-3, Math.log2(texelsPerParticle));
   }
 
   buildGrid(n, aspect) {
@@ -473,6 +479,7 @@ export default class MirrorScene extends BaseScene {
   update(dt, time, input) {
     if (!this.uniforms) return;
     this.syncSources();
+    this.current.feed?.update(); // a video file: copy its new frame (if any) into the small canvas
     if (this.layoutDirty) {
       this.layoutDirty = false;
       this.layout();
@@ -550,7 +557,7 @@ export default class MirrorScene extends BaseScene {
     }
     u.uVoidOn.value = voidOn ? 1 : 0;
 
-    // ---- fist: pull everything into a swirling ball; open palm afterwards: explode
+    // ---- fist: pull everything into a swirling ball; open hand afterwards: explode
     if (fist) {
       // centred on the hand cursor (input.pointer), on the plane where the ball floats
       const p = this.toSheet(input.pointer, BALL_Z * vs, _ball);

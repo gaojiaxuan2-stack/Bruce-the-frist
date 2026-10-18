@@ -8,7 +8,7 @@
 //   ☝️ point          push the dots with a soft trail that springs back
 //   🤏 pinch + move   turn the head in 3D (with inertia, eases back to front)
 //   ✊ fist           dots are sucked into a swirling glowing ball
-//   ✋ open after ✊  the ball explodes into dust, then the face re-assembles
+//   ✋ open hand after ✊  the ball explodes into dust, then the face re-assembles
 //   ✌️ victory        next colour mode (Photo / Mono / Neon)
 //   hand closer / two hands / wheel   zoom
 import * as THREE from 'three';
@@ -44,6 +44,7 @@ const BALL_RADIUS = 0.95;
 const FIST_PLANE_Z = 1.3; // world z where the fist ball forms (in front of the face)
 const ZOOM_MIN = 0.6;
 const ZOOM_MAX = 2.8;
+const REWIND_SECONDS = 0.45; // playIntro() mid-way: dots fly back out to the cloud this fast
 
 const clamp = THREE.MathUtils.clamp;
 const damp = (k, dt) => 1 - Math.exp(-k * dt);
@@ -62,7 +63,7 @@ export default class FaceScene extends BaseScene {
       { icon: '☝️', gesture: 'Point', text: 'touch your face, push the dots' },
       { icon: '🤏', gesture: 'Pinch + move', text: 'turn the head in 3D' },
       { icon: '✊', gesture: 'Fist', text: 'pull the dots into a ball' },
-      { icon: '✋', gesture: 'Open hand', text: 'after a fist: explode!' },
+      { icon: '✋', gesture: 'Open hand after fist', text: 'explode!' },
       { icon: '✌️', gesture: 'Peace', text: 'change the colours' },
       { icon: '↕️', gesture: 'Hand closer / farther', text: 'zoom in / out' },
     ],
@@ -391,11 +392,22 @@ export default class FaceScene extends BaseScene {
     const U = this.uniforms;
     if (this.burst) {
       const b = this.burst;
-      b.t += dt * (fistDown ? 2.5 : 1); // hurry if the user already wants a new ball
-      const reform = clamp((b.t - b.reformStart) / b.reformDur, 0, 1);
+      const pace = fistDown ? 2.5 : 1; // hurry if the user already wants a new ball
+      b.t += dt * pace;
+      if (b.rewind > 0) {
+        // The intro was asked for again mid-way: fly back out to the cloud (no jump), then
+        // hold there for a moment before assembling again.
+        b.reform = Math.max(0, b.reform - dt * b.rewind);
+        if (b.reform === 0) {
+          b.rewind = 0;
+          b.reformStart = Math.max(b.reformStart, b.t + 0.15);
+        }
+      } else if (b.t >= b.reformStart) {
+        b.reform = Math.min(1, b.reform + (dt * pace) / b.reformDur);
+      }
       U.uBurstT.value = b.t;
-      U.uReform.value = reform;
-      if (reform >= 1) {
+      U.uReform.value = b.reform;
+      if (b.reform >= 1) {
         this.burst = null;
         this.gather = 0;
         U.uGather.value = 0;
@@ -568,27 +580,42 @@ export default class FaceScene extends BaseScene {
     if (fromBall && this.gather > 0.05) {
       U.uBurstCenter.value.copy(U.uBallCenter.value);
       U.uBurstScale.value = 1;
-      this.burst = { t: 0.001, reformStart: 0.85, reformDur: 2.2 };
+      this.burst = { t: 0.001, reformStart: 0.85, reformDur: 2.2, reform: 0, rewind: 0 };
     } else {
       this.gather = 0;
       U.uGather.value = 0;
       U.uBurstCenter.value.set(0, 0.3, (0.8 - PIVOT_DEPTH) * U.uDepthWorld.value);
       U.uBurstScale.value = 0.75;
-      this.burst = { t: 0.001, reformStart: 0.6, reformDur: 2.1 };
+      this.burst = { t: 0.001, reformStart: 0.6, reformDur: 2.1, reform: 0, rewind: 0 };
     }
     U.uBurstT.value = this.burst.t;
     U.uReform.value = 0;
     this.trail.clear();
   }
 
-  /** Particles fly in from a scattered cloud and assemble the face. */
-  playIntro(duration) {
+  /**
+   * Particles fly in from a scattered cloud and assemble the face in `duration` seconds.
+   * Public and safe to call at any time, e.g. again when the start screen goes away
+   * (`app.active?.playIntro?.(2.5)`). If the dots are already in the air (an intro or an
+   * explosion), nothing jumps: they keep their path, fly back out to the cloud from wherever
+   * they are, then assemble again at the new pace.
+   */
+  playIntro(duration = 2.5) {
     const U = this.uniforms;
+    if (!U) return; // not built yet: enter() plays the intro once it is
+    const dur = Math.max(0.3, Number(duration) || 2.5);
+    const b = this.burst;
+    if (b) {
+      b.reformDur = dur;
+      b.rewind = b.reform > 0 ? 1 / REWIND_SECONDS : 0;
+      return;
+    }
     this.gather = 0;
+    this.fistWasDown = false;
     U.uGather.value = 0;
     U.uBurstCenter.value.set(0, 0, 0);
     U.uBurstScale.value = 1.55;
-    this.burst = { t: 1.4, reformStart: 1.55, reformDur: duration };
+    this.burst = { t: 1.4, reformStart: 1.55, reformDur: dur, reform: 0, rewind: 0 };
     U.uBurstT.value = this.burst.t;
     U.uReform.value = 0;
   }

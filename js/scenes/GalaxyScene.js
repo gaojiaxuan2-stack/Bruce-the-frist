@@ -2,7 +2,7 @@
 //   ☝️ point      -> gravity well on the galactic plane, stars orbit your fingertip
 //   🤏 pinch+move -> turn / tilt the galaxy (with inertia)
 //   ✊ fist       -> the whole galaxy spirals into the core
-//   ✋ open palm  -> (after a fist) Big Bang: explode and re-form the spiral
+//   ✋ open hand  -> (after a fist) Big Bang: explode and re-form the spiral
 //   ✌️ victory    -> a brand-new random galaxy with a smooth morph
 //   hand near/far, wheel, two hands -> zoom
 // All star motion runs in the vertex shader (js/scenes/galaxy/shaders.js).
@@ -50,11 +50,13 @@ export default class GalaxyScene extends BaseScene {
     hints: [
       { icon: '☝️', gesture: 'Point', text: 'gravity well: stars swirl to your finger' },
       { icon: '🤏', gesture: 'Pinch + move', text: 'turn and tilt the galaxy' },
-      { icon: '✊', gesture: 'Fist', text: 'pull all stars into the center' },
+      { icon: '✊', gesture: 'Fist', text: 'pull all stars into the centre' },
       { icon: '✋', gesture: 'Open hand after fist', text: 'Big Bang!' },
       { icon: '✌️', gesture: 'Peace', text: 'make a new galaxy' },
       { icon: '↕️', gesture: 'Hand closer / farther', text: 'zoom in / out' },
     ],
+    // Mouse users have no ✌️: a double click makes a new galaxy (see init).
+    mouseHint: 'double-click = new galaxy',
     bloom: { strength: 0.9, radius: 0.55, threshold: 0.05 },
   };
 

@@ -49,7 +49,8 @@ export class Hud {
       const base = touch
         ? 'drag = point · two fingers = turn + zoom · hold = fist'
         : 'drag = pinch · right-drag = fist · wheel = zoom';
-      const li = hintItem(touch ? '👆' : '🖱️', touch ? 'Touch' : 'Mouse', meta.mouseHint ? `${base} · ${meta.mouseHint}` : base);
+      const extra = touch ? meta.touchHint : meta.mouseHint;
+      const li = hintItem(touch ? '👆' : '🖱️', touch ? 'Touch' : 'Mouse', extra ? `${base} · ${extra}` : base);
       li.className = 'hint-mouse';
       list.appendChild(li);
     }

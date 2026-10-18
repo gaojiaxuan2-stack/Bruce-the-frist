@@ -11,7 +11,7 @@ import { GLSL } from '../../core/glsl.js';
 /** Number of "void" slots: [0] follows the fingertip, the rest are its fading trail. */
 export const VOID_COUNT = 8;
 
-export const STYLE_IDS = { Color: 0, Mono: 1, Matrix: 2, Thermal: 3 };
+export const STYLE_IDS = { Colour: 0, Mono: 1, Matrix: 2, Thermal: 3 };
 
 export const vertexShader = /* glsl */ `
 #define VOIDS ${VOID_COUNT}
@@ -237,7 +237,7 @@ void main() {
   float sz = mix(0.6, 1.4, aRand.x);
   vec3 col;
   if (uStyle < 0.5) {
-    // Color: the real picture, a little richer
+    // Colour: the real picture, a little richer
     vec3 s = clamp(mix(vec3(lum), srgb, 1.18), 0.0, 1.0);
     s = clamp((s - 0.5) * 1.06 + 0.5, 0.0, 1.0);
     col = toLinear(s) * 0.95 * mix(1.0, expo, 0.7);

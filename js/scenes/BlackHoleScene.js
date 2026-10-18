@@ -5,7 +5,7 @@
 // bends the far side of the disk over and under the shadow, a thin photon
 // ring, infalling streams, dust, background stars and optional jets.
 // The hand orbits the camera, a fist feeds the hole, opening the hand
-// releases a shock wave, a victory sign changes the colours.
+// (mouse / touch: letting go) releases a shock wave, a victory sign changes the colours.
 import * as THREE from 'three';
 import { BaseScene } from '../core/BaseScene.js';
 import {
@@ -68,12 +68,13 @@ export default class BlackHoleScene extends BaseScene {
     subtitle: 'Gargantua — gravity bends the light',
     icon: '🕳️',
     hints: [
+      // (no Point here: the whole hand steers, so "Move hand" takes the Point row's place)
       { icon: '🖐️', gesture: 'Move hand', text: 'fly around the black hole' },
-      { icon: '🤏', gesture: 'Pinch + drag', text: 'spin the view' },
-      { icon: '↕️', gesture: 'Hand closer / farther', text: 'zoom in / out' },
+      { icon: '🤏', gesture: 'Pinch + move', text: 'spin the view' },
       { icon: '✊', gesture: 'Fist', text: 'feed it — more gravity' },
       { icon: '✋', gesture: 'Open hand after fist', text: 'release a big flash' },
       { icon: '✌️', gesture: 'Peace', text: 'change the colours' },
+      { icon: '↕️', gesture: 'Hand closer / farther', text: 'zoom in / out' },
     ],
     bloom: { strength: 1.25, radius: 0.6, threshold: 0.3 },
     // The palm steers the orbit: show the hand cursor at the palm, and only count fast flicks as swipes.
@@ -234,6 +235,7 @@ export default class BlackHoleScene extends BaseScene {
     this.feed = 0;
     this.charge = 0;
     this.sinceFist = 99;
+    this.fistSource = 'none'; // who made the last fist: 'hand' or 'mouse' (mouse / touch)
     this.mass = 1;
     this.flash = 0;
     this.jetBurst = 0;
@@ -351,6 +353,7 @@ export default class BlackHoleScene extends BaseScene {
     // fire a release flash.
     this.charge = 0;
     this.sinceFist = 99;
+    this.fistSource = 'none';
     this.feed = 0;
     this.shock = null;
     this.flash = 0;
@@ -379,7 +382,7 @@ export default class BlackHoleScene extends BaseScene {
     this.settings.palette = PALETTES[i].name;
     PALETTES[i].colors.forEach((c, k) => this.paletteTarget[k].set(c));
     this.paletteController?.updateDisplay();
-    if (announce) this.app.hud.toast(`✌️ Colors: ${PALETTES[i].name}`);
+    if (announce) this.app.hud.toast(`✌️ Colours: ${PALETTES[i].name}`);
   }
 
   buildGui(folder) {
@@ -392,7 +395,7 @@ export default class BlackHoleScene extends BaseScene {
     folder.add(s, 'jets').name('Jets');
     this.paletteController = folder
       .add(s, 'palette', PALETTES.map((p) => p.name))
-      .name('Colors')
+      .name('Colours')
       .onChange((v) => this.setPalette(v));
   }
 
@@ -480,6 +483,7 @@ export default class BlackHoleScene extends BaseScene {
 
     // ------------------------------------------------ feed (fist) and release (open hand)
     if (fist) {
+      this.fistSource = input.source;
       this.charge = Math.min(1, this.charge + dt / 2.2);
       this.sinceFist = 0;
     } else {
@@ -487,9 +491,13 @@ export default class BlackHoleScene extends BaseScene {
       if (this.sinceFist > 3) this.charge = Math.max(0, this.charge - dt * 0.6);
     }
     this.feed += ((fist ? 1 : 0) - this.feed) * damp(fist ? 2.2 : 1.1, dt);
-    // (Open palm and victory are whole-hand poses, not clicks, so they work even
+    // (Open hand and victory are whole-hand poses, not clicks, so they work even
     // while the hand cursor happens to hover the UI.)
-    if (!fist && active && input.open && this.charge > 0.12 && this.sinceFist < 3) this.release(this.charge);
+    // Mouse / touch have no open hand: letting go of the right button or of the
+    // long-press is the release (a lifted finger may leave the input inactive).
+    const letGo = this.fistSource === 'mouse' && input.events.has('fistend');
+    const opened = (active && input.open) || letGo;
+    if (!fist && opened && this.charge > 0.12 && this.sinceFist < 3) this.release(this.charge);
     if (input.events.has('victorystart')) {
       this.setPalette(PALETTES[(this.paletteIndex + 1) % PALETTES.length].name, true);
     }
