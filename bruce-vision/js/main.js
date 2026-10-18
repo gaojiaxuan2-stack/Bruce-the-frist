@@ -121,11 +121,21 @@ function safe(fn, where) {
 
 // ---------------------------------------------------------------------------
 // Layout
+// WebGL resolution scale (device px per CSS px). It drops while the frame
+// rate is low (phones running heavy effects) and recovers when there is room.
+let glScale = 0, glScaleAt = 0;
+function glScaleRange() {
+  const max = Math.min(app.dpr, 1.5);
+  return [Math.max(0.75, max * 0.6), max];
+}
+
 function resize() {
   const W = window.innerWidth, H = window.innerHeight;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   app.W = W; app.H = H; app.dpr = dpr;
-  gfx.resize(W, H, Math.min(dpr, 1.5));
+  const [lo, hi] = glScaleRange();
+  glScale = glScale ? Math.min(hi, Math.max(lo, glScale)) : hi;
+  gfx.resize(W, H, glScale);
   fxCanvas.width = Math.round(W * dpr); fxCanvas.height = Math.round(H * dpr);
   layoutVideo();
 }
@@ -231,7 +241,17 @@ function saveSnapshot(url) {
 
 // ---------------------------------------------------------------------------
 // Frame loop
-let lastNow = 0, lastVideoTime = -1, fps = 60, detFps = 30, lastDetAt = 0, statusAt = 0;
+function adaptResolution(now) {
+  if (sim || now - glScaleAt < 2500) return;
+  const [lo, hi] = glScaleRange();
+  const next = fps < 42 ? Math.max(lo, glScale - 0.15) : fps > 57 ? Math.min(hi, glScale + 0.15) : glScale;
+  if (Math.abs(next - glScale) < 0.01) return;
+  glScale = next;
+  glScaleAt = now;
+  gfx.resize(app.W, app.H, glScale);
+}
+
+let lastNow = 0, lastVideoTime = -1, fps = 60, detFps = 30, lastDetAt = 0, statusAt = 0, detMs = 10;
 let hands = [];
 function loop(now) {
   requestAnimationFrame(loop);
@@ -249,15 +269,22 @@ function loop(now) {
 
   let events = [];
   const fresh = src === video ? video.readyState >= 2 && video.currentTime !== lastVideoTime : true;
+  // On a 60 fps camera, slow devices only track every other frame so the
+  // picture keeps rendering smoothly (prediction fills the gaps).
+  const due = !lastDetAt || now - lastDetAt >= (detMs > 12 ? 28 : 0);
   if (fresh) {
     lastVideoTime = video.currentTime;
     gfx.updateVideo(src);
+  }
+  if (fresh && due) {
     let det = { hands: [] };
     if (app.ready) {
       const n = needs();
       if (!n.face) app.face = null;
       if (!n.segment && app.hasMask) { gfx.clearMask(); app.hasMask = false; }
+      const t0 = performance.now();
       det = tracker.detect(src, n, { hands: !sim });
+      detMs += (performance.now() - t0 - detMs) * 0.1;
       if (lastDetAt) detFps += (1000 / Math.max(1, now - lastDetAt) - detFps) * 0.1;
       lastDetAt = now;
       ingestFace(det.face, now);
@@ -276,6 +303,8 @@ function loop(now) {
     hands = r.hands;
     events = r.events;
   }
+  gestures.predict(now);
+  adaptResolution(now);
 
   const frame = {
     t: app.t, dt, realDt, now, hands, events, face: app.face, hasMask: app.hasMask,
@@ -320,13 +349,19 @@ function fatal(title, detail) {
   $('#splash-msg').innerHTML = `<b>${title}</b><br>${detail}`;
 }
 
+function coarsePointer() {
+  try { return window.matchMedia('(pointer: coarse)').matches; } catch (e) { return false; }
+}
+
 async function startCamera() {
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new Error(window.isSecureContext ? 'No camera API in this browser.' : 'Camera needs HTTPS (or localhost).');
   }
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: false,
-    video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+    // 60 fps where the camera can (computers) halves tracking latency; phones
+    // stay at 30 to keep cool and leave GPU time for the effects.
+    video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: coarsePointer() ? 30 : 60 } },
   });
   video.srcObject = stream;
   video.muted = true;
@@ -421,7 +456,7 @@ window.__bv = {
   setMode, setOption,
   state: () => ({
     mode: app.mode?.id, option: app.mode?.option, ready: app.ready, started: app.started,
-    delegate: tracker.delegate, fps: Math.round(fps), detFps: Math.round(detFps),
+    delegate: tracker.delegate, fps: Math.round(fps), detFps: Math.round(detFps), detMs: +detMs.toFixed(1), glScale,
     simT: sim ? +sim.time(performance.now()).toFixed(2) : undefined,
     face: !!app.face, mask: app.hasMask, errors: [...errored], trackerErrors: tracker.errors,
     hands: hands.map((h) => ({ id: h.id, pose: h.pose, pinching: h.pinching, side: h.side, handedness: h.handedness, ghost: h.ghost, x: Math.round(h.palm.x), y: Math.round(h.palm.y) })),

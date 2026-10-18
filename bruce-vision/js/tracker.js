@@ -74,8 +74,10 @@ export class Tracker {
       runningMode: 'VIDEO',
       numHands: 2,
       minHandDetectionConfidence: 0.55,
-      minHandPresenceConfidence: 0.5,
-      minTrackingConfidence: 0.5,
+      // Slightly looser tracking keeps fast-moving hands locked on instead of
+      // dropping them and paying for a slow full re-detection.
+      minHandPresenceConfidence: 0.45,
+      minTrackingConfidence: 0.4,
     }));
   }
 

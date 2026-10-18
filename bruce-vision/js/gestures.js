@@ -63,17 +63,29 @@ function chainBend(w, chain) {
   return total;
 }
 
-const POSE_CONFIRM_MS = 70;   // a new pose must hold this long before it counts
+const POSE_CONFIRM_MS = 45;   // a new pose must hold this long before it counts
 const GHOST_MS = 140;         // keep a lost hand alive this long (bridges blinks)
 const SWIPE_WINDOW_MS = 260;
+// Smoothing works in screen-relative units (1 = the short side of the
+// screen) so phones and desktops feel the same: [minCutoff Hz, beta, dCutoff Hz].
+// Tuned in a simulation: about half the lag of the original px-based setting
+// while moving, with no more jitter when the hand is still.
+const SMOOTH_XY = [1.4, 25, 2.0];
+const SMOOTH_Z = [1.0, 3, 1.0];
+// Between camera frames (~30 fps) the screen refreshes 60-120 times a second;
+// landmarks are pushed ahead along their velocity for at most this long.
+const PREDICT_MAX_S = 0.04;
 
 export class TrackedHand {
   constructor(id, t) {
     this.id = id;
     this.born = t;
     this.seen = t;
-    this.filters = Array.from({ length: 21 }, () => [new OneEuro(), new OneEuro(), new OneEuro(1.0, 0.004)]);
-    this.lm = Array.from({ length: 21 }, () => ({ x: 0, y: 0, z: 0 }));
+    this.filters = Array.from({ length: 21 }, () => [new OneEuro(...SMOOTH_XY), new OneEuro(...SMOOTH_XY), new OneEuro(...SMOOTH_Z)]);
+    this.lm = Array.from({ length: 21 }, () => ({ x: 0, y: 0, z: 0 }));    // shown (predicted)
+    this.base = Array.from({ length: 21 }, () => ({ x: 0, y: 0, z: 0 }));  // filtered, last camera frame
+    this.lv = Array.from({ length: 21 }, () => ({ x: 0, y: 0 }));          // px/s, for prediction
+    this._palm0 = { x: 0, y: 0 };
     this.world = null;
     this.ext = { thumb: false, index: false, middle: false, ring: false, pinky: false };
     this.curl = { thumb: 0, index: 0, middle: 0, ring: 0, pinky: 0 };
@@ -169,6 +181,23 @@ export class GestureEngine {
     return { hands: this.hands, events };
   }
 
+  // Every animation frame: move each live hand's landmarks ahead along its
+  // recent velocity, so overlays glide between camera frames instead of
+  // stepping. Lost (ghost) hands stay frozen.
+  predict(now) {
+    for (const h of this.hands) {
+      const k = h.ghost ? 0 : Math.min(PREDICT_MAX_S, Math.max(0, (now - h.seen) / 1000)) * 0.85;
+      const lm = h.lm;
+      for (let i = 0; i < 21; i++) {
+        const b = h.base[i], v = h.lv[i], p = lm[i];
+        p.x = b.x + v.x * k; p.y = b.y + v.y * k; p.z = b.z;
+      }
+      h.palm.x = (lm[0].x + lm[5].x + lm[9].x + lm[13].x + lm[17].x) / 5;
+      h.palm.y = (lm[0].y + lm[5].y + lm[9].y + lm[13].y + lm[17].y) / 5;
+      h.pinchPoint = { x: (lm[4].x + lm[8].x) / 2, y: (lm[4].y + lm[8].y) / 2 };
+    }
+  }
+
   _ingest(h, d, t, dt, view, events) {
     const fresh = h._fresh; h._fresh = false;
     h._now = t;
@@ -179,13 +208,18 @@ export class GestureEngine {
     h.handedness = d.handedness === 'Left' ? 'Right' : 'Left';
     h.world = d.world;
 
+    const S = Math.min(view.W, view.H) || 1;
     for (let i = 0; i < 21; i++) {
       const n = d.landmarks[i];
       const s = view.toScreen(n.x, n.y);
-      const f = h.filters[i];
-      h.lm[i].x = f[0].filter(s.x, dt);
-      h.lm[i].y = f[1].filter(s.y, dt);
-      h.lm[i].z = f[2].filter(n.z * view.dw, dt);
+      const f = h.filters[i], b = h.base[i], v = h.lv[i];
+      const x = f[0].filter(s.x / S, dt) * S, y = f[1].filter(s.y / S, dt) * S;
+      if (fresh || !(dt > 0)) { v.x = 0; v.y = 0; } else {
+        v.x += ((x - b.x) / dt - v.x) * 0.6;
+        v.y += ((y - b.y) / dt - v.y) * 0.6;
+      }
+      b.x = x; b.y = y; b.z = f[2].filter((n.z * view.dw) / S, dt) * S;
+      h.lm[i].x = x; h.lm[i].y = y; h.lm[i].z = b.z;
     }
     const lm = h.lm;
 
@@ -193,10 +227,11 @@ export class GestureEngine {
     const px = (lm[0].x + lm[5].x + lm[9].x + lm[13].x + lm[17].x) / 5;
     const py = (lm[0].y + lm[5].y + lm[9].y + lm[13].y + lm[17].y) / 5;
     if (!fresh && dt > 0) {
-      const vx = (px - h.palm.x) / dt, vy = (py - h.palm.y) / dt;
+      const vx = (px - h._palm0.x) / dt, vy = (py - h._palm0.y) / dt;
       h.vel.x += (vx - h.vel.x) * 0.5;
       h.vel.y += (vy - h.vel.y) * 0.5;
     }
+    h._palm0.x = px; h._palm0.y = py;
     h.palm.x = px; h.palm.y = py;
     h.speed = Math.hypot(h.vel.x, h.vel.y);
     const size = Math.max(dist2(lm[0], lm[9]), dist2(lm[5], lm[17]) * 1.25);
@@ -238,7 +273,7 @@ export class GestureEngine {
       const close = pr < 0.34 && indexReach > 0.95 && tipFromPalm > 0.5;
       h._pinchFrames = close ? (h._pinchFrames || 0) + 1 : 0;
       if (h._pinchFrames === 1) h._pinchSince = t;
-      h.pinching = close && h._pinchFrames >= 2 && t - h._pinchSince >= 50;
+      h.pinching = close && h._pinchFrames >= 2 && t - h._pinchSince >= 30;
     }
     h.pinchPoint = { x: (lm[4].x + lm[8].x) / 2, y: (lm[4].y + lm[8].y) / 2 };
     if (h.pinching && !wasPinching) events.push({ type: 'pinchstart', hand: h, x: h.pinchPoint.x, y: h.pinchPoint.y });
@@ -268,7 +303,7 @@ export class GestureEngine {
     if (t > h._swipeCooldown && h.history.length >= 3 && h.pose !== 'fist') {
       const a = h.history[0];
       const sx = px - a.x, sy = py - a.y;
-      const minDist = Math.min(view.W, view.H) * 0.3;
+      const minDist = Math.min(view.W, view.H) * 0.26;
       if (Math.abs(sx) > minDist && Math.abs(sx) > 2 * Math.abs(sy)) {
         events.push({ type: 'swipe', hand: h, dir: sx > 0 ? 'right' : 'left' });
         h._swipeCooldown = t + 650; h.history.length = 0;

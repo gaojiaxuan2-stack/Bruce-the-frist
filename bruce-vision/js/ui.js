@@ -4,7 +4,7 @@
 
 import { drawGlow } from './draw.js';
 
-const DWELL_S = 0.65;
+const DWELL_S = 0.5;
 const HIT_PAD = 12;
 
 export class UI {
