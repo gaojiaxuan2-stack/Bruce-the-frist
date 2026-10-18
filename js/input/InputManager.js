@@ -1,6 +1,9 @@
 import { createInputState, assignInput } from './InputState.js';
 import { MouseInput } from './MouseInput.js';
 
+// ✌️ seen within this long after a fist opens is ignored (it is usually the fist opening).
+const VICTORY_AFTER_FIST_MS = 450;
+
 // Boolean fields that produce "<name>start" / "<name>end" edge events.
 const EDGES = [
   ['pinching', 'pinch'],
@@ -25,6 +28,8 @@ export class InputManager {
     this.override = null;
     this.prev = { pinching: false, fist: false, open: false, gesture: 'none' };
     this.prevPointer = { x: 0, y: 0 };
+    this.lastFistEnd = -Infinity;
+    this.victoryArmed = false;
     this.handStarting = null;
   }
 
@@ -100,7 +105,19 @@ export class InputManager {
       if (!s[key] && this.prev[key]) s.events.add(`${name}end`);
       this.prev[key] = s[key];
     }
-    if (s.gesture !== this.prev.gesture && s.gesture === 'victory') s.events.add('victorystart');
+    // A slowly opening fist passes through ✌️ for a moment (index + middle straighten first), so
+    // victorystart waits until the pose is still ✌️ a little after the fist ended.
+    const now = performance.now();
+    if (s.events.has('fistend')) this.lastFistEnd = now;
+    if (s.gesture === 'victory') {
+      if (this.prev.gesture !== 'victory') this.victoryArmed = true;
+      if (this.victoryArmed && !s.fist && now - this.lastFistEnd > VICTORY_AFTER_FIST_MS) {
+        s.events.add('victorystart');
+        this.victoryArmed = false;
+      }
+    } else {
+      this.victoryArmed = false;
+    }
     this.prev.gesture = s.gesture;
 
     if (s.pinching && !s.uiCaptured && s.active && !s.events.has('pinchstart')) {

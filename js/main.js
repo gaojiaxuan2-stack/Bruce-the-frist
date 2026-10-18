@@ -44,6 +44,11 @@ async function main() {
     handButton.disabled = true;
     handButton.textContent = 'Starting camera…';
     errorEl.hidden = true;
+    // The browser's permission pop-up is easy to miss: point at it if nothing happens for a while.
+    const promptHint = setTimeout(() => {
+      errorEl.textContent = 'Please allow the camera in your browser’s pop-up (near the address bar).';
+      errorEl.hidden = false;
+    }, 6000);
     try {
       await app.startHands();
       hideStart();
@@ -52,6 +57,8 @@ async function main() {
       errorEl.hidden = false;
       handButton.disabled = false;
       handButton.innerHTML = '&#9995; Try hand control again';
+    } finally {
+      clearTimeout(promptHint);
     }
   };
 

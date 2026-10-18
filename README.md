@@ -20,9 +20,9 @@ swipe.
 | 🤏 Pinch + move | grab and rotate; pinch on a button or slider to click / drag it |
 | ✊ Fist | pulls the particles in |
 | ✋ Open palm (after a fist) | explodes them back out |
-| ✌️ Peace sign | changes colours / style (depends on the scene) |
+| ✌️ Peace | changes colours / style (depends on the scene) |
 | 👋 Fast swipe left / right | next / previous scene |
-| Hover a tab ~1 s | opens that scene |
+| ☝️ Point at a tab ~1 s | opens that scene |
 | Hand closer / farther, or two hands apart | zoom |
 
 Each scene shows its own gestures in the bottom-left corner. Without a camera, the

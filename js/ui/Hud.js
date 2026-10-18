@@ -14,7 +14,8 @@ export class Hud {
       b.className = 'tab';
       b.dataset.handClickable = '';
       b.dataset.scene = s.id;
-      b.innerHTML = `<span class="tab-icon" aria-hidden="true">${s.icon}</span>${s.title}`;
+      b.innerHTML = `<span class="tab-icon" aria-hidden="true">${s.icon}</span><span class="tab-label">${s.title}</span>`;
+      b.title = s.title;
       b.addEventListener('click', () => app.goTo(s.id));
       nav.appendChild(b);
       this.tabs.set(s.id, b);

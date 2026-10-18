@@ -85,7 +85,7 @@ export default class MirrorScene extends BaseScene {
       { icon: '✊', gesture: 'Fist', text: 'pull all particles into a ball' },
       { icon: '✋', gesture: 'Open hand', text: 'after a fist: explode!' },
       { icon: '↕️', gesture: 'Hand closer / farther', text: 'more / less 3D depth' },
-      { icon: '✌️', gesture: 'Peace', text: 'change the color style' },
+      { icon: '✌️', gesture: 'Peace', text: 'change the colour style' },
     ],
     bloom: { strength: 0.7, radius: 0.45, threshold: 0.85 },
   };

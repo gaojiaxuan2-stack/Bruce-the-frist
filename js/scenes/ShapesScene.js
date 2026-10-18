@@ -113,6 +113,7 @@ export default class ShapesScene extends BaseScene {
       { icon: '🤏', gesture: 'Pinch + drag', text: 'rotate' },
       { icon: '✋', gesture: 'Tilt open hand', text: 'turn the shape' },
       { icon: '✊', gesture: 'Fist, then open ✋', text: 'squeeze, then explode' },
+      { icon: '↕️', gesture: 'Hand closer / farther', text: 'bigger / smaller' },
     ],
     bloom: { strength: 0.9, radius: 0.5, threshold: 0.05 },
   };

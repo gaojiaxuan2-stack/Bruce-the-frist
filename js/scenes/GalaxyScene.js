@@ -52,8 +52,8 @@ export default class GalaxyScene extends BaseScene {
       { icon: '🤏', gesture: 'Pinch + move', text: 'turn and tilt the galaxy' },
       { icon: '✊', gesture: 'Fist', text: 'pull all stars into the center' },
       { icon: '✋', gesture: 'Open hand after fist', text: 'Big Bang!' },
-      { icon: '✌️', gesture: 'Peace sign', text: 'make a new galaxy' },
-      { icon: '🔍', gesture: 'Hand near / far', text: 'zoom in and out' },
+      { icon: '✌️', gesture: 'Peace', text: 'make a new galaxy' },
+      { icon: '↕️', gesture: 'Hand closer / farther', text: 'zoom in / out' },
     ],
     bloom: { strength: 0.9, radius: 0.55, threshold: 0.05 },
   };

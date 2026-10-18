@@ -68,14 +68,17 @@ export default class BlackHoleScene extends BaseScene {
     subtitle: 'Gargantua — gravity bends the light',
     icon: '🕳️',
     hints: [
-      { icon: '☝️', gesture: 'Move hand', text: 'fly around the black hole' },
+      { icon: '🖐️', gesture: 'Move hand', text: 'fly around the black hole' },
       { icon: '🤏', gesture: 'Pinch + drag', text: 'spin the view' },
-      { icon: '🖐️', gesture: 'Hand closer / farther', text: 'zoom in / out' },
+      { icon: '↕️', gesture: 'Hand closer / farther', text: 'zoom in / out' },
       { icon: '✊', gesture: 'Fist', text: 'feed it — more gravity' },
       { icon: '✋', gesture: 'Open hand after fist', text: 'release a big flash' },
-      { icon: '✌️', gesture: 'Victory', text: 'change colors' },
+      { icon: '✌️', gesture: 'Peace', text: 'change the colours' },
     ],
     bloom: { strength: 1.25, radius: 0.6, threshold: 0.3 },
+    // The palm steers the orbit: show the hand cursor at the palm, and only count fast flicks as swipes.
+    cursor: 'palm',
+    swipe: 'strict',
   };
 
   async init() {

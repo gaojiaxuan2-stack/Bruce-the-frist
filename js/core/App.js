@@ -52,7 +52,13 @@ export class App {
     this.loading = new Map();
     this.activeId = null;
     this.active = null;
+    /** Scene a switch is currently heading to (null when none is in flight). */
+    this.pendingId = null;
     this.navToken = 0;
+    /** Bumped when quality changes, so scenes still loading at the old quality get thrown away. */
+    this.generation = 0;
+    /** The user picked a quality in the panel: never lower it automatically. */
+    this.userQuality = false;
     this.clock = new THREE.Clock();
     this.elapsed = 0;
     this.fpsSamples = [];
@@ -75,26 +81,35 @@ export class App {
   // ---------------------------------------------------------------- scenes
 
   next() {
-    const list = VISIBLE_SCENES;
-    const i = list.findIndex((s) => s.id === this.activeId);
-    return this.goTo(list[(i + 1) % list.length].id);
+    return this.step(1);
   }
 
   prev() {
+    return this.step(-1);
+  }
+
+  /** Move through the tabs, counting from a switch that is still loading so quick presses add up. */
+  step(dir) {
     const list = VISIBLE_SCENES;
-    const i = list.findIndex((s) => s.id === this.activeId);
-    return this.goTo(list[(i - 1 + list.length) % list.length].id);
+    const i = list.findIndex((s) => s.id === (this.pendingId ?? this.activeId));
+    return this.goTo(list[(i + dir + list.length) % list.length].id);
   }
 
   async loadScene(id) {
     if (this.scenes.has(id)) return this.scenes.get(id);
     if (!this.loading.has(id)) {
       const entry = SCENES.find((s) => s.id === id);
+      const generation = this.generation;
       const p = (async () => {
         const mod = await entry.load();
         const SceneClass = mod.default;
         const instance = new SceneClass(this);
         await instance.init();
+        if (generation !== this.generation) {
+          // Quality changed while this was loading: build it again at the new quality.
+          instance.dispose();
+          return this.loadScene(id);
+        }
         instance.resize(this.width, this.height);
         const folder = this.gui.addFolder(SceneClass.meta.title);
         instance.buildGui(folder);
@@ -102,7 +117,9 @@ export class App {
         const rec = { instance, folder };
         this.scenes.set(id, rec);
         return rec;
-      })().finally(() => this.loading.delete(id));
+      })().finally(() => {
+        if (this.loading.get(id) === p) this.loading.delete(id);
+      });
       this.loading.set(id, p);
     }
     return this.loading.get(id);
@@ -115,11 +132,14 @@ export class App {
     if (id === this.activeId) {
       // Cancel any switch still loading (e.g. swiped away and straight back).
       this.navToken++;
+      this.pendingId = null;
       fade.classList.remove('on');
       this.hud.setActive(id, this.active.meta);
       return;
     }
+    if (id === this.pendingId) return; // already on the way there
     const token = ++this.navToken;
+    this.pendingId = id;
     const first = !this.active;
     if (!first) fade.classList.add('on');
     this.hud.setActive(id, SCENES.find((s) => s.id === id));
@@ -129,12 +149,16 @@ export class App {
       [rec] = await Promise.all([this.loadScene(id), first ? null : wait(FADE_MS)]);
     } catch (err) {
       console.error(`Scene "${id}" failed to load`, err);
-      this.hud.toast(`Couldn't open ${id}: ${err.message || err}`, 4000);
+      if (token !== this.navToken) return; // the user already went somewhere else
+      this.pendingId = null;
+      const title = SCENES.find((s) => s.id === id).title;
+      this.hud.toast(`Couldn't open ${title}. Check your connection and try again.`, 4000);
       fade.classList.remove('on');
       if (this.activeId) this.hud.setActive(this.activeId, this.active.meta);
       return;
     }
     if (token !== this.navToken) return;
+    this.pendingId = null;
 
     if (this.active) {
       this.active.exit();
@@ -175,7 +199,10 @@ export class App {
 
   /** Drop every built scene and rebuild the active one (used when quality changes). */
   async rebuildScenes() {
-    const id = this.activeId;
+    const id = this.pendingId ?? this.activeId;
+    this.pendingId = null;
+    this.generation++;
+    this.loading.clear();
     for (const { instance, folder } of this.scenes.values()) {
       if (instance === this.active) instance.exit();
       instance.dispose();
@@ -205,6 +232,8 @@ export class App {
   }
 
   toggleHands() {
+    // Already starting (e.g. 'h' pressed twice): wait for that start instead of starting again.
+    if (this.input.handStarting) return this.input.handStarting.then(() => true, () => false);
     if (this.input.handsRunning) {
       this.input.stopHands();
       this.hud.setCameraState(false);
@@ -250,7 +279,12 @@ export class App {
 
   /** Step quality down once if the device clearly can't keep up. */
   watchFps(dt) {
-    if (this.quality === 'low' || this.params.get('quality')) return;
+    if (this.quality === 'low' || this.params.get('quality') || this.userQuality) return;
+    if (this.pendingId) {
+      // Loading and shader compiles stall frames; don't count them.
+      this.fpsSamples.length = 0;
+      return;
+    }
     this.fpsSamples.push(dt);
     if (this.fpsSamples.length < 90) return;
     const avg = this.fpsSamples.reduce((a, b) => a + b, 0) / this.fpsSamples.length;
@@ -280,7 +314,10 @@ export class App {
     this.qualityController = g
       .add(this, 'quality', Object.keys(QUALITY))
       .name('Quality')
-      .onChange((q) => this.setQuality(q));
+      .onChange((q) => {
+        this.userQuality = true;
+        this.setQuality(q);
+      });
     g.add(this.settings, 'bloom').name('Glow').onChange(() => this.active && this.configurePasses());
     this.bloomController = g
       .add(this.bloomPass, 'strength', 0, 3, 0.01)
@@ -301,6 +338,7 @@ export class App {
   }
 
   onResize() {
+    if (window.innerWidth < 720 && this.width >= 720) this.gui.close();
     this.width = window.innerWidth;
     this.height = window.innerHeight;
     this.applySize();
@@ -309,6 +347,7 @@ export class App {
 
   onKey(e) {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+    if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
     if (e.key === 'ArrowRight') this.next();
     else if (e.key === 'ArrowLeft') this.prev();
     else if (/^[1-9]$/.test(e.key) && VISIBLE_SCENES[+e.key - 1]) this.goTo(VISIBLE_SCENES[+e.key - 1].id);
