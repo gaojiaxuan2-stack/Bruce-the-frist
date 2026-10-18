@@ -1,7 +1,7 @@
 // tracker.js — MediaPipe Tasks (hands always; face + person segmentation on
 // demand). Everything is vendored in this repo so it runs without any CDN.
 
-import { FilesetResolver, HandLandmarker, FaceLandmarker, ImageSegmenter } from '../lib/mediapipe/vision_bundle.mjs';
+import { FilesetResolver, HandLandmarker, FaceLandmarker, ImageSegmenter } from '../lib/mediapipe/vision_bundle.js';
 
 const WASM_DIR = new URL('../lib/mediapipe/wasm', import.meta.url).href;
 const MODELS = {
