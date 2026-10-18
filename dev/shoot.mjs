@@ -65,7 +65,8 @@ const url = `http://127.0.0.1:${port}/${args.url || 'index.html'}`;
 await page.goto(url);
 if (args.click !== undefined || args.cam) {
   await page.waitForSelector('#start');
-  await page.click('#start').catch(() => {});
+  // The app auto-starts when the camera is already allowed; only click if needed.
+  await page.click('#start', { timeout: 1500 }).catch(() => {});
 }
 const out = args.out || '/tmp/bv';
 fs.mkdirSync(path.dirname(out + 'x'), { recursive: true });

@@ -63,6 +63,7 @@ body.running #hud { opacity: 1; }
 .brand { justify-self: start; font-family: var(--display); font-weight: 900; font-size: 15px; letter-spacing: 0.18em; white-space: nowrap; text-shadow: 0 0 12px rgba(0, 0, 0, 0.6); }
 .brand b, .logo b { color: var(--accent); transition: color 0.4s; }
 .status { justify-self: end; display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; letter-spacing: 0.14em; white-space: nowrap; text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8); }
+#status-text { max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
 #status-dot { width: 8px; height: 8px; border-radius: 50%; background: #39ff88; box-shadow: 0 0 10px #39ff88; }
 #status-dot[data-state='loading'] { background: #ffc83a; box-shadow: 0 0 10px #ffc83a; animation: blink 0.8s infinite; }
 #status-dot[data-state='idle'] { background: #8a93a6; box-shadow: none; }
@@ -275,6 +276,13 @@ body.ready #progress i { background: #39ff88; box-shadow: 0 0 12px #39ff88; }
   /* Long option lists: show ◀ current ▶ instead of wrapping rows. */
   #options.many .chip[data-kind='option']:not(.active) { display: none; }
   #options.many .chip[data-id^='opt-'] { display: inline-flex; padding: 0; width: 46px; justify-content: center; }
+}
+@media (max-height: 460px) {
+  /* Landscape phones: keep the bars thin so effects have room. */
+  .bottombar { gap: 6px; padding-bottom: calc(10px + var(--safe-b)); }
+  #hint { font-size: 13px; padding: 4px 12px; }
+  .chip { min-height: 34px; }
+  .topbar { padding-top: calc(8px + var(--safe-t)); }
 }
 @media (max-width: 480px) {
   #start { font-size: 18px; padding: 18px 30px; }

@@ -313,6 +313,7 @@ export default {
   guide: [['🤏', 'Pinch &amp; move: draw'], ['✌️⏳', 'Hold: undo stroke'], ['✊⏳', 'Hold: clear all'], ['☝️', 'Point: comet cursor'], ['🖐️', 'Open hand: sparkles']],
   options: Object.entries(BRUSHES).map(([id, b]) => ({ id, label: b.label, short: b.short || b.label, icon: b.icon })),
   skeleton: false,
+  uiCursor: 'hud',  // Neon draws its own nib/cursor; HUD rings only near the bars
 
   simScenarios: SCENARIOS,
 

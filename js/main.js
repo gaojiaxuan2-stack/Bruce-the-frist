@@ -235,7 +235,8 @@ let lastNow = 0, lastVideoTime = -1, fps = 60, detFps = 30, lastDetAt = 0, statu
 let hands = [];
 function loop(now) {
   requestAnimationFrame(loop);
-  const dt = lastNow ? Math.min(0.1, (now - lastNow) / 1000) : 1 / 60;
+  const realDt = lastNow ? Math.min(0.5, (now - lastNow) / 1000) : 1 / 60;
+  const dt = Math.min(0.1, realDt);  // physics-safe step; realDt is for timers
   lastNow = now;
   fps += (1 / Math.max(dt, 1e-3) - fps) * 0.05;
   app.t = now / 1000;
@@ -268,10 +269,16 @@ function loop(now) {
       hands = r.hands;
       events = r.events;
     }
+  } else if (sim) {
+    // Scripted hands don't wait for camera frames (a slow fake camera
+    // would otherwise make them stutter).
+    const r = gestures.update(sim.hands(now, app.view), now, app.view);
+    hands = r.hands;
+    events = r.events;
   }
 
   const frame = {
-    t: app.t, dt, now, hands, events, face: app.face, hasMask: app.hasMask,
+    t: app.t, dt, realDt, now, hands, events, face: app.face, hasMask: app.hasMask,
     W: app.W, H: app.H, view: app.view, ready: app.ready, option: app.mode.option,
   };
   app.frame = frame;
@@ -301,7 +308,7 @@ function loop(now) {
   if (now - statusAt > 500) {
     statusAt = now;
     if (!app.ready) ui.setStatus(`LOADING ${Math.round((app.progress || 0) * 100)}%`, 'loading');
-    else if (app.loading) ui.setStatus(`LOADING ${app.loading === 'face' ? 'FACE' : 'BACKGROUND'} AI…`, 'loading');
+    else if (app.loading) ui.setStatus(`LOADING ${app.loading === 'face' ? 'FACE' : 'BODY'} AI…`, 'loading');
     else ui.setStatus(`${hands.length ? hands.length + (hands.length > 1 ? ' HANDS' : ' HAND') : 'NO HANDS'} · ${Math.round(fps)} FPS`, hands.length ? 'ok' : 'idle');
   }
 }
@@ -415,6 +422,7 @@ window.__bv = {
   state: () => ({
     mode: app.mode?.id, option: app.mode?.option, ready: app.ready, started: app.started,
     delegate: tracker.delegate, fps: Math.round(fps), detFps: Math.round(detFps),
+    simT: sim ? +sim.time(performance.now()).toFixed(2) : undefined,
     face: !!app.face, mask: app.hasMask, errors: [...errored], trackerErrors: tracker.errors,
     hands: hands.map((h) => ({ id: h.id, pose: h.pose, pinching: h.pinching, side: h.side, handedness: h.handedness, ghost: h.ghost, x: Math.round(h.palm.x), y: Math.round(h.palm.y) })),
   }),

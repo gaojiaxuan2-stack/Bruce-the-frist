@@ -16,6 +16,7 @@ export default {
   options: [{ id: 'city', label: 'CITY', short: 'CITY', icon: '…' }],  // bottom chips
   needs: { face: true, segment: true },   // or (app) => ({...}); loaded lazily
   skeleton: { color: '#fff', width: 1.6, glow: null, joints: true } | false,
+  uiCursor: 'hud',              // only show the HUD finger cursor near the bars
   simScenarios: { name: (t) => [handSpec, …] },   // see js/sim.js
 
   init(app) {},                 // once, first time the mode opens
@@ -38,7 +39,8 @@ corners and the 2D canvas all share this space.
 
 | field | meaning |
 | --- | --- |
-| `t`, `dt` | seconds since page load, seconds since last frame |
+| `t`, `dt` | seconds since page load, seconds since last frame (capped at 0.1 s for stable physics) |
+| `realDt` | uncapped frame time (≤ 0.5 s) — use it for hold-to-trigger timers so slow phones aren't slowed down |
 | `hands` | tracked hands, sorted left→right on screen (see below) |
 | `events` | one-shot events this frame (see below) |
 | `face` | `{ lm[478], center, width, height, angle, blend }` or `null` — only when `needs.face` |

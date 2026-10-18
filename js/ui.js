@@ -44,6 +44,9 @@ export class UI {
 
   setMode(m) {
     this.modeSince = performance.now() / 1000;
+    // 'hud': only draw finger cursors over/near the HUD (for modes that draw
+    // their own pen/cursor, like Neon Draw).
+    this.cursorMode = m.uiCursor || 'all';
     document.documentElement.style.setProperty('--accent', m.accent || '#38f9ff');
     this.accent = m.accent || '#38f9ff';
     for (const b of this.$modes.children) b.classList.toggle('active', b.dataset.id === m.id);
@@ -198,7 +201,9 @@ export class UI {
   // Draw finger cursors on the 2D overlay.
   draw(ctx, frame) {
     ctx.save();
+    const bands = this.cursorMode === 'hud' ? this.bands() : null;
     for (const p of this.pointers) {
+      if (bands && !p.chip && p.y > bands.top + 24 && p.y < bands.bottom - 24) continue;
       const r = p.pinch ? 10 : 16;
       ctx.globalCompositeOperation = 'lighter';
       drawGlow(ctx, p.x, p.y, r * 2.2, this.accent, 0.35);
