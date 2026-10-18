@@ -643,7 +643,21 @@ export class GestureStabilizer {
  * stays the same, the speed threshold drops to match). At 30 fps nothing changes.
  * A missing sample (one camera frame where the hand was not found) is fine: just skip
  * it. Only a gap longer than the allowed duration breaks the motion.
+ *
+ * Stricter detectors (for scenes where the open hand steers by moving sideways): a higher
+ * `minSpeed` (peak NDC/s at >= ~11 samples/s), and `sparseFactor` > 0 for slow tracking,
+ * where one step must then be faster than `sparseFactor` x covering the distance in the
+ * allowed time (by default, 0, any step faster than `restSpeed` counts).
  */
+/**
+ * SwipeDetector options for scenes that steer with hand movement (meta.swipe === 'strict'):
+ * a much faster peak is needed, so moving the open hand across the picture to steer (up to
+ * ~1.2 NDC in 700 ms) is not a swipe, while a real flick (0.6 NDC in 250 ms, 1 NDC in
+ * 350 ms) still is. sparseFactor does the same for slow tracking (~6-11 detections per
+ * second); below ~5 per second a flick and a quick move look alike.
+ */
+export const STRICT_SWIPE = Object.freeze({ minSpeed: 3.0, sparseFactor: 1.75 });
+
 export class SwipeDetector {
   constructor({
     minDistance = 0.55,
@@ -653,8 +667,10 @@ export class SwipeDetector {
     restSpeed = 1.0,
     maxSlope = 0.6,
     cooldown = 900,
+    sparseFactor = 0,
   } = {}) {
     this.minDistance = minDistance;
+    this.sparseFactor = sparseFactor;
     this.maxDuration = maxDuration;
     this.minSpeed = minSpeed;
     this.fastSteps = fastSteps;
@@ -708,7 +724,9 @@ export class SwipeDetector {
     // Sparse tracking (< ~11 samples/s) only sees speeds averaged over a whole sample
     // interval: one step clearly faster than covering `need` in the allowed time is enough.
     const sparse = interval > 90;
-    const fast = sparse ? Math.max(rest, (need / duration) * 1.2) : this.minSpeed * s;
+    // (Sparse: by default any step faster than `rest` counts; `sparseFactor` > 0 asks for a
+    // step faster than covering `need` in the allowed time, times that factor.)
+    const fast = sparse ? Math.max(rest, (need / (duration / 1000)) * this.sparseFactor) : this.minSpeed * s;
     const fastNeed = sparse ? 1 : this.fastSteps;
     // Walk back to where this movement started: the last sample where the hand was
     // nearly still or moving the other way. A flick slows down at the end, so a couple
@@ -752,5 +770,60 @@ export class SwipeDetector {
     this.lastSwipe = timeMs;
     h.length = 0;
     return sign < 0 ? 'swipeleft' : 'swiperight';
+  }
+}
+
+/**
+ * Hand distance relative to where this user's hand rests (every user sits at a different
+ * distance from the camera). Feed it the absolute closeness every frame the hand is
+ * tracked; it returns the depth for scenes: 0.5 = at the reference, + = closer.
+ *   - The reference is taken when the hand appears (and follows quickly for the first
+ *     `settleS` while the hand comes into view), then follows the hand slowly (time
+ *     constant `followS`), so a change of posture re-centres by itself.
+ *   - Inside `deadZone` around the reference the depth stays exactly 0.5: only a deliberate
+ *     move closer / farther counts. Beyond it the depth moves 1:1 with the closeness.
+ *   - When no sample came for more than `relockMs` (the hand was gone), the next one
+ *     anchors a new reference.
+ */
+export class RelativeDepth {
+  constructor({ deadZone = 0.1, followS = 8, settleS = 0.4, settleK = 8, relockMs = 1500 } = {}) {
+    this.deadZone = deadZone;
+    this.followS = followS;
+    this.settleS = settleS;
+    this.settleK = settleK;
+    this.relockMs = relockMs;
+    /** reference closeness (null until the first sample) */
+    this.ref = null;
+    this.age = 0;
+    this.lastT = 0;
+  }
+
+  /** Forget the reference: the next sample anchors a new one. */
+  reset() {
+    this.ref = null;
+  }
+
+  /**
+   * @param {number} raw absolute closeness (any scale with the same gain as the output;
+   *   HandInput: 0.5 + 0.6 per doubling of the apparent hand size)
+   * @param {number} timeMs
+   * @returns {number} depth 0..1, 0.5 = neutral
+   */
+  update(raw, timeMs) {
+    if (!Number.isFinite(raw)) return 0.5;
+    if (this.ref === null || timeMs - this.lastT > this.relockMs) {
+      this.ref = raw;
+      this.age = 0;
+      this.lastT = timeMs;
+      return 0.5;
+    }
+    const dt = clamp((timeMs - this.lastT) / 1000, 0, 1);
+    this.lastT = timeMs;
+    this.age += dt;
+    const k = this.age < this.settleS ? this.settleK : 1 / this.followS;
+    this.ref += (raw - this.ref) * (1 - Math.exp(-k * dt));
+    const d = raw - this.ref;
+    const dz = Math.sign(d) * Math.max(0, Math.abs(d) - this.deadZone);
+    return clamp(0.5 + dz, 0, 1);
   }
 }

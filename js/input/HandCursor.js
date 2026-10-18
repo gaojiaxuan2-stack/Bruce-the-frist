@@ -1,11 +1,18 @@
 // On-screen cursor for hand control, plus "clicking without a mouse":
 //   - pinch over a button / tab / lil-gui widget = click (sliders can be dragged while pinching)
-//   - hold the cursor still on a [data-hand-clickable] element for ~1.1 s = click (dwell)
+//   - POINT (☝️) at a [data-hand-clickable] element and hold still for ~1.1 s = click (dwell)
 //     (not for data-hand-clickable="pinch", e.g. the camera on/off button)
-// While the cursor is over UI (or dragging a UI widget) it sets state.uiCaptured so
-// scenes ignore the pinch.
+// The UI only takes the hand while it points or pinches (or a UI press / drag is in
+// progress): then the target is highlighted and state.uiCaptured is set so scenes ignore
+// the pinch. An open palm, fist, peace sign or thumbs up over the tabs / panel is a
+// whole-hand control of the scene (the cursor, the index fingertip, sits far above the
+// palm, often on the tab bar) and passes through.
+// A scene whose effect follows the palm can declare `static meta = { cursor: 'palm', ... }`:
+// the cursor is then drawn and hit-tested at the palm instead of the fingertip.
 
 const DWELL_S = 1.1;
+/** A dwell survives this long without the point pose (gesture flicker) before it restarts. */
+const DWELL_GRACE_S = 0.25;
 const DWELL_SHOW_S = 0.15;
 const CLICK_SLOP_PX = 40;
 const RING_R = 31;
@@ -180,14 +187,14 @@ export class HandCursor {
     /** Pinch started over the scene: ignore UI until it ends. */
     this.sceneDrag = false;
     this.hoverEl = null;
-    this.dwell = { el: null, t: 0, done: null };
+    this.dwell = { el: null, t: 0, done: null, grace: 0 };
     this.dwellShown = false;
     this.lastGesture = 'none';
     this.labelTime = 0;
     this.classKey = '';
     this.flipX = false;
     this.flipY = false;
-    this.debug = { clicks: 0, lastClick: null, hover: null };
+    this.debug = { clicks: 0, lastClick: null, hover: null, mode: 'finger', claimed: false };
   }
 
   /**
@@ -197,8 +204,12 @@ export class HandCursor {
   update(state, dt) {
     const w = window.innerWidth;
     const h = window.innerHeight;
-    const x = Math.round(((state.pointer.x + 1) / 2) * w * 10) / 10;
-    const y = Math.round(((1 - state.pointer.y) / 2) * h * 10) / 10;
+    // Scenes driven by the palm (meta.cursor === 'palm') get the cursor at the palm.
+    const palmMode = this.app?.active?.meta?.cursor === 'palm' && !!state.palm;
+    this.debug.mode = palmMode ? 'palm' : 'finger';
+    const at = palmMode ? state.palm : state.pointer;
+    const x = Math.round(((at.x + 1) / 2) * w * 10) / 10;
+    const y = Math.round(((1 - at.y) / 2) * h * 10) / 10;
     this.x = x;
     this.y = y;
     const pinching = !!state.pinching;
@@ -227,8 +238,10 @@ export class HandCursor {
         if (this.press.target.kind !== 'panel') this._mouse('move', this.press.target.deep, x, y);
       }
     }
+    let released = false;
     if (pinchEnd) {
       const press = this.press;
+      released = !!press;
       this.press = null;
       this.sceneDrag = false;
       if (press && press.target.kind !== 'panel') {
@@ -241,8 +254,16 @@ export class HandCursor {
       target = hitTest(x, y);
     }
 
+    // ---- does the UI take the hand? Only a pointing / pinching hand, or one pressing /
+    // dragging a widget (incl. the frame a press is released). Any other pose over the UI
+    // is a whole-hand control of the scene: no highlight, no uiCaptured, no dwell.
+    const pointing = state.gesture === 'point';
+    const claim = pointing || pinching || state.gesture === 'pinch' || !!this.press || released;
+    this.debug.claimed = claim && !!target;
+    const uiTarget = claim ? target : null;
+
     // ---- hover highlight
-    const hoverEl = target && target.kind !== 'panel' && !target.disabled ? target.el : null;
+    const hoverEl = uiTarget && uiTarget.kind !== 'panel' && !uiTarget.disabled ? uiTarget.el : null;
     if (hoverEl !== this.hoverEl) {
       this.hoverEl?.classList.remove('hand-hover');
       hoverEl?.classList.add('hand-hover');
@@ -250,21 +271,31 @@ export class HandCursor {
       this.debug.hover = hoverEl ? describe(hoverEl) : null;
     }
     // InputManager clears the flag every frame; in hand mode the cursor sets it.
-    state.uiCaptured = !!(this.press || target);
+    state.uiCaptured = !!(this.press || uiTarget);
 
-    // ---- dwell click on [data-hand-clickable] (not ="pinch")
+    // ---- dwell click on [data-hand-clickable] (not ="pinch"), only while pointing
     const d = this.dwell;
     if (d.done && (!target || target.el !== d.done)) d.done = null; // re-arm after leaving
-    const dwellEl = !pinching && !this.press && target?.kind === 'button' && !target.disabled
+    const dwellable = !pinching && !this.press && target?.kind === 'button' && !target.disabled
       && target.el.dataset.handClickable !== 'pinch'
       && !target.el.classList.contains('active') && target.el.getAttribute('aria-current') !== 'page'
       && target.el !== d.done ? target.el : null;
+    let dwellEl = pointing ? dwellable : null;
+    if (!dwellEl && dwellable && dwellable === d.el && d.t > 0) {
+      // Still on the same element but the point pose flickered: hold the progress briefly.
+      d.grace += dt;
+      if (d.grace < DWELL_GRACE_S) dwellEl = d.el;
+    } else {
+      d.grace = 0;
+    }
     if (dwellEl !== d.el) {
       d.el = dwellEl;
       d.t = 0;
+      d.grace = 0;
     }
     let progress = 0;
-    if (dwellEl) {
+    if (dwellEl && pointing) {
+      d.grace = 0;
       d.t += dt;
       progress = Math.min(1, Math.max(0, (d.t - DWELL_SHOW_S) / (DWELL_S - DWELL_SHOW_S)));
       if (d.t >= DWELL_S) {
@@ -274,6 +305,8 @@ export class HandCursor {
         d.t = 0;
         progress = 0;
       }
+    } else if (dwellEl) {
+      progress = Math.min(1, Math.max(0, (d.t - DWELL_SHOW_S) / (DWELL_S - DWELL_SHOW_S)));
     }
     const showDwell = progress > 0;
     if (showDwell !== this.dwellShown) {
@@ -322,9 +355,10 @@ export class HandCursor {
       if (this.labelTime <= 0) this.label.classList.remove('show');
     }
 
-    // Second hand: a small companion cursor at its index fingertip.
+    // Second hand: a small companion cursor at its index fingertip (its palm in palm mode).
     const other = state.twoHands ? state.hands?.[1] : null;
-    const op = other?.pointer || (other?.landmarks?.[8] && { x: clampNdc(other.landmarks[8].x), y: clampNdc(other.landmarks[8].y) });
+    const op = (palmMode ? other?.palm : other?.pointer)
+      || (other?.landmarks?.[8] && { x: clampNdc(other.landmarks[8].x), y: clampNdc(other.landmarks[8].y) });
     if (op) {
       this.second.style.transform = `translate3d(${((op.x + 1) / 2) * w}px, ${((1 - op.y) / 2) * h}px, 0)`;
       if (!this.secondVisible) {
@@ -350,6 +384,7 @@ export class HandCursor {
     this.dwell.el = null;
     this.dwell.t = 0;
     this.dwell.done = null;
+    this.dwell.grace = 0;
     if (this.dwellShown) {
       this.dwellShown = false;
       this.dwellSvg.classList.remove('show');

@@ -12,6 +12,8 @@ import {
   OneEuroFilter,
   PinchAim,
   PinchDetector,
+  RelativeDepth,
+  STRICT_SWIPE,
   SwipeDetector,
   analyzeHand,
   classifyShape,
@@ -23,10 +25,12 @@ import {
 
 /**
  * Part of the (mirrored) camera image that maps to the full screen, normalised image
- * coords. Slightly above centre: pointing at the bottom of the screen should not push
- * the wrist out of the camera view, and raising the hand reaches the tabs at the top.
+ * coords. Above centre: the pointer is the index fingertip, which sits well above the
+ * wrist, so the bottom edge of the screen is reached with the fingertip at 70% of the
+ * picture height while the hand (most of it) is still in view; raising the hand reaches
+ * the tabs at the top.
  */
-const REGION = { x0: 0.12, x1: 0.88, y0: 0.08, y1: 0.8 };
+const REGION = { x0: 0.12, x1: 0.88, y0: 0.08, y1: 0.7 };
 /** A hand that disappears for less than this is kept (brief tracking dropouts). */
 const LOST_MS = 200;
 /** A lost hand's filters and gesture state are kept this long, in case it comes back. */
@@ -37,8 +41,10 @@ const RETAIN_MS = 1500;
  * is not the hand leaving, up to this long (or 3 detection intervals on a very slow device).
  */
 const STALL_MS = 1500;
-/** Hand scale (image heights) that maps to depth 0.5, i.e. a comfortable distance. */
+/** Hand scale (image heights) of a comfortable distance (swipe thresholds are relative to it). */
 const DEPTH_NEUTRAL_SCALE = 0.22;
+/** Closeness gained per doubling of the apparent hand size (see RelativeDepth). */
+const DEPTH_GAIN = 0.6;
 const ZOOM_GAIN = 2.5;
 const ACCENT = '#7cf6c8';
 const SECONDARY = '#8aa8ff';
@@ -263,6 +269,19 @@ export class HandInput {
     this.primary = null;
     this._nextId = 1;
     this.swipe = new SwipeDetector();
+    /** used instead of `swipe` while the scene asks for strict swipes (meta.swipe === 'strict') */
+    this.strictSwipe = new SwipeDetector(STRICT_SWIPE);
+    this._swipeInUse = this.swipe;
+    /** input.depth relative to the primary hand's resting distance */
+    this.relDepth = new RelativeDepth({ deadZone: 0.1, followS: 8, relockMs: RETAIN_MS });
+    /**
+     * The side of the hand the user controls with ('Left' for a left-handed user): the
+     * last primary hand's, once it has been the primary for RETAIN_MS (a quick takeover by
+     * the other hand during a dropout does not change it). Preferred when a new primary
+     * is chosen.
+     */
+    this._lastHandedness = null;
+    this._primarySince = 0;
     this._pendingEvents = [];
     this._lastVideoTime = -1;
     this._lastTimestamp = 0;
@@ -313,6 +332,11 @@ export class HandInput {
       video: null,
       errors: 0,
       lastEvents: [],
+      /** absolute closeness of the primary hand, and the reference input.depth is relative to */
+      depthRaw: null,
+      depthRef: null,
+      /** 'strict' while the active scene asks for strict swipes */
+      swipeMode: 'normal',
       /** last tracking samples of the primary hand: [ms, palm x, palm y, shape] */
       samples: [],
     };
@@ -479,8 +503,10 @@ export class HandInput {
       baseOptions: { modelAssetPath: MODEL_URLS.hand, delegate: d },
       runningMode: 'VIDEO',
       numHands: 2,
-      minHandDetectionConfidence: 0.6,
-      minHandPresenceConfidence: 0.55,
+      // MediaPipe's defaults: stricter values never find the hand in a dim room. An
+      // occasional false detection is absorbed by the gesture debounce and LOST_MS.
+      minHandDetectionConfidence: 0.5,
+      minHandPresenceConfidence: 0.5,
       minTrackingConfidence: 0.5,
     });
     if (delegate === 'GPU') {
@@ -526,7 +552,8 @@ export class HandInput {
   _resetTracking() {
     this.hands.length = 0;
     this.primary = null;
-    this.swipe.reset();
+    this._resetSwipes();
+    this.relDepth.reset();
     this._pendingEvents.length = 0;
     this._lastVideoTime = -1;
     this._lastDetectAt = 0;
@@ -590,7 +617,13 @@ export class HandInput {
       f.velocity.y += ((f.pointer.y - prevY) / dt - f.velocity.y) * av;
     }
 
-    const depthTarget = clamp(0.5 + Math.log2(p.scale2D / DEPTH_NEUTRAL_SCALE) * 0.6, 0, 1);
+    // Depth relative to where this hand rests (users sit at different distances): a new
+    // primary hand, or one back after a long loss, anchors a new reference.
+    const depthRaw = 0.5 + Math.log2(p.scale2D / DEPTH_NEUTRAL_SCALE) * DEPTH_GAIN;
+    if (switched) this.relDepth.reset();
+    const depthTarget = this.relDepth.update(depthRaw, now);
+    this.debug.depthRaw = Math.round(depthRaw * 1000) / 1000;
+    this.debug.depthRef = this.relDepth.ref === null ? null : Math.round(this.relDepth.ref * 1000) / 1000;
     f.depth = snap ? depthTarget : f.depth + (depthTarget - f.depth) * damp(6, dt);
     f.grab = snap ? p.grab : f.grab + (p.grab - f.grab) * damp(16, dt);
     f.pinch = snap ? p.pinch : f.pinch + (p.pinch - f.pinch) * damp(28, dt);
@@ -786,19 +819,36 @@ export class HandInput {
     }
     this.debug.handsVisible = dets.length;
 
-    // Primary: keep the same hand while it is tracked, else the user's right hand, else the first.
+    // Primary: keep the same hand while it is tracked, else a hand of the same side as the
+    // last primary (left-handed users), else the user's right hand, else the first.
     const prev = this.primary;
     const prevVisible = !!prev && this.hands.includes(prev) && !prev.isLost(now, lost, stall);
+    const last = this._lastHandedness;
     if (!prevVisible) {
       const seen = dets.map((d) => d.hand);
-      this.primary = seen.find((h) => h.handedness === 'Right') || seen[0] || null;
+      this.primary = (last && seen.find((h) => h.handedness === last))
+        || seen.find((h) => h.handedness === 'Right') || seen[0] || null;
       if (this.primary !== prev) {
-        this.swipe.reset();
+        this._resetSwipes();
         this._displayValid = this._displayValid && !!prev && !!this.primary;
+        this._primarySince = now;
+      }
+    } else if (last && prev.handedness !== last && now - this._primarySince < RETAIN_MS) {
+      // The other hand only took over because the user's own hand dropped out for a
+      // moment (it was the only one left): give control back as soon as it is tracked again.
+      const back = dets.find((d) => d.hand !== prev && d.hand.handedness === last && d.hand.streak >= minFrames);
+      if (back) {
+        this.primary = back.hand;
+        this._resetSwipes();
+        this._primarySince = now;
       }
     }
 
     const p = this.primary;
+    if (p && p.lastSeen === now && (!last || now - this._primarySince >= RETAIN_MS)) {
+      this._lastHandedness = p.handedness;
+    }
+    const swipe = this._swipeDetector();
     if (p && p.lastSeen === now) {
       this.debug.rawGesture = p.rawShape;
       this.debug.pinchDistance = Math.round(p.analysis.pinchDist * 100) / 100;
@@ -809,23 +859,45 @@ export class HandInput {
       const interval = this.debug.fps > 0 ? 1000 / this.debug.fps : 0;
       // Same physical flick near or far from the camera (the detector takes the square root).
       const size = p.scale2D / DEPTH_NEUTRAL_SCALE;
-      const swipe = this.swipe.update(now, p.rawPalmNdc.x, p.rawPalmNdc.y, eligible, interval, size);
+      const event = swipe.update(now, p.rawPalmNdc.x, p.rawPalmNdc.y, eligible, interval, size);
       const samples = this.debug.samples;
       samples.push([Math.round(now - this._t0), +p.rawPalmNdc.x.toFixed(2), +p.rawPalmNdc.y.toFixed(2), p.rawShape]);
       if (samples.length > 30) samples.shift();
-      if (swipe) {
-        this._pendingEvents.push(swipe);
-        this._log(swipe);
+      if (event) {
+        this._pendingEvents.push(event);
+        this._log(event);
       }
     } else {
       // The primary hand was not found in this camera frame. Fast flicks blur the hand, so
       // MediaPipe often misses a frame mid-swipe: keep the motion through a miss or two
       // (the detector bridges the gap). A longer loss means a jump on re-entry is not a swipe.
       const interval = this.debug.fps > 0 ? 1000 / this.debug.fps : 33;
-      if (!p || now - p.lastSeen > Math.max(80, interval * 2.2)) this.swipe.reset();
+      if (!p || now - p.lastSeen > Math.max(80, interval * 2.2)) swipe.reset();
       this.debug.samples.push([Math.round(now - this._t0), null]);
       if (this.debug.samples.length > 30) this.debug.samples.shift();
     }
+  }
+
+  /**
+   * The swipe detector for the active scene: strict in scenes that steer with hand
+   * movement (meta.swipe === 'strict'). Switching starts the new one from scratch (but
+   * keeps the cooldown of a swipe that just fired, e.g. the one that changed the scene).
+   */
+  _swipeDetector() {
+    const strict = this.app.active?.meta?.swipe === 'strict';
+    const det = strict ? this.strictSwipe : this.swipe;
+    if (det !== this._swipeInUse) {
+      det.reset();
+      det.lastSwipe = Math.max(det.lastSwipe, this._swipeInUse.lastSwipe);
+      this._swipeInUse = det;
+      this.debug.swipeMode = strict ? 'strict' : 'normal';
+    }
+    return det;
+  }
+
+  _resetSwipes() {
+    this.swipe.reset();
+    this.strictSwipe.reset();
   }
 
   _log(type, value) {

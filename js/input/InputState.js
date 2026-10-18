@@ -23,7 +23,7 @@
  * @property {Vec2} palm           palm centre (mouse: same as pointer)
  * @property {Vec2} velocity       pointer velocity, NDC units per second (smoothed)
  * @property {Vec2} dragDelta      pointer movement this frame while pinching and not on UI, else 0
- * @property {number} depth        0..1 how close the hand is to the camera (0.5 neutral; mouse 0.5)
+ * @property {number} depth        0..1 hand closer (>0.5) / farther (<0.5) than where it rests, with a small dead zone (mouse 0.5)
  * @property {number} pinch        0..1 pinch strength (1 = thumb and index touching; mouse: button down)
  * @property {boolean} pinching    stable pinch with hysteresis (mouse: left button)
  * @property {number} grab         0..1 hand closedness (0 open palm .. 1 fist)

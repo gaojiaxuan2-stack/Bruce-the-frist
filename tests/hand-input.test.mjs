@@ -346,3 +346,81 @@ test('two hands spreading apart zoom in, closing zoom out', () => {
   assert.ok(zoomOut < -expected * 0.85, `zoom out ${zoomOut.toFixed(3)}`);
   assert.equal(sim.hi.primary.handedness, 'Right', "the user's right hand leads");
 });
+
+test("strict swipes (meta.swipe = 'strict'): moving the open hand to steer is not a swipe, a flick is", () => {
+  // dist in NDC through the mapping region (0.76 image widths = 2 NDC), centred in the picture.
+  const run = (strict, dist, ms) => {
+    const sim = makeSim();
+    if (strict) sim.hi.app.active = { meta: { swipe: 'strict' } };
+    const perNdc = (0.76 / 2) * ASPECT;
+    const x0 = 0.5 * ASPECT - (dist * perNdc) / 2;
+    const log = sim.run(600 + ms + 800, (t) => {
+      const s = t - 600;
+      const k = s < 0 ? 0 : s > ms ? 1 : ease(s / ms);
+      return [{ pts: place('open', { at: [x0 + k * dist * perNdc, 0.3] }) }];
+    });
+    assert.equal(sim.hi.debug.swipeMode, strict ? 'strict' : 'normal');
+    return log.flatMap((r) => r.events.filter((e) => e.startsWith('swipe')));
+  };
+  for (const [d, ms] of [[0.6, 400], [0.8, 500], [1.0, 600], [1.2, 700]]) {
+    assert.deepEqual(run(true, d, ms), [], `strict: ${d} NDC in ${ms} ms is a move`);
+  }
+  assert.deepEqual(run(false, 1.0, 600), ['swiperight'], 'the default still takes it (other scenes are unchanged)');
+  for (const [d, ms] of [[0.63, 250], [0.8, 300], [1.0, 350]]) {
+    assert.deepEqual(run(true, d, ms), ['swiperight'], `strict: a ${d} NDC / ${ms} ms flick still swipes`);
+  }
+});
+
+test('depth is relative to where the hand rests: neutral at any distance, closer / farther from there', () => {
+  for (const scale of [0.09, 0.2, 0.4]) {
+    const sim = makeSim();
+    sim.run(1500, () => [{ pts: place('open', { scale }) }]);
+    assert.ok(Math.abs(sim.hi.frame.depth - 0.5) < 0.01, `hand at scale ${scale}: depth ${sim.hi.frame.depth.toFixed(3)}`);
+    // Bring it 1.6x closer (0.6 per doubling = +0.41 closeness, 0.31 past the dead zone).
+    sim.run(1200, (t) => [{ pts: place('open', { scale: scale * (1 + 0.6 * Math.min(1, (t - 1500) / 400)) }) }]);
+    const closer = sim.hi.frame.depth;
+    assert.ok(closer > 0.74 && closer < 0.86, `scale ${scale} -> x1.6: depth ${closer.toFixed(3)}`);
+  }
+  // A far user (the hand is 0.42x the "comfortable" size) moving 1.5x farther still zooms out.
+  const sim = makeSim();
+  sim.run(1500, () => [{ pts: place('open', { scale: 0.09 }) }]);
+  sim.run(1200, (t) => [{ pts: place('open', { scale: 0.09 / (1 + 0.5 * Math.min(1, (t - 1500) / 400)) }) }]);
+  assert.ok(sim.hi.frame.depth < 0.32, `farther: ${sim.hi.frame.depth.toFixed(3)}`);
+});
+
+test('depth: a short loss keeps the reference, a long one (or a different hand) starts a new one', () => {
+  const sim = makeSim();
+  sim.run(1500, () => [{ pts: place('open', { scale: 0.15 }) }]);
+  // Gone for 600 ms, back 1.6x closer: still a zoom relative to before.
+  sim.run(600, () => []);
+  sim.run(1000, () => [{ pts: place('open', { scale: 0.24 }) }]);
+  assert.ok(sim.hi.frame.depth > 0.74, `after a short loss: ${sim.hi.frame.depth.toFixed(3)}`);
+  // Gone for 2.5 s, back at another distance: neutral again.
+  sim.run(2500, () => []);
+  sim.run(1000, () => [{ pts: place('open', { scale: 0.4 }) }]);
+  assert.ok(Math.abs(sim.hi.frame.depth - 0.5) < 0.01, `after a long loss: ${sim.hi.frame.depth.toFixed(3)}`);
+});
+
+test("left-handed users: after a dropout the user's left hand gets control back", () => {
+  // MediaPipe labels assume a mirrored picture: the user's left hand comes as 'Right'.
+  const left = (x = 0.45) => ({ pts: place('open', { at: [x, 0.45], scale: 0.16 }), label: 'Right' });
+  const right = { pts: place('open', { at: [0.95, 0.45], scale: 0.16 }), label: 'Left' };
+  const sim = makeSim();
+  sim.run(1500, () => [left()]);
+  assert.equal(sim.hi.primary.handedness, 'Left');
+  sim.run(2000, () => [left(), right]);
+  assert.equal(sim.hi.primary.handedness, 'Left', 'the left hand keeps control with both in view');
+  // The left hand drops out for 400 ms (the right one takes over meanwhile), then is back.
+  sim.run(400, () => [right]);
+  sim.run(600, () => [left(), right]);
+  assert.equal(sim.hi.primary.handedness, 'Left', 'control went back to the left hand');
+  // Both drop out and come back together: the left hand again (not "right first").
+  sim.run(500, () => []);
+  sim.run(600, () => [right, left()]);
+  assert.equal(sim.hi.primary.handedness, 'Left', 'both back at once: the left hand leads');
+  // The user really switches hands: the left one away for long, the right one in control
+  // for a while. When the left one comes back the right keeps control.
+  sim.run(2500, () => [right]);
+  sim.run(800, () => [left(), right]);
+  assert.equal(sim.hi.primary.handedness, 'Right', 'a deliberate switch of hands sticks');
+});

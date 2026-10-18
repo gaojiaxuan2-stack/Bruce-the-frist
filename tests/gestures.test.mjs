@@ -8,6 +8,8 @@ import {
   OneEuroFilter,
   PinchAim,
   PinchDetector,
+  RelativeDepth,
+  STRICT_SWIPE,
   SwipeDetector,
   THRESHOLDS,
   analyzeHand,
@@ -607,6 +609,120 @@ test('SwipeDetector: slow tracking (sparse samples) still catches a quick swipe'
   assert.equal(d2.update(0, -0.3, 0, true, 500), null);
   assert.equal(d2.update(500, 0.1, 0, true, 500), null, 'too short');
   assert.equal(d2.update(1000, 0.4, 0, true, 500), null, '0.7 NDC over 1 s is a drift');
+});
+
+test('SwipeDetector strict (scenes that steer with the hand): flicks fire, steering moves do not', () => {
+  const strict = () => new SwipeDetector(STRICT_SWIPE);
+  // Real flicks (30 fps).
+  assert.deepEqual(runSwipe(strict(), flick(0.315, -0.315, 250)), ['swipeleft'], '0.63 NDC in 250 ms');
+  assert.deepEqual(runSwipe(strict(), flick(-0.4, 0.4, 300)), ['swiperight'], '0.8 NDC in 300 ms');
+  assert.deepEqual(runSwipe(strict(), flick(0.5, -0.5, 350)), ['swipeleft'], '1 NDC in 350 ms');
+  // Moving the open hand across the picture to steer (the default detector takes these).
+  for (const [d, ms] of [[0.6, 400], [0.8, 500], [1.0, 600], [1.2, 700]]) {
+    assert.deepEqual(runSwipe(strict(), flick(-d / 2, d / 2, ms)), [], `${d} NDC in ${ms} ms is a move`);
+    assert.deepEqual(runSwipe(strict(), flick(d / 2, -d / 2, ms)), [], `${d} NDC in ${ms} ms (left) is a move`);
+  }
+  assert.deepEqual(runSwipe(new SwipeDetector(), flick(-0.5, 0.5, 600)), ['swiperight'],
+    'the default detector does fire on that move (why scenes can ask for strict)');
+  // The default detector is unchanged by the option (the defaults stay the defaults).
+  assert.equal(new SwipeDetector().sparseFactor, 0);
+});
+
+test('SwipeDetector strict: slow tracking (10 / 6 samples per second) still tells a flick from a move', () => {
+  const run = (det, x0, x1, ms, fps, phase) => {
+    const out = [];
+    const dt = 1000 / fps;
+    for (let t = phase; t <= 400 + ms + 400; t += dt) {
+      const k = clamp((t - 400) / ms, 0, 1);
+      const e = det.update(t, x0 + (x1 - x0) * k * k * (3 - 2 * k), 0, true, dt);
+      if (e) out.push(e);
+    }
+    return out.length;
+  };
+  for (const fps of [10, 6]) {
+    let flicks = 0;
+    let moves = 0;
+    let defaultMoves = 0;
+    const phases = [0, 1, 2, 3, 4, 5].map((i) => (i * 1000) / fps / 6);
+    for (const ph of phases) {
+      flicks += run(new SwipeDetector(STRICT_SWIPE), 0.5, -0.5, 350, fps, ph);
+      moves += run(new SwipeDetector(STRICT_SWIPE), -0.5, 0.5, 600, fps, ph);
+      moves += run(new SwipeDetector(STRICT_SWIPE), 0.6, -0.6, 700, fps, ph);
+      defaultMoves += run(new SwipeDetector(), -0.5, 0.5, 600, fps, ph);
+    }
+    assert.equal(flicks, 6, `${fps} fps: 1 NDC / 350 ms flicks fired ${flicks}/6`);
+    assert.equal(moves, 0, `${fps} fps: steering moves fired ${moves}/12`);
+    assert.ok(defaultMoves > 0, `${fps} fps: (the default detector fires on moves: ${defaultMoves}/6)`);
+  }
+});
+
+// ------------------------------------------------------------------ RelativeDepth
+
+/** Feed `raw` closeness at 30 fps from t0 for ms; returns [last depth, next t]. */
+function feedDepth(rd, raw, t0, ms) {
+  let depth = NaN;
+  let t = t0;
+  for (; t < t0 + ms; t += 1000 / 30) depth = rd.update(typeof raw === 'function' ? raw(t - t0) : raw, t);
+  return [depth, t];
+}
+
+test('RelativeDepth: any resting distance is neutral (0.5)', () => {
+  // A hand far from the camera (raw closeness -0.25, i.e. 0.42x the neutral size), one at
+  // the "comfortable" distance and one very close: all read 0.5 while held still.
+  for (const raw of [-0.25, 0.5, 1.3]) {
+    const rd = new RelativeDepth();
+    assert.equal(rd.update(raw, 0), 0.5, 'the first sample anchors the reference');
+    const [d] = feedDepth(rd, raw, 33, 3000);
+    assert.equal(d, 0.5, `raw ${raw}`);
+  }
+});
+
+test('RelativeDepth: small changes are ignored, deliberate moves count 1:1 beyond the dead zone', () => {
+  const rd = new RelativeDepth();
+  let [d, t] = feedDepth(rd, 0.2, 0, 1000);
+  assert.equal(d, 0.5);
+  [d, t] = feedDepth(rd, 0.27, t, 300); // +0.07: inside the dead zone
+  assert.equal(d, 0.5, 'a small change of distance (posture) is not a zoom');
+  [d, t] = feedDepth(rd, 0.5, t, 300); // +0.3 closer
+  assert.ok(Math.abs(d - 0.7) < 0.02, `closer: ${d.toFixed(3)} (expected ~0.7)`);
+  [d, t] = feedDepth(rd, -0.1, t, 300); // -0.3 farther
+  assert.ok(Math.abs(d - 0.3) < 0.02, `farther: ${d.toFixed(3)} (expected ~0.3)`);
+  [d, t] = feedDepth(rd, 1.5, t, 100);
+  assert.equal(d, 1, 'clamped at 1');
+  [d, t] = feedDepth(rd, -1.5, t, 100);
+  assert.equal(d, 0, 'clamped at 0');
+});
+
+test('RelativeDepth: the reference follows slowly (posture changes re-centre in ~10-20 s)', () => {
+  const rd = new RelativeDepth();
+  let [d, t] = feedDepth(rd, 0, 0, 1000);
+  [d, t] = feedDepth(rd, 0.4, t, 1000);
+  assert.ok(d > 0.75, `held closer for 1 s still zooms: ${d.toFixed(3)}`);
+  [d, t] = feedDepth(rd, 0.4, t, 4000);
+  assert.ok(d > 0.55 && d < 0.75, `after 5 s it has partly re-centred: ${d.toFixed(3)}`);
+  [d, t] = feedDepth(rd, 0.4, t, 15000);
+  assert.equal(d, 0.5, 'after 20 s the new distance is the neutral one');
+});
+
+test('RelativeDepth: the reference settles while the hand comes into view', () => {
+  // The hand enters the picture: its apparent size grows over the first ~250 ms.
+  const rd = new RelativeDepth();
+  const [d] = feedDepth(rd, (t) => 0.3 * Math.min(1, t / 250), 0, 1500);
+  assert.equal(d, 0.5);
+});
+
+test('RelativeDepth: a short loss keeps the reference, a long loss (> 1.5 s) re-anchors', () => {
+  const rd = new RelativeDepth();
+  let [d, t] = feedDepth(rd, 0.1, 0, 1500);
+  // Gone for 500 ms, back closer: still relative to the old reference.
+  assert.ok(Math.abs(rd.update(0.4, t + 500) - 0.7) < 0.03);
+  // Gone for 2 s, back much closer: that is the new neutral.
+  [d, t] = feedDepth(rd, 0.4, t + 500, 200);
+  assert.equal(rd.update(0.9, t + 2000), 0.5);
+  [d] = feedDepth(rd, 0.9, t + 2033, 1000);
+  assert.equal(d, 0.5);
+  rd.reset();
+  assert.equal(rd.update(-0.4, t + 5000), 0.5, 'reset() re-anchors too');
 });
 
 // ------------------------------------------------------------------ OneEuroFilter

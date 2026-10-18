@@ -44,9 +44,6 @@ const BALL_RADIUS = 0.95;
 const FIST_PLANE_Z = 1.3; // world z where the fist ball forms (in front of the face)
 const ZOOM_MIN = 0.6;
 const ZOOM_MAX = 2.8;
-// Hand closer / farther zooms relative to where the hand was when it appeared;
-// small changes (posture, tracking noise) inside this dead zone do nothing.
-const HAND_DEAD_ZONE = 0.1;
 
 const clamp = THREE.MathUtils.clamp;
 const damp = (k, dt) => 1 - Math.exp(-k * dt);
@@ -117,10 +114,7 @@ export default class FaceScene extends BaseScene {
     this.bloomSet = 0;
     this.userGlow = false; // the user moved the global glow slider: use it as is
     this.wasPinching = false;
-    this.handSeen = false;
-    this.handSeenAt = 0;
     this.handLast = -Infinity;
-    this.depthRef = 0.5;
     this.handTarget = 1;
 
     this.raycaster = new THREE.Raycaster();
@@ -380,25 +374,12 @@ export default class FaceScene extends BaseScene {
       this.zoomTarget = clamp(this.zoomTarget * Math.exp(input.zoom), ZOOM_MIN, ZOOM_MAX);
     }
     if (input.source === 'hand' && input.active) {
-      // Relative to the hand's own resting distance (every user sits at a
-      // different distance from the camera): the neutral depth is taken while the
-      // hand comes into view, then slowly follows it while it stays inside the
-      // dead zone. Only a deliberate move closer / farther zooms.
-      if (!this.handSeen) {
-        this.handSeen = true;
-        this.handSeenAt = this.time;
-        this.depthRef = input.depth;
-      }
+      // input.depth is already relative to where this user's hand rests (0.5), with a
+      // dead zone, so only a deliberate move closer / farther zooms.
       this.handLast = this.time;
-      const d = input.depth - this.depthRef;
-      const settling = this.time - this.handSeenAt < 0.6;
-      if (settling) this.depthRef += d * damp(6, dt);
-      else if (Math.abs(d) < HAND_DEAD_ZONE) this.depthRef += d * damp(0.3, dt);
-      const dz = Math.sign(d) * Math.max(0, Math.abs(d) - HAND_DEAD_ZONE);
-      this.handTarget = settling ? 1 : clamp(1 + dz * 2.5, 0.7, 1.7);
+      this.handTarget = clamp(1 + (input.depth - 0.5) * 2.5, 0.7, 1.7);
     } else if (this.time - this.handLast > 0.5) {
       // Gone for a moment (tracking dropout) keeps the zoom; gone for good resets it.
-      this.handSeen = false;
       this.handTarget = 1;
     }
     this.handZoom += (this.handTarget - this.handZoom) * damp(2.5, dt);
