@@ -163,6 +163,8 @@ uniform float u_seg;       // 0..1 person mask is live (eased)
 uniform vec4 u_body;       // body centre line x, shoulder y, face width, face height (device px)
 uniform float u_bodyOn;    // 0..1 a face is known (blue side panels)
 uniform vec4 u_web;        // chest web centre x, y, ring spacing (device px), rotation
+uniform vec4 u_glove;      // two hands: middle knuckle x, y (device px) ...
+uniform vec2 u_gloveR;     // ... and glove radius (0 = no hand): hands stay red
 
 const vec3 RED = vec3(0.816, 0.078, 0.118);
 const vec3 BLUE = vec3(0.102, 0.235, 0.784);
@@ -231,8 +233,16 @@ vec3 filt(vec2 px) {
   // side panels away from the body centre line, a little sheen.
   float s = smoothstep(0.03, 0.88, lb);
   s = mix(s, floor(s * 4.0 + 0.5) / 4.0, 0.3);
-  float side = abs(px.x - u_body.x) / max(u_body.z, 1.0);
-  float blue = smoothstep(1.1, 1.35, side) * smoothstep(u_body.y, u_body.y + 0.35 * u_body.w, px.y) * u_bodyOn;
+  // Blue panels: past ~1.2 face widths from the centre line and below the
+  // shoulders, with a rounded armpit. pd = device px inside the panel.
+  float fwp = max(u_body.z, 1.0), ar = 0.45 * fwp;
+  vec2 pq = vec2(abs(px.x - u_body.x) - 1.22 * fwp, px.y - u_body.y - 0.3 * u_body.w);
+  float pd = min(min(pq.x, pq.y), ar - length(max(vec2(ar) - pq, 0.0)));
+  // Gloves: around the tracked hands the suit stays red.
+  float glove = max((1.0 - smoothstep(0.75, 1.0, length(px - u_glove.xy) / max(u_gloveR.x, 1.0))) * step(1.0, u_gloveR.x),
+                    (1.0 - smoothstep(0.75, 1.0, length(px - u_glove.zw) / max(u_gloveR.y, 1.0))) * step(1.0, u_gloveR.y));
+  float panel = u_bodyOn * (1.0 - glove);
+  float blue = smoothstep(-0.8 * u_dpr, 0.8 * u_dpr, pd) * panel;
   vec3 base = mix(RED, BLUE, blue);
   vec3 su = base * (0.28 + 0.95 * s);
   su += mix(vec3(1.0, 0.55, 0.5), vec3(0.6, 0.75, 1.0), blue) * smoothstep(0.75, 1.0, l) * 0.14;
@@ -246,7 +256,8 @@ vec3 filt(vec2 px) {
   float aN = pmask(pxToUV(px - vec2(0.0, rr))), aS = pmask(pxToUV(px + vec2(0.0, rr)));
   vec2 ov = vec2(aW - aE, aN - aS);  // points out of the body
   float rim = 1.0 - smoothstep(0.55, 0.98, 0.25 * (aE + aW + aN + aS));
-  float lit = dot(ov, normalize(vec2(0.77, 0.27) * u_res - px)) / max(length(ov), 0.08);
+  vec2 sun = vec2(0.77, 0.27) * u_res - px;
+  float lit = dot(ov, sun / max(length(sun), 1.0)) / max(length(ov), 0.08);
   su *= 1.0 - rim * 0.5 * (1.0 - max(lit, 0.0));
   su += vec3(1.0, 0.58, 0.32) * rim * smoothstep(0.15, 0.8, lit) * 0.6;
 
@@ -255,8 +266,7 @@ vec3 filt(vec2 px) {
   su += vec3(1.0, 0.6, 0.55) * max(w1 - w0, 0.0) * 0.3 * (1.0 - blue);
   su = mix(su, INK, w0 * (1.0 - blue) * 0.92);
   // Black seam where the red meets the blue.
-  float bs = abs(blue - 0.5) / max(fwidth(blue), 1e-4);
-  su = mix(su, INK, (1.0 - smoothstep(0.7 * u_dpr, 1.5 * u_dpr, bs)) * 0.9);
+  su = mix(su, INK, (1.0 - smoothstep(0.7 * u_dpr, 1.5 * u_dpr, abs(pd))) * 0.9 * panel);
 
   vec3 city = texture(u_city, vec2(px.x / u_res.x, 1.0 - px.y / u_res.y)).rgb;
   vec3 c = mix(city, su, pm);

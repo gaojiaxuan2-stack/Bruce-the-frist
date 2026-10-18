@@ -97,6 +97,16 @@ function needs() {
   return typeof m.needs === 'function' ? m.needs(app) || {} : m.needs;
 }
 
+// Warm up the face + body models in the background a few seconds after
+// start, so opening Spider-Man (or its Portal filter) doesn't stall.
+function preloadModels() {
+  if (sim && !useCamera) return;
+  const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 200));
+  setTimeout(() => idle(() => {
+    tracker.ensure('face').then(() => tracker.ensure('segment')).catch(() => {});
+  }), 4000);
+}
+
 function loadNeeds() {
   const n = needs();
   if (!n.segment) { gfx.clearMask(); app.hasMask = false; }
@@ -282,6 +292,9 @@ function loop(now) {
       const n = needs();
       if (!n.face) app.face = null;
       if (!n.segment && app.hasMask) { gfx.clearMask(); app.hasMask = false; }
+      // Modes may ask for a model only some of the time; load it on first ask.
+      if (n.face && !tracker.face) tracker.ensure('face').catch(() => {});
+      if (n.segment && !tracker.segmenter) tracker.ensure('segment').catch(() => {});
       const t0 = performance.now();
       det = tracker.detect(src, n, { hands: !sim });
       detMs += (performance.now() - t0 - detMs) * 0.1;
@@ -426,6 +439,7 @@ async function boot() {
     $('#progress-label').textContent = `Ready · ${tracker.delegate} accelerated`;
     document.body.classList.add('ready');
     loadNeeds();
+    preloadModels();
   }).catch((e) => {
     console.error(e);
     fatal('Could not load hand tracking.', e.message || String(e));

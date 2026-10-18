@@ -272,6 +272,13 @@ body.ready #progress i { background: #39ff88; box-shadow: 0 0 12px #39ff88; }
   .status { top: calc(66px + var(--safe-t)); }
 }
 #options .chip[data-id^='opt-'] { display: none; }
+@media (max-width: 1500px) {
+  /* Long option lists (Portal's filters) stay on one row on laptops. */
+  #options.many { gap: 6px; }
+  #options.many .chip { padding: 0 12px; font-size: 13px; letter-spacing: 0.08em; }
+  #options.many .chip .lbl .long { display: none; }
+  #options.many .chip .lbl .short { display: inline; }
+}
 @media (max-width: 760px) {
   /* Long option lists: show ◀ current ▶ instead of wrapping rows. */
   #options.many .chip[data-kind='option']:not(.active) { display: none; }

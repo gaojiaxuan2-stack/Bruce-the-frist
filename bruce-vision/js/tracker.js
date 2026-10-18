@@ -51,7 +51,8 @@ export class Tracker {
     this.failStreak = 0;
     this.faceMiss = 0;
     this.faceX = null;
-    this.recipes = {};  // kind -> { Task, optionsFor } so tasks can be rebuilt on CPU
+    this.recipes = {};
+    this.failedAt = {};  // kind -> { Task, optionsFor } so tasks can be rebuilt on CPU
   }
 
   // Loads the wasm runtime + hand model. onProgress(fraction 0..1, label).
@@ -100,6 +101,8 @@ export class Tracker {
     if (kind === 'face' && this.face) return Promise.resolve(this.face);
     if (kind === 'segment' && this.segmenter) return Promise.resolve(this.segmenter);
     if (this.pending[kind]) return this.pending[kind];
+    // After a failed load, wait a bit before trying again (callers may ask every frame).
+    if (performance.now() - (this.failedAt[kind] || -1e9) < 15000) return Promise.reject(new Error(`${kind} model unavailable`));
     const p = (async () => {
       while (!this.fileset) await new Promise((r) => setTimeout(r, 100));
       if (kind === 'face') {
@@ -127,7 +130,7 @@ export class Tracker {
       throw new Error(`unknown model ${kind}`);
     })();
     this.pending[kind] = p;
-    p.catch((e) => { console.error(`[tracker] failed to load ${kind}`, e); delete this.pending[kind]; });
+    p.catch((e) => { console.error(`[tracker] failed to load ${kind}`, e); delete this.pending[kind]; this.failedAt[kind] = performance.now(); });
     return p;
   }
 
