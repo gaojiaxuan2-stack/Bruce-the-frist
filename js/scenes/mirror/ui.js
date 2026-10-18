@@ -43,7 +43,7 @@ const CSS = `
   color: rgba(242, 244, 248, 0.9);
   background: rgba(0, 0, 0, 0.58);
   padding: 5px 12px;
-  border-radius: 999px;
+  border-radius: 14px;
   -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
   text-align: center;

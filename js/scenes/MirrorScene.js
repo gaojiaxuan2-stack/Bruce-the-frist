@@ -35,9 +35,9 @@ const PERSON_OFF = { coverage: 0.08, seconds: 1.5 };
 const _ray = new THREE.Ray();
 const _inv = new THREE.Matrix4();
 const _plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
-const _v3b = new THREE.Vector3();
+const _hit = new THREE.Vector3();
+const _ball = new THREE.Vector3();
 const _v2a = new THREE.Vector2();
-const _v3 = new THREE.Vector3();
 const clamp = THREE.MathUtils.clamp;
 const damp = (x, target, k, dt) => x + (target - x) * (1 - Math.exp(-k * dt));
 
@@ -464,8 +464,8 @@ export default class MirrorScene extends BaseScene {
     _inv.copy(this.points.matrixWorld).invert();
     _ray.applyMatrix4(_inv);
     _plane.constant = -planeZ;
-    if (!_ray.intersectPlane(_plane, _v3b)) this.ndcToWorld(ndc, planeZ, _v3b);
-    return target.set(_v3b.x, _v3b.y, planeZ);
+    if (!_ray.intersectPlane(_plane, _hit)) this.ndcToWorld(ndc, planeZ, _hit);
+    return target.set(_hit.x, _hit.y, planeZ);
   }
 
   // ---------------------------------------------------------------- frame
@@ -553,7 +553,7 @@ export default class MirrorScene extends BaseScene {
     // ---- fist: pull everything into a swirling ball; open palm afterwards: explode
     if (fist) {
       // centred on the hand cursor (input.pointer), on the plane where the ball floats
-      const p = this.toSheet(input.pointer, BALL_Z * vs, _v3);
+      const p = this.toSheet(input.pointer, BALL_Z * vs, _ball);
       if (!this.fistSeen) this.fistPos.copy(p);
       this.fistSeen = true;
       this.fistPos.x = damp(this.fistPos.x, p.x, 10, dt);
