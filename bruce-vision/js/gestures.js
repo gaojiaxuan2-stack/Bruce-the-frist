@@ -183,10 +183,11 @@ export class GestureEngine {
 
   // Every animation frame: move each live hand's landmarks ahead along its
   // recent velocity, so overlays glide between camera frames instead of
-  // stepping. Lost (ghost) hands stay frozen.
+  // stepping. Lost (ghost) hands stay where they were last drawn.
   predict(now) {
     for (const h of this.hands) {
-      const k = h.ghost ? 0 : Math.min(PREDICT_MAX_S, Math.max(0, (now - h.seen) / 1000)) * 0.85;
+      if (h.ghost) continue;  // keep the last drawn pose; no snap back
+      const k = Math.min(PREDICT_MAX_S, Math.max(0, (now - h.seen) / 1000)) * 0.85;
       const lm = h.lm;
       for (let i = 0; i < 21; i++) {
         const b = h.base[i], v = h.lv[i], p = lm[i];
