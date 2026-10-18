@@ -195,9 +195,13 @@ export class App {
     this.active.enter();
     this.configurePasses();
     this.hud.setActive(id, this.active.meta);
-    const url = new URL(location.href);
-    url.searchParams.set('scene', id);
-    history.replaceState(null, '', url);
+    try {
+      const url = new URL(location.href);
+      url.searchParams.set('scene', id);
+      history.replaceState(null, '', url);
+    } catch {
+      /* some embedded / sandboxed pages don't allow changing the URL */
+    }
     this.revealPending = true; // lift the fade after this scene's first frame is drawn
     this.fpsSamples.length = 0;
     this.lowFpsTime = 0;
