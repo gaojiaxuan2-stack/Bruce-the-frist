@@ -33,21 +33,40 @@ const between = (a, b) => a + Math.random() * (b - a);
 const round = (v, step) => +(Math.round(v / step) * step).toFixed(3);
 
 /**
+ * Spiral arms stay readable only while the stars of neighbouring arms do not
+ * overlap: the scatter per arm (randomness) and the winding (spin) both have to
+ * shrink as the number of arms grows. Checked by eye on rendered samples.
+ */
+export function armsReadable({ branches, spin, randomness, randomnessPower }) {
+  return (
+    randomness * branches <= 0.72 &&
+    spin * branches <= 5.5 &&
+    randomnessPower >= 2.9 &&
+    randomness <= 0.25
+  );
+}
+
+/**
  * A fresh random galaxy recipe that is guaranteed to look different from `current`
- * (another palette and, usually, another number of arms).
+ * (another palette and, usually, another number of arms) and to show clear arms.
  */
 export function randomGalaxy(current) {
   let palette;
   do palette = pick(PALETTES);
   while (palette.inside === current.insideColor && PALETTES.length > 1);
   let branches;
-  do branches = pick([2, 2, 3, 3, 4, 4, 5, 6]);
+  do branches = pick([2, 2, 3, 3, 3, 4, 4, 5, 6]);
   while (branches === current.branches && Math.random() < 0.7);
-  return {
-    palette,
-    branches,
-    spin: round(between(0.55, 1.9), 0.01),
-    randomness: round(between(0.13, 0.42), 0.001),
-    randomnessPower: round(between(2.2, 3.8), 0.1),
-  };
+  let recipe;
+  for (let tries = 0; tries < 50; tries++) {
+    const maxSpin = branches >= 5 ? 1.1 : branches === 4 ? 1.3 : branches === 3 ? 1.55 : 1.75;
+    recipe = {
+      branches,
+      spin: round(between(0.6, maxSpin), 0.01),
+      randomness: round(between(0.12, 0.24) * Math.min(1, 3 / branches), 0.001),
+      randomnessPower: round(between(3.0, 3.8), 0.1),
+    };
+    if (armsReadable(recipe)) break;
+  }
+  return { palette, ...recipe };
 }

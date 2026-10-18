@@ -10,6 +10,7 @@ import {
   HAND_CONNECTIONS,
   GestureStabilizer,
   OneEuroFilter,
+  PinchAim,
   PinchDetector,
   SwipeDetector,
   analyzeHand,
@@ -30,6 +31,12 @@ const REGION = { x0: 0.12, x1: 0.88, y0: 0.08, y1: 0.8 };
 const LOST_MS = 200;
 /** A lost hand's filters and gesture state are kept this long, in case it comes back. */
 const RETAIN_MS = 1500;
+/**
+ * A hand is lost only when detection ran and did not find it (for > LOST_MS). A main-thread
+ * stall (garbage collection, a scene compiling its shaders) where no detection ran at all
+ * is not the hand leaving, up to this long (or 3 detection intervals on a very slow device).
+ */
+const STALL_MS = 1500;
 /** Hand scale (image heights) that maps to depth 0.5, i.e. a comfortable distance. */
 const DEPTH_NEUTRAL_SCALE = 0.22;
 const ZOOM_GAIN = 2.5;
@@ -50,11 +57,15 @@ const GESTURE_LABEL = {
 const ndcX = (mx) => ((mx - REGION.x0) / (REGION.x1 - REGION.x0)) * 2 - 1;
 const ndcY = (y) => -(((y - REGION.y0) / (REGION.y1 - REGION.y0)) * 2 - 1);
 const damp = (k, dt) => 1 - Math.exp(-k * dt);
-const smoothstep = (a, b, x) => {
-  const t = clamp((x - a) / (b - a), 0, 1);
-  return t * t * (3 - 2 * t);
-};
 const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+
+/** Apparent hand size of filtered, normalised image landmarks, in image heights. */
+function imageHandSize(L, aspect) {
+  const d = (a, b) => Math.hypot((a.x - b.x) * aspect, a.y - b.y);
+  const length = d(L[0], L[9]);
+  const width = d(L[5], L[17]) / 0.82;
+  return Math.max(1e-4, length, width * 0.9, (length + width) * 0.5);
+}
 
 /** Per-hand tracking state, kept across frames while the same hand stays visible. */
 class TrackedHand {
@@ -62,8 +73,10 @@ class TrackedHand {
     this.id = id;
     this.created = now;
     this.lastSeen = now;
+    /** detection runs since lastSeen that did not find this hand */
+    this.misses = 0;
     this.updates = 0;
-    /** consecutive tracking frames this hand was seen in (0 after a miss) */
+    /** tracking frames since the hand (re)appeared; a miss of a frame or two does not reset it */
     this.streak = 0;
     this.handedness = 'Right';
     /** hand space (isotropic, mirrored, y up) - raw, for gesture maths */
@@ -79,6 +92,8 @@ class TrackedHand {
     this.pinchDetector = new PinchDetector({ enterFrames: 2, releaseFrames: 2 });
     this.stabilizer = new GestureStabilizer({ minFrames: 3, minMs: 80, initial: 'none' });
     this.fingerStabilizer = new GestureStabilizer({ minFrames: 3, minMs: 80, initial: 0 });
+    /** latches the pointer where the user aimed while a pinch forms / is held */
+    this.aim = new PinchAim();
     this.rawShape = 'none';
     this.shape = 'none';
     this.fingers = 0;
@@ -109,12 +124,48 @@ class TrackedHand {
     return this.pinching ? 'pinch' : this.shape;
   }
 
-  /** Feed one MediaPipe detection (raw normalised landmarks). */
-  update(raw, handedness, aspect, now) {
+  /**
+   * The hand comes back after being lost: start its gesture state fresh. Resuming the old
+   * one would first report the shape it had when it left (e.g. a stale fist for ~100 ms,
+   * which scenes would act on), and the filters would glide from the old position.
+   */
+  _restart() {
+    this.streak = 0;
+    this.stabilizer.reset('none');
+    this.fingerStabilizer.reset(0);
+    this.shape = 'none';
+    this.rawShape = 'none';
+    this.fingers = 0;
+    this.pinchDetector.reset();
+    this.pinching = false;
+    this.aim.reset();
+    this.analysis = null;
+    for (const [fx, fy] of this.filters) {
+      fx.reset();
+      fy.reset();
+    }
+  }
+
+  /** Lost: detection kept missing it for > lostMs, or no detection ran for stallMs. */
+  isLost(now, lostMs, stallMs = STALL_MS) {
+    const gap = now - this.lastSeen;
+    return (gap > lostMs && this.misses > 0) || gap > stallMs;
+  }
+
+  /**
+   * Feed one MediaPipe detection (raw normalised landmarks).
+   * @param {number} lostMs see isLost(): a hand that was lost and has come back starts
+   *   its gesture, pinch and filter state fresh instead of resuming.
+   * @param {number} stallMs see isLost()
+   */
+  update(raw, handedness, aspect, now, lostMs = LOST_MS, stallMs = STALL_MS) {
     const t = now / 1000;
+    if (this.updates > 0 && this.isLost(now, lostMs, stallMs)) this._restart();
     this.lastSeen = now;
+    this.misses = 0;
     this.updates++;
     this.streak++;
+    const fresh = this.streak === 1;
     this.handedness = handedness;
 
     // Gesture maths on the raw landmarks (most responsive; debounced below).
@@ -122,15 +173,25 @@ class TrackedHand {
     const info = analyzeHand(this.space, this.analysis?.ext);
     this.analysis = info;
     this.rawShape = classifyShape(info);
+    // indexFolded ends a pinch when the hand closes into a fist (the thumb then rests on
+    // the curled index, so the tip distance alone would keep the pinch alive).
+    const wasPinching = this.pinching;
+    this.pinching = this.pinchDetector.update(info.pinchDist, info.pinchAllowed, info.indexFolded);
     // Shape and finger count are debounced separately (a flickering thumb must not
     // hold back "open"), but switch together when the shape changes.
-    const shape = this.stabilizer.update(this.rawShape, now);
+    let shape = this.stabilizer.update(this.rawShape, now);
+    if (wasPinching && !this.pinching && shape !== this.rawShape) {
+      // The shape held through the pinch is stale (a pinch with the other fingers curled
+      // reads as a fist / thumbs up; closing into a fist ends the pinch a frame before the
+      // debounce accepts "fist"). Take the current shape if it has been seen for 2 frames,
+      // else report nothing until it settles, so no false fist / open edge fires.
+      shape = this.stabilizer.settle(2) === this.rawShape ? this.rawShape : this.stabilizer.force('none');
+    }
     if (shape !== this.shape) this.fingerStabilizer.force(info.fingers);
     this.shape = shape;
     this.fingers = this.fingerStabilizer.update(info.fingers, now);
-    this.pinching = this.pinchDetector.update(info.pinchDist, info.pinchAllowed);
-    this.pinch += (info.pinch - this.pinch) * (this.updates === 1 ? 1 : 0.6);
-    this.grab += (info.grab - this.grab) * (this.updates === 1 ? 1 : 0.5);
+    this.pinch += (info.pinch - this.pinch) * (fresh ? 1 : 0.6);
+    this.grab += (info.grab - this.grab) * (fresh ? 1 : 0.5);
     this.roll = info.roll;
     this.scale2D = handScale2D(this.space);
 
@@ -143,16 +204,19 @@ class TrackedHand {
       p.z = r.z || 0;
     }
     const L = this.img;
-    // Pointer: index fingertip, sliding to the thumb/index midpoint as the pinch closes
-    // (the midpoint barely moves while the fingers meet, so clicks land where you aimed).
-    const w = this.pinching ? 1 : smoothstep(0.35, 0.85, info.pinch);
-    const px = L[8].x + ((L[4].x + L[8].x) * 0.5 - L[8].x) * w;
-    const py = L[8].y + ((L[4].y + L[8].y) * 0.5 - L[8].y) * w;
-    this.pointerNdc.x = ndcX(px);
-    this.pointerNdc.y = ndcY(py);
     const pc = palmCenter(L, this.palmImg);
     this.palmNdc.x = ndcX(pc.x);
     this.palmNdc.y = ndcY(pc.y);
+    // Pointer: the index fingertip; while a pinch forms or is held, latched to the palm
+    // at the spot the fingertip aimed at before the fingers started to close (see
+    // PinchAim), so a pinch-click lands where you aimed and drags move 1:1 with the hand.
+    const size = imageHandSize(L, aspect);
+    const aim = this.aim.update(now, info.pinchDist, info.pinch, this.pinching,
+      (L[8].x - pc.x) / size, (L[8].y - pc.y) / size);
+    const px = L[8].x + (pc.x + aim.x * size - L[8].x) * aim.w;
+    const py = L[8].y + (pc.y + aim.y * size - L[8].y) * aim.w;
+    this.pointerNdc.x = ndcX(px);
+    this.pointerNdc.y = ndcY(py);
     // Unfiltered palm for swipe detection (no lag on fast moves).
     const rawPalmX = 1 - (raw[0].x * 0.4 + (raw[5].x + raw[9].x + raw[13].x + raw[17].x) * 0.15);
     const rawPalmY = raw[0].y * 0.4 + (raw[5].y + raw[9].y + raw[13].y + raw[17].y) * 0.15;
@@ -465,6 +529,7 @@ export class HandInput {
     this.swipe.reset();
     this._pendingEvents.length = 0;
     this._lastVideoTime = -1;
+    this._lastDetectAt = 0;
     this._zoomPending = 0;
     this._pairDistance = null;
     this._displayValid = false;
@@ -490,7 +555,7 @@ export class HandInput {
     this._syncPreview(detected, now);
 
     const p = this.primary;
-    if (!p || now - p.lastSeen > this._lostMs) {
+    if (!p || p.isLost(now, this._lostMs, this._stallMs)) {
       this._displayValid = false;
       this._pairDistance = null;
       this._zoomPending = 0;
@@ -500,12 +565,16 @@ export class HandInput {
     // --- primary hand -> frame (targets update at tracking rate, display glides at render rate)
     const snap = !this._displayValid;
     const a = snap ? 1 : damp(32, dt);
+    // The frame a pinch starts, the pointer jumps straight to the latched aim, so the
+    // click (HandCursor hit-tests this frame) lands exactly where the user aimed.
+    const pinchSnap = !snap && p.pinching && !f.pinching;
+    const ap = pinchSnap ? 1 : a;
     const tx = clamp(p.pointerNdc.x, -1, 1);
     const ty = clamp(p.pointerNdc.y, -1, 1);
     const prevX = f.pointer.x;
     const prevY = f.pointer.y;
-    f.pointer.x += (tx - f.pointer.x) * a;
-    f.pointer.y += (ty - f.pointer.y) * a;
+    f.pointer.x += (tx - f.pointer.x) * ap;
+    f.pointer.y += (ty - f.pointer.y) * ap;
     f.palm.x += (clamp(p.palmNdc.x, -1, 1) - f.palm.x) * a;
     f.palm.y += (clamp(p.palmNdc.y, -1, 1) - f.palm.y) * a;
     const switched = p.id !== this._lastPrimaryId;
@@ -513,6 +582,8 @@ export class HandInput {
     if (snap || switched || dt <= 0) {
       // A new hand / the other hand taking over is not a fling.
       f.velocity.x = f.velocity.y = 0;
+    } else if (pinchSnap) {
+      // The aim correction is not hand motion: keep the velocity as it was.
     } else {
       const av = damp(14, dt);
       f.velocity.x += ((f.pointer.x - prevX) / dt - f.velocity.x) * av;
@@ -569,7 +640,7 @@ export class HandInput {
   }
 
   /**
-   * How long a hand survives without a detection: 200 ms, longer when tracking
+   * How long a hand survives detections that miss it: 200 ms, longer when tracking
    * itself runs slowly (CPU delegate on a weak device) so the hand never blinks.
    */
   get _lostMs() {
@@ -577,10 +648,16 @@ export class HandInput {
     return Math.min(1000, Math.max(LOST_MS, interval * 2.2));
   }
 
+  /** No detection ran at all for this long: the hand counts as lost (see isLost). */
+  get _stallMs() {
+    return this.debug.fps > 0 ? Math.max(STALL_MS, 3000 / this.debug.fps) : 4000;
+  }
+
   /** Hands seen recently, primary first. */
   _visibleHands(now) {
     const lost = this._lostMs;
-    const list = this.hands.filter((h) => now - h.lastSeen <= lost);
+    const stall = this._stallMs;
+    const list = this.hands.filter((h) => !h.isLost(now, lost, stall));
     list.sort((a, b) => (a === this.primary ? -1 : b === this.primary ? 1 : 0));
     return list;
   }
@@ -602,8 +679,12 @@ export class HandInput {
     // streams, so re-check at least every 200 ms).
     if (video.currentTime === this._lastVideoTime && now - this._lastDetectAt < 200) return false;
     if (now < this._pausedUntil) return false;
-    // Keep tracking below ~45% of the main thread on slow devices (CPU delegate).
-    const minInterval = Math.min(120, this._detectMs / 0.45);
+    // Detection runs on the main thread and blocks the render frame it runs in. Give it at
+    // most half of the main thread (detection every >= 2x its cost), but never less than
+    // 4 detections per second, below which hand control is unusable anyway. So on a device
+    // where one detection costs > 125 ms (much slower than any phone's CPU delegate), its
+    // share goes above 50%.
+    const minInterval = Math.min(250, this._detectMs / 0.5);
     if (now - this._lastDetectAt < minInterval) return false;
 
     const ts = Math.max(Math.round(now), this._lastTimestamp + 1);
@@ -624,10 +705,12 @@ export class HandInput {
     this._errors = 0;
     this._lastTimestamp = ts;
     this._lastVideoTime = video.currentTime;
-    const interval = now - this._lastDetectAt;
+    const interval = this._lastDetectAt > 0 ? now - this._lastDetectAt : 0;
     this._lastDetectAt = now;
     this._detectMs += (spent - this._detectMs) * 0.1;
-    if (interval > 0 && interval < 1500) {
+    // (Long intervals count too: on an overloaded device the rate itself is that low, and
+    // the loss / stall timeouts must grow with it. A hidden tab's pause does not count.)
+    if (interval > 0 && interval < 10000) {
       const fps = 1000 / interval;
       this.debug.fps = this.debug.fps ? this.debug.fps + (fps - this.debug.fps) * 0.12 : fps;
     }
@@ -650,10 +733,12 @@ export class HandInput {
     const marks = result?.landmarks || [];
     const labels = result?.handedness || result?.handednesses || [];
     const lost = this._lostMs;
-    // Forget hands that have been gone for a while (recently lost ones can be re-acquired
-    // with their filters and gesture state intact).
+    const stall = this._stallMs;
+    // Forget hands that have been gone for a while. A recently lost one that comes back keeps
+    // its identity (so it stays the primary hand) but restarts its gesture state.
     for (let i = this.hands.length - 1; i >= 0; i--) {
-      if (now - this.hands[i].lastSeen > Math.max(RETAIN_MS, lost * 3)) this.hands.splice(i, 1);
+      const h = this.hands[i];
+      if (h.isLost(now, lost, stall) && now - h.lastSeen > Math.max(RETAIN_MS, lost * 3)) this.hands.splice(i, 1);
     }
     const dets = marks.map((raw, i) => {
       // MediaPipe's labels assume a mirrored image; ours is raw, so swap them.
@@ -664,27 +749,30 @@ export class HandInput {
       return { raw, handedness, px, py, hand: null };
     });
 
-    // Greedy nearest-palm matching (handedness disagreement costs a little).
+    // Greedy nearest-palm matching (handedness disagreement costs a little). How far a
+    // palm may have moved grows with the time since it was last seen: a fast flick covers
+    // a third of the picture between two detections when tracking runs at a few fps.
     const pairs = [];
     for (const d of dets) {
       for (const h of this.hands) {
-        const recent = now - h.lastSeen <= lost;
+        const gap = now - h.lastSeen;
         const cost = Math.hypot(d.px - h.palmImg.x, d.py - h.palmImg.y)
           + (d.handedness === h.handedness ? 0 : 0.08)
-          + (recent ? 0 : 0.05);
-        pairs.push({ d, h, cost });
+          + (h.isLost(now, lost, stall) ? 0.05 : 0);
+        const reach = 0.3 + 2.0 * Math.min(0.25, gap / 1000);
+        pairs.push({ d, h, cost, reach });
       }
     }
     pairs.sort((a, b) => a.cost - b.cost);
     const used = new Set();
-    for (const { d, h, cost } of pairs) {
-      if (d.hand || used.has(h) || cost > 0.3) continue;
+    for (const { d, h, cost, reach } of pairs) {
+      if (d.hand || used.has(h) || cost > reach) continue;
       d.hand = h;
       used.add(h);
     }
     // ~3 frames / 80 ms to accept a new gesture; 2 frames when tracking runs slowly.
     const minFrames = this.debug.fps > 0 && this.debug.fps < 14 ? 2 : 3;
-    for (const h of this.hands) if (!used.has(h)) h.streak = 0;
+    for (const h of this.hands) if (!used.has(h)) h.misses++;
     for (const d of dets) {
       if (!d.hand) {
         d.hand = new TrackedHand(this._nextId++, now);
@@ -692,13 +780,15 @@ export class HandInput {
       }
       d.hand.stabilizer.minFrames = minFrames;
       d.hand.fingerStabilizer.minFrames = minFrames;
-      d.hand.update(d.raw, d.handedness, aspect, now);
+      // A miss of a frame or two keeps the hand's state (and its swipe eligibility);
+      // after a real loss (see isLost) it starts fresh.
+      d.hand.update(d.raw, d.handedness, aspect, now, lost, stall);
     }
     this.debug.handsVisible = dets.length;
 
     // Primary: keep the same hand while it is tracked, else the user's right hand, else the first.
     const prev = this.primary;
-    const prevVisible = !!prev && this.hands.includes(prev) && now - prev.lastSeen <= lost;
+    const prevVisible = !!prev && this.hands.includes(prev) && !prev.isLost(now, lost, stall);
     if (!prevVisible) {
       const seen = dets.map((d) => d.hand);
       this.primary = seen.find((h) => h.handedness === 'Right') || seen[0] || null;
@@ -717,7 +807,9 @@ export class HandInput {
       // swipe (a hand entering the picture from the side is not a swipe).
       const eligible = !twoHands && !p.pinching && p.shape === 'open' && p.streak >= minFrames;
       const interval = this.debug.fps > 0 ? 1000 / this.debug.fps : 0;
-      const swipe = this.swipe.update(now, p.rawPalmNdc.x, p.rawPalmNdc.y, eligible, interval);
+      // Same physical flick near or far from the camera (the detector takes the square root).
+      const size = p.scale2D / DEPTH_NEUTRAL_SCALE;
+      const swipe = this.swipe.update(now, p.rawPalmNdc.x, p.rawPalmNdc.y, eligible, interval, size);
       const samples = this.debug.samples;
       samples.push([Math.round(now - this._t0), +p.rawPalmNdc.x.toFixed(2), +p.rawPalmNdc.y.toFixed(2), p.rawShape]);
       if (samples.length > 30) samples.shift();
@@ -726,8 +818,11 @@ export class HandInput {
         this._log(swipe);
       }
     } else {
-      // The hand was not seen in this camera frame: a jump on re-entry is not a swipe.
-      this.swipe.reset();
+      // The primary hand was not found in this camera frame. Fast flicks blur the hand, so
+      // MediaPipe often misses a frame mid-swipe: keep the motion through a miss or two
+      // (the detector bridges the gap). A longer loss means a jump on re-entry is not a swipe.
+      const interval = this.debug.fps > 0 ? 1000 / this.debug.fps : 33;
+      if (!p || now - p.lastSeen > Math.max(80, interval * 2.2)) this.swipe.reset();
       this.debug.samples.push([Math.round(now - this._t0), null]);
       if (this.debug.samples.length > 30) this.debug.samples.shift();
     }

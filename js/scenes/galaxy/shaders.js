@@ -217,10 +217,12 @@ void main() {
   float maxPx = 16.0;
   vProfile = 0.0;
   if (isKind(2.0)) {
-    size = 24.0 + 22.0 * w;
-    bright = 0.045 * (1.0 - clamp(heat, 0.0, 1.0));
+    // haze follows the Size slider half-way (it is the soft glow between the stars)
+    float hs = mix(1.0, uSize, 0.5);
+    size = (24.0 + 22.0 * w) * hs;
+    bright = 0.045 * (1.0 - clamp(heat, 0.0, 1.0)) * min(uSize, 1.0);
     vProfile = 1.0;
-    maxPx = 48.0;
+    maxPx = 48.0 * max(hs, 1.0);
   } else {
     if (isKind(1.0)) {
       // bulge: the density climbs steeply towards the centre, so the stars get
@@ -239,8 +241,15 @@ void main() {
       bright = 0.3 + 0.72 * w * w;
     }
     // the middle is much denser: dim it so additive blending keeps the colours
-    if (!isKind(1.0)) bright *= mix(0.5, 1.12, smoothstep(0.0, 0.75, rn));
+    // (extra dip for the inner arms, 0.05R..0.25R, so they do not merge into one flat blob)
+    if (!isKind(1.0)) {
+      bright *= mix(0.5, 1.12, smoothstep(0.0, 0.75, rn));
+      bright *= 1.0 - 0.4 * smoothstep(0.02, 0.07, rn) * (1.0 - smoothstep(0.14, 0.3, rn));
+    }
     size *= uSize;
+    // light grows much slower than the sprite area: big stars do not flood the
+    // frame with colour, and tiny ones stay visible as fine star dust
+    bright /= uSize < 1.0 ? pow(max(uSize, 0.05), 1.5) : uSize;
   }
   // Radius slider: the camera reframes the galaxy (GalaxyScene.radiusFit), so the
   // stars of a small galaxy look bigger on screen - keep its light about the same
@@ -369,14 +378,56 @@ void main() {
 export const coreFragment = /* glsl */ `
 uniform vec3 uColor;
 uniform float uIntensity;
+uniform float uNucleus;
 varying vec2 vUv;
 void main() {
   float r = length(vUv - 0.5) * 2.0;
   float g = exp(-r * r * 14.0) * 0.75 + exp(-r * 5.5) * 0.25;
   g *= 1.0 - smoothstep(0.6, 1.0, r);
-  gl_FragColor = vec4(uColor * g * uIntensity, 1.0);
+  // small hot nucleus (~0.08 R): whiter and brighter towards the very centre
+  float n = exp(-r * r * 160.0) + 0.3 * exp(-r * r * 30.0);
+  vec3 hot = mix(uColor, vec3(1.0, 0.92, 0.8), 0.6);
+  gl_FragColor = vec4(uColor * g * uIntensity + hot * n * uNucleus, 1.0);
 }
 `;
+
+/**
+ * Highlight roll-off (runs before bloom on the half-float buffer). With plain
+ * clamping, a dense core of saturated orange stars clips its red channel into a
+ * flat plateau. Here the brightest channel rolls off smoothly instead, and the
+ * extra energy turns the colour towards white, like a real hot galactic core.
+ */
+export const highlightShader = {
+  uniforms: { tDiffuse: { value: null }, uKnee: { value: 0.6 }, uHeat: { value: 1.2 } },
+  vertexShader: /* glsl */ `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}`,
+  fragmentShader: /* glsl */ `
+uniform sampler2D tDiffuse;
+uniform float uKnee;
+uniform float uHeat;
+varying vec2 vUv;
+void main() {
+  vec4 t = texture2D(tDiffuse, vUv);
+  vec3 c = max(t.rgb, vec3(0.0));
+  float m = max(c.r, max(c.g, c.b));
+  if (m > uKnee) {
+    vec3 hue = c / m;
+    // overflow heats the colour along a blackbody-like path: raising the
+    // normalised hue to a shrinking power lifts the 2nd channel before the 3rd
+    // (orange -> yellow -> white, pink -> lavender -> white)
+    float w = 1.0 - exp(-(m - uKnee) / uHeat);
+    hue = pow(hue, vec3(1.0 - 0.92 * w));
+    // soft shoulder: uKnee -> asymptotically 1.0
+    float k = 1.0 - uKnee;
+    c = hue * (uKnee + k * (1.0 - exp(-(m - uKnee) / k)));
+  }
+  gl_FragColor = vec4(c, t.a);
+}`,
+};
 
 export const wellFragment = /* glsl */ `
 uniform vec3 uColor;

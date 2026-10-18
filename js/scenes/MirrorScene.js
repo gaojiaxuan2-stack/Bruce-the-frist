@@ -18,18 +18,26 @@ const PHOTO_DATA_URL = new URL('../../assets/face/data.png', import.meta.url).hr
 
 /** Settings live at module level so they survive a quality change (which rebuilds the scene). */
 const PARAMS = { style: 'Matrix', removeBg: true, depth: 1, size: 1, brightness: 1 };
+/** The last image / video the user loaded (the File, not its object URL) - reopened after a rebuild. */
+let lastFile = null;
 
 const BASE_COUNT = 110000;
 const BASE_DEPTH = 2.2; // world units of relief at "3D depth" = 1
 const INTRO_SECONDS = 1.8;
 const CHARGE_SECONDS = 1.6; // after a fist, an open palm within this time explodes
 const BLAST_SECONDS = 5;
+const BALL_Z = 1.2; // the ball floats this far in front of the sheet
+// Background removal switches on only when a real person (head + shoulders ~ 0.3 of
+// the frame) has been seen for a moment; a hand alone (<= ~0.12) never triggers it.
+const PERSON_ON = { coverage: 0.16, seconds: 0.5 };
+const PERSON_OFF = { coverage: 0.08, seconds: 1.5 };
 
 const _ray = new THREE.Ray();
 const _inv = new THREE.Matrix4();
 const _plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
-const _v3 = new THREE.Vector3();
+const _v3b = new THREE.Vector3();
 const _v2a = new THREE.Vector2();
+const _v3 = new THREE.Vector3();
 const clamp = THREE.MathUtils.clamp;
 const damp = (x, target, k, dt) => x + (target - x) * (1 - Math.exp(-k * dt));
 
@@ -121,7 +129,6 @@ export default class MirrorScene extends BaseScene {
     this.charged = 0;
     this.blastT = -1;
     this.blastCenter = new THREE.Vector3();
-    this.zoomDepth = 1;
     this.depthF = 1;
     this.wave = 1;
     this.intro = 0;
@@ -129,6 +136,7 @@ export default class MirrorScene extends BaseScene {
     this.cameraBusy = false;
     this.segWarned = false;
     this.personSeen = false;
+    this.personTimer = 0;
   }
 
   // ------------------------------------------------------------------ setup
@@ -155,6 +163,8 @@ export default class MirrorScene extends BaseScene {
     this.uniforms = {
       ...this.app.sharedUniforms,
       uFovScale: { value: 1 / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2)) },
+      uTanHalf: { value: Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2) },
+      uCamDist: { value: this.camera.position.z },
       uMap: { value: photoTex },
       uMapLinear: { value: 1 },
       uLod: { value: 0 },
@@ -178,6 +188,7 @@ export default class MirrorScene extends BaseScene {
       uStyle: { value: STYLE_IDS[this.params.style] },
       uFacing: { value: 1 },
       uVoids: { value: voids },
+      uVoidOn: { value: 0 },
       uFist: { value: new THREE.Vector4(0, 0, 1, 1.2) },
       uCollapse: { value: 0 },
       uBlast: { value: new THREE.Vector4(0, 0, 0, 0) },
@@ -196,6 +207,8 @@ export default class MirrorScene extends BaseScene {
     this.scene.add(this.points);
     this.camera.updateMatrixWorld();
     this.setSource(this.photo);
+    // a quality change rebuilds the scene: bring back the file the user had open
+    if (lastFile) this.loadFile(lastFile, true);
   }
 
   buildGui(folder) {
@@ -204,7 +217,7 @@ export default class MirrorScene extends BaseScene {
       .name('Style')
       .onChange((s) => (this.uniforms.uStyle.value = STYLE_IDS[s]));
     folder.add(this.params, 'removeBg').name('Remove background');
-    folder.add(this.params, 'depth', 0, 3, 0.01).name('3D depth');
+    this.depthCtrl = folder.add(this.params, 'depth', 0, 3, 0.01).name('3D depth');
     folder.add(this.params, 'size', 0.4, 2.5, 0.01).name('Particle size');
     folder.add(this.params, 'brightness', 0.2, 2.5, 0.01).name('Brightness');
     folder.add(this.actions, 'load').name('Load image or video…');
@@ -230,6 +243,7 @@ export default class MirrorScene extends BaseScene {
   }
 
   dispose() {
+    this.disposed = true;
     super.dispose();
     this.ui?.dispose();
     this.segmenter?.close();
@@ -244,13 +258,16 @@ export default class MirrorScene extends BaseScene {
   /** GUI / CTA: go (back) to the live camera, starting it if needed. */
   useCamera() {
     this.mode = 'auto';
+    lastFile = null;
     if (this.app.input.video || this.cameraBusy) return;
     this.cameraBusy = true;
     this.ui.setBusy(true);
     Promise.resolve()
       .then(() => this.app.startHands())
+      .then(() => this.ui.setNote(null))
       .catch(() => {
-        this.app.hud.toast('No camera yet — showing your photo. The mouse works too.', 3500);
+        // App.startHands has already explained why in a toast; only update the note under the button
+        this.ui.setNote('No camera yet — this is your photo. The mouse works too.');
       })
       .finally(() => {
         this.cameraBusy = false;
@@ -258,7 +275,8 @@ export default class MirrorScene extends BaseScene {
       });
   }
 
-  async loadFile(file) {
+  /** @param {File} file @param {boolean} [quiet] reopening after a rebuild: no toast */
+  async loadFile(file, quiet = false) {
     const url = URL.createObjectURL(file);
     try {
       let src;
@@ -286,15 +304,23 @@ export default class MirrorScene extends BaseScene {
         src = { kind: 'file', texture: tex, width: img.naturalWidth, height: img.naturalHeight, flipX: false, linear: true, url };
       }
       if (!src.width || !src.height) throw new Error('empty picture');
+      if (this.disposed) {
+        src.texture.dispose();
+        src.video?.removeAttribute('src');
+        URL.revokeObjectURL(url);
+        return;
+      }
       this.dropFile();
       this.file = src;
+      lastFile = file;
       if (!this.isActive) src.video?.pause();
       this.mode = 'file';
-      this.app.hud.toast(`Showing “${file.name}” — “Use camera” goes back`, 3000);
+      if (!quiet) this.app.hud.toast(`Showing “${file.name}” — “Use camera” goes back`, 3000);
     } catch (err) {
       URL.revokeObjectURL(url);
       console.warn('Mirror: could not open file', err);
-      this.app.hud.toast('Sorry, that file could not be opened. Try a JPG, PNG or MP4.', 3500);
+      if (quiet) lastFile = null;
+      else this.app.hud.toast('Sorry, that file could not be opened. Try a JPG, PNG or MP4.', 3500);
     }
   }
 
@@ -328,8 +354,8 @@ export default class MirrorScene extends BaseScene {
       this.segmenter.reset();
     }
     if (video && !this.cam && video.videoWidth > 0 && video.readyState >= 2) {
+      // (no toast here: App.startHands already says the camera is on)
       this.cam = { kind: 'camera', texture: videoTexture(video), video, width: video.videoWidth, height: video.videoHeight, flipX: true, linear: false };
-      if (this.isActive && this.mode === 'auto') this.app.hud.toast('🪞 Live mirror on — wave at yourself!');
     }
     if (this.cam && (this.cam.width !== video.videoWidth || this.cam.height !== video.videoHeight) && video.videoWidth > 0) {
       this.cam.width = video.videoWidth;
@@ -352,6 +378,8 @@ export default class MirrorScene extends BaseScene {
     if (changed) {
       this.intro = Math.min(this.intro, 0.15);
       this.maskOn = 0; // a mask belongs to its own source
+      this.personSeen = false;
+      this.personTimer = 0;
     }
   }
 
@@ -425,14 +453,18 @@ export default class MirrorScene extends BaseScene {
     this.grid = { n, aspect, cols, rows, builtAt: performance.now() };
   }
 
-  /** NDC -> point on the (tilted) sheet plane, in the sheet's own coordinates. */
-  toSheet(ndc, target) {
+  /**
+   * NDC -> point on the (tilted) sheet's plane z = planeZ, in the sheet's own
+   * coordinates: something placed there shows up exactly under the cursor.
+   */
+  toSheet(ndc, planeZ, target) {
     _ray.origin.copy(this.camera.position);
     _ray.direction.set(ndc.x, ndc.y, 0.5).unproject(this.camera).sub(this.camera.position).normalize();
     _inv.copy(this.points.matrixWorld).invert();
     _ray.applyMatrix4(_inv);
-    if (!_ray.intersectPlane(_plane, _v3)) this.ndcToWorld(ndc, 0, _v3);
-    return target.set(_v3.x, _v3.y);
+    _plane.constant = -planeZ;
+    if (!_ray.intersectPlane(_plane, _v3b)) this.ndcToWorld(ndc, planeZ, _v3b);
+    return target.set(_v3b.x, _v3b.y, planeZ);
   }
 
   // ---------------------------------------------------------------- frame
@@ -475,10 +507,12 @@ export default class MirrorScene extends BaseScene {
     const tiltAmount = Math.min(1, Math.hypot(this.points.rotation.x, this.points.rotation.y) * 2);
     u.uFacing.value = Math.max(0.35, Math.cos(this.points.rotation.x) * Math.cos(this.points.rotation.y));
 
-    // ---- point: a big soft void that follows the fingertip, with a springy trail
-    const R = 1.35 * hs;
+    // ---- point: a big soft void that follows the fingertip, with a springy trail.
+    // Voids live in screen units (NDC x aspect, y) - the shader compares each particle's
+    // projected position, so the hole is exactly under the finger at any depth / tilt.
+    const R = (1.35 * hs * 2) / this.viewH;
     if (pointing) {
-      const p = this.toSheet(input.pointer, _v2a);
+      const p = _v2a.set(input.pointer.x * this.camera.aspect, input.pointer.y);
       if (!this.voidSeen) {
         this.voidPos.copy(p);
         this.voidLast.copy(p);
@@ -505,21 +539,25 @@ export default class MirrorScene extends BaseScene {
     if (!pointing) this.voidLast.copy(this.voidPos);
     const voids = u.uVoids.value;
     voids[0].set(this.voidPos.x, this.voidPos.y, R, strength);
+    let voidOn = Math.abs(strength) > 1e-3;
     for (let i = 0; i < this.ghosts.length; i++) {
       const g = this.ghosts[i];
       g.age += dt;
       const s = g.age < 1.8 ? g.s0 * Math.exp(-3.2 * g.age) * Math.cos(5.5 * g.age) : 0;
       voids[i + 1].set(g.x, g.y, g.r, s);
+      if (Math.abs(s) > 1e-3) voidOn = true;
     }
+    u.uVoidOn.value = voidOn ? 1 : 0;
 
     // ---- fist: pull everything into a swirling ball; open palm afterwards: explode
     if (fist) {
-      const p = this.toSheet(input.palm, _v2a);
-      if (!this.fistSeen) this.fistPos.set(p.x, p.y, 1.2 * vs);
+      // centred on the hand cursor (input.pointer), on the plane where the ball floats
+      const p = this.toSheet(input.pointer, BALL_Z * vs, _v3);
+      if (!this.fistSeen) this.fistPos.copy(p);
       this.fistSeen = true;
       this.fistPos.x = damp(this.fistPos.x, p.x, 10, dt);
       this.fistPos.y = damp(this.fistPos.y, p.y, 10, dt);
-      this.fistPos.z = 1.2 * vs;
+      this.fistPos.z = BALL_Z * vs;
       this.collapse = Math.min(1, this.collapse + dt * 0.9);
       this.charged = 0;
     } else {
@@ -547,10 +585,17 @@ export default class MirrorScene extends BaseScene {
       }
     }
 
-    // ---- depth: GUI x wheel / two-hand zoom x hand distance (+ a bit more while tilting)
-    if (input.zoom && !ui) this.zoomDepth = clamp(this.zoomDepth * Math.exp(input.zoom * 1.5), 0.25, 3);
+    // ---- depth: GUI slider (also moved by the wheel / two-hand zoom) x hand distance (+ a bit more while tilting)
+    if (input.zoom && !ui) {
+      const d = this.params.depth;
+      const next = clamp(d + Math.max(d, 0.3) * (Math.exp(input.zoom * 1.5) - 1), 0, 3);
+      if (next !== d) {
+        this.params.depth = next;
+        this.depthCtrl?.updateDisplay();
+      }
+    }
     this.depthF = damp(this.depthF, hand ? 0.3 + 1.4 * clamp(input.depth, 0, 1) : 1, 3, dt);
-    u.uDepth.value = BASE_DEPTH * vs * this.params.depth * this.zoomDepth * this.depthF * (1 + 0.5 * tiltAmount);
+    u.uDepth.value = BASE_DEPTH * vs * this.params.depth * this.depthF * (1 + 0.5 * tiltAmount);
 
     // ---- peace sign: next style
     if (input.events.has('victorystart')) {
@@ -570,9 +615,18 @@ export default class MirrorScene extends BaseScene {
         this.segWarned = true;
         this.app.hud.toast('Background removal is not available on this device', 3500);
       }
-      // nobody in the picture (e.g. only a hand): show everything instead of an empty screen
-      const cov = this.segmenter.coverage;
-      this.personSeen = this.personSeen ? cov > 0.015 : cov > 0.03;
+      // nobody in the picture (e.g. only a hand): show everything instead of an empty screen.
+      // Time-based hysteresis so the wall does not fade in and out with every gesture.
+      if (this.segmenter.hasMask) {
+        const cov = this.segmenter.coverage;
+        const rule = this.personSeen ? PERSON_OFF : PERSON_ON;
+        const flipping = this.personSeen ? cov < rule.coverage : cov > rule.coverage;
+        this.personTimer = flipping ? this.personTimer + dt : 0;
+        if (this.personTimer >= rule.seconds) {
+          this.personSeen = !this.personSeen;
+          this.personTimer = 0;
+        }
+      }
       maskReady = this.segmenter.hasMask && this.personSeen;
       if (maskReady) {
         u.uMaskA.value = this.segmenter.prev;
@@ -591,7 +645,7 @@ export default class MirrorScene extends BaseScene {
     this.maskOn = maskReady ? damp(this.maskOn, 1, 2.5, dt) : damp(this.maskOn, 0, 4, dt);
     if (!maskReady && this.maskOn < 0.002) this.maskOn = 0;
     u.uMaskOn.value = this.maskOn;
-    u.uPop.value = 0.7 * vs * this.params.depth * this.zoomDepth * this.depthF;
+    u.uPop.value = 0.7 * vs * this.params.depth * this.depthF;
 
     // ---- look
     this.intro = Math.min(1, this.intro + dt / INTRO_SECONDS);

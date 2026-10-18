@@ -44,6 +44,9 @@ const BALL_RADIUS = 0.95;
 const FIST_PLANE_Z = 1.3; // world z where the fist ball forms (in front of the face)
 const ZOOM_MIN = 0.6;
 const ZOOM_MAX = 2.8;
+// Hand closer / farther zooms relative to where the hand was when it appeared;
+// small changes (posture, tracking noise) inside this dead zone do nothing.
+const HAND_DEAD_ZONE = 0.1;
 
 const clamp = THREE.MathUtils.clamp;
 const damp = (k, dt) => 1 - Math.exp(-k * dt);
@@ -112,7 +115,13 @@ export default class FaceScene extends BaseScene {
     this.introPlayed = false;
     this.bloomBase = null;
     this.bloomSet = 0;
-    this.bloomFactor = 1;
+    this.userGlow = false; // the user moved the global glow slider: use it as is
+    this.wasPinching = false;
+    this.handSeen = false;
+    this.handSeenAt = 0;
+    this.handLast = -Infinity;
+    this.depthRef = 0.5;
+    this.handTarget = 1;
 
     this.raycaster = new THREE.Raycaster();
     this._ray = new THREE.Ray();
@@ -150,6 +159,7 @@ export default class FaceScene extends BaseScene {
       uSize: { value: 1 },
       uExposure: { value: MODE_EXPOSURE.Photo },
       uCamLocal: { value: new THREE.Vector3(0, 0, 20) },
+      uCamFront: { value: new THREE.Vector3(0, 0, 20) },
       uMode: { value: this.modeWeights },
       uLife: { value: 1 },
       uTouch: { value: this.trail.texture },
@@ -196,6 +206,7 @@ export default class FaceScene extends BaseScene {
 
   enter() {
     this.bloomBase = null; // re-read after the App configured the bloom pass for this scene
+    this.userGlow = false;
     this.trail.clear();
     this.playIntro(this.introPlayed ? 1.8 : 2.5);
     this.introPlayed = true;
@@ -252,6 +263,7 @@ export default class FaceScene extends BaseScene {
     this.root.updateMatrixWorld(true);
 
     this.root.worldToLocal(U.uCamLocal.value.copy(this.camera.position));
+    U.uCamFront.value.copy(this.camera.position); // root sits at the origin
     this.updateGather(dt, input, fistDown);
     this.updateTouch(dt, input);
 
@@ -287,22 +299,37 @@ export default class FaceScene extends BaseScene {
     }
     mu.uOpacity.value = 0.5 - 0.2 * w.y;
 
-    // Scale the shared bloom by mode. If the user moved the global glow slider
-    // since our last write, take their value as the new base.
+    // Scale the shared bloom by mode, until the user moves the global "Glow
+    // strength" slider: from then on their value is used as it is in every mode
+    // (the slider shows the real strength, nothing is scaled behind it).
     const bloom = this.app.bloomPass;
     if (!bloom) return;
     const factor = w.x * MODE_BLOOM.Photo + w.y * MODE_BLOOM.Mono + w.z * MODE_BLOOM.Neon;
     const changed = Math.abs(bloom.strength - this.bloomSet) > 1e-6;
     const reconfigured = Math.abs(bloom.strength - (this.meta.bloom.strength ?? 0)) < 1e-6; // App re-applied the meta value
-    if (this.bloomBase == null || (changed && reconfigured)) this.bloomBase = bloom.strength;
-    else if (changed) this.bloomBase = bloom.strength / this.bloomFactor;
-    this.bloomFactor = factor;
-    this.bloomSet = bloom.strength = this.bloomBase * factor;
+    if (this.bloomBase == null || (changed && reconfigured)) {
+      this.bloomBase = bloom.strength;
+      this.userGlow = false;
+    } else if (changed) {
+      this.bloomBase = bloom.strength;
+      this.userGlow = true;
+    }
+    this.bloomSet = bloom.strength = this.userGlow ? this.bloomBase : this.bloomBase * factor;
     bloom.threshold = w.x * MODE_THRESHOLD.Photo + w.y * MODE_THRESHOLD.Mono + w.z * MODE_THRESHOLD.Neon;
   }
 
   updateRotation(dt, input, pinching) {
     const r = this.rot;
+    if (pinching && !this.wasPinching) {
+      // Grab the head where it is: the sway and the glance become part of the
+      // rotation, so nothing turns on its own under a still hand.
+      r.yaw = r.showYaw = clamp(this.root.rotation.y, -MAX_YAW, MAX_YAW);
+      r.pitch = r.showPitch = clamp(this.root.rotation.x, -MAX_PITCH, MAX_PITCH);
+      r.vy = r.vp = 0;
+      this.look.yaw = this.look.pitch = 0;
+      this.swayAmount = 0;
+    }
+    this.wasPinching = pinching;
     if (pinching) {
       const gain = 1.7;
       const dYaw = input.dragDelta.x * gain;
@@ -352,13 +379,29 @@ export default class FaceScene extends BaseScene {
     if (input.zoom && !input.uiCaptured) {
       this.zoomTarget = clamp(this.zoomTarget * Math.exp(input.zoom), ZOOM_MIN, ZOOM_MAX);
     }
-    let hand = 1;
     if (input.source === 'hand' && input.active) {
-      const d = input.depth - 0.5;
-      const dz = Math.sign(d) * Math.max(0, Math.abs(d) - 0.06); // dead zone against jitter
-      hand = clamp(1 + dz * 1.8, 0.7, 1.7);
+      // Relative to the hand's own resting distance (every user sits at a
+      // different distance from the camera): the neutral depth is taken while the
+      // hand comes into view, then slowly follows it while it stays inside the
+      // dead zone. Only a deliberate move closer / farther zooms.
+      if (!this.handSeen) {
+        this.handSeen = true;
+        this.handSeenAt = this.time;
+        this.depthRef = input.depth;
+      }
+      this.handLast = this.time;
+      const d = input.depth - this.depthRef;
+      const settling = this.time - this.handSeenAt < 0.6;
+      if (settling) this.depthRef += d * damp(6, dt);
+      else if (Math.abs(d) < HAND_DEAD_ZONE) this.depthRef += d * damp(0.3, dt);
+      const dz = Math.sign(d) * Math.max(0, Math.abs(d) - HAND_DEAD_ZONE);
+      this.handTarget = settling ? 1 : clamp(1 + dz * 2.5, 0.7, 1.7);
+    } else if (this.time - this.handLast > 0.5) {
+      // Gone for a moment (tracking dropout) keeps the zoom; gone for good resets it.
+      this.handSeen = false;
+      this.handTarget = 1;
     }
-    this.handZoom += (hand - this.handZoom) * damp(2.5, dt);
+    this.handZoom += (this.handTarget - this.handZoom) * damp(2.5, dt);
     const target = clamp(this.zoomTarget * this.handZoom, ZOOM_MIN, ZOOM_MAX);
     this.zoom += (target - this.zoom) * damp(5, dt);
   }
@@ -601,7 +644,7 @@ export default class FaceScene extends BaseScene {
       .add(this.params, 'mode', MODES)
       .name('Colour mode')
       .onChange((m) => this.setMode(m, false));
-    folder.add(this.params, 'size', 0.4, 2.5, 0.01).name('Particle size');
+    folder.add(this.params, 'size', 0.5, 1.8, 0.01).name('Particle size');
     folder.add(this.params, 'depth', 0, 2, 0.01).name('Depth (3D)');
     folder.add(this.params, 'pushRadius', 0.03, 0.25, 0.005).name('Push radius');
     folder.add(this.params, 'pushStrength', 0, 3, 0.05).name('Push strength');

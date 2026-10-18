@@ -4,6 +4,8 @@
 //   col   Float32Array(n*3)  LINEAR rgb colour (brightness already baked in)
 //   sweep Float32Array(n)    0..1 order in which the particle settles during a morph
 //                            (e.g. along the knot's path, bottom-to-top, left-to-right)
+// Each shape also has a `*Steps` generator version that yields every few thousand points, so
+// the scene can build the shapes it does not show yet in small slices between frames.
 import * as THREE from 'three';
 
 const TAU = Math.PI * 2;
@@ -38,6 +40,17 @@ function randDir(rand, out) {
 }
 
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
+/** Points between two yields of a `*Steps` generator (≈ 1–2 ms of work). */
+const SLICE = 4096;
+const tick = (i) => (i & (SLICE - 1)) === SLICE - 1;
+
+/** Run a `*Steps` generator (or what is left of it) to the end and return its result. */
+export function run(steps) {
+  for (;;) {
+    const r = steps.next();
+    if (r.done) return r.value;
+  }
+}
 
 /** Gradient sampler over sRGB hex stops; colours are interpolated in linear space. */
 export function palette(hexes) {
@@ -76,7 +89,7 @@ class Writer {
   }
 
   /** Pad (if needed) and shuffle so particle i of one shape maps to a random spot of the next. */
-  finish(rand) {
+  *finish(rand) {
     const { n, pos, col, sweep } = this;
     const filled = Math.max(1, this.i);
     for (let i = this.i; i < n; i++) {
@@ -86,6 +99,7 @@ class Writer {
       sweep[i] = sweep[s];
     }
     for (let i = n - 1; i > 0; i--) {
+      if (tick(i)) yield;
       const k = Math.floor(rand() * (i + 1));
       for (let c = 0; c < 3; c++) {
         const a = i * 3 + c;
@@ -107,7 +121,9 @@ class Writer {
 
 // ------------------------------------------------------------------ 1 sphere
 
-export function sphereTarget(n, rand) {
+export const sphereTarget = (n, rand) => run(sphereSteps(n, rand));
+
+export function* sphereSteps(n, rand) {
   const w = new Writer(n);
   const R = 2.2;
   const shell = palette(['#3a1cff', '#2a6dff', '#16c8ff', '#7dffe9', '#e9fffb']);
@@ -120,6 +136,7 @@ export function sphereTarget(n, rand) {
 
   // Outer Fibonacci shell with swirled colour bands.
   for (let i = 0; i < nShell; i++) {
+    if (tick(i)) yield;
     const y = 1 - (2 * (i + 0.5)) / nShell;
     const r = Math.sqrt(1 - y * y);
     const th = i * GOLDEN;
@@ -133,6 +150,7 @@ export function sphereTarget(n, rand) {
   // Inner glowing shell.
   const R2 = R * 0.5;
   for (let i = 0; i < nInner; i++) {
+    if (tick(i)) yield;
     const y = 1 - (2 * (i + 0.5)) / nInner;
     const r = Math.sqrt(1 - y * y);
     const th = i * GOLDEN;
@@ -142,18 +160,21 @@ export function sphereTarget(n, rand) {
   }
   // Soft volume between the shells.
   for (let i = 0; i < nVol; i++) {
+    if (tick(i)) yield;
     randDir(rand, d);
     const rr = R * 0.92 * Math.cbrt(rand());
     const k = rr / R;
     core(1 - k, c);
     w.push(d.x * rr, d.y * rr, d.z * rr, c, 0.28 + 0.2 * (1 - k), (1 - d.y * k) / 2);
   }
-  return w.finish(rand);
+  return yield* w.finish(rand);
 }
 
 // ------------------------------------------------------------------ 2 torus knot
 
-export function knotTarget(n, rand) {
+export const knotTarget = (n, rand) => run(knotSteps(n, rand));
+
+export function* knotSteps(n, rand) {
   const w = new Writer(n);
   const p = 2;
   const q = 3;
@@ -186,6 +207,7 @@ export function knotTarget(n, rand) {
   const N = new THREE.Vector3();
   const B = new THREE.Vector3();
   for (let i = 0; i < n; i++) {
+    if (tick(i)) yield;
     const s = rand();
     const target = s * total;
     let lo = 0;
@@ -214,7 +236,7 @@ export function knotTarget(n, rand) {
     const light = 0.72 + 0.28 * Math.cos(phi - 0.6);
     w.push(P1.x + N.x * cp + B.x * sp, P1.y + N.y * cp + B.y * sp, P1.z + N.z * cp + B.z * sp, c, surface ? light : 0.4, s);
   }
-  return w.finish(rand);
+  return yield* w.finish(rand);
 }
 
 // ------------------------------------------------------------------ 3 heart
@@ -245,7 +267,9 @@ function heartRadius(dx, dy, dz) {
   return r;
 }
 
-export function heartTarget(n, rand) {
+export const heartTarget = (n, rand) => run(heartSteps(n, rand));
+
+export function* heartSteps(n, rand) {
   const w = new Writer(n);
   const S = 2.05;
   const zc = 0.1;
@@ -256,6 +280,7 @@ export function heartTarget(n, rand) {
   const rMax = 1.45;
   let guard = 0;
   while (!w.full && guard++ < n * 40) {
+    if (tick(guard)) yield;
     randDir(rand, d);
     const r = heartRadius(d.x, d.z, d.y); // our y (up) is the heart's z; our z (depth) is its y
     if (rand() > (r / rMax) * (r / rMax)) continue; // even out surface density
@@ -274,12 +299,14 @@ export function heartTarget(n, rand) {
       w.push(X, Y, Z, c, 0.3, t);
     }
   }
-  return w.finish(rand);
+  return yield* w.finish(rand);
 }
 
 // ------------------------------------------------------------------ 4 DNA
 
-export function dnaTarget(n, rand) {
+export const dnaTarget = (n, rand) => run(dnaSteps(n, rand));
+
+export function* dnaSteps(n, rand) {
   const w = new Writer(n);
   const H = 5.2;
   const R = 1.0;
@@ -303,6 +330,7 @@ export function dnaTarget(n, rand) {
   const rungs = 24;
 
   for (let i = 0; i < nStrand; i++) {
+    if (tick(i)) yield;
     const s = rand();
     const y = (s - 0.5) * H;
     const second = i & 1;
@@ -316,6 +344,7 @@ export function dnaTarget(n, rand) {
     w.push(Math.cos(ang) * R + d.x * rr, y + d.y * rr, Math.sin(ang) * R + d.z * rr, c, skin ? 0.48 + 0.22 * rand() : 0.3, s);
   }
   for (let i = 0; i < nRung; i++) {
+    if (tick(i)) yield;
     const m = Math.floor(rand() * rungs);
     const s = (m + 0.5) / rungs;
     const y = (s - 0.5) * H * 0.97;
@@ -333,12 +362,13 @@ export function dnaTarget(n, rand) {
     w.push(x0 + (x1 - x0) * t + gauss(rand) * j, y + gauss(rand) * j, z0 + (z1 - z0) * t + gauss(rand) * j, c, 0.45 + 0.25 * rand(), s);
   }
   while (!w.full) {
+    if (tick(w.i)) yield;
     const ang = rand() * TAU;
     const r = 1.3 + rand() * 1.5;
     const y = (rand() - 0.5) * H * 1.1;
     w.push(Math.cos(ang) * r, y, Math.sin(ang) * r, dust, 0.12 + 0.18 * rand(), y / H + 0.5);
   }
-  return w.finish(rand);
+  return yield* w.finish(rand);
 }
 
 // ------------------------------------------------------------------ 5 planet
@@ -354,7 +384,9 @@ function ringDensity(r) {
   return 0;
 }
 
-export function planetTarget(n, rand) {
+export const planetTarget = (n, rand) => run(planetSteps(n, rand));
+
+export function* planetSteps(n, rand) {
   const w = new Writer(n);
   const Rp = 1.22;
   const body = palette(['#9c3216', '#ff7426', '#ffb35c', '#ffe3b8', '#d4572a']);
@@ -365,6 +397,7 @@ export function planetTarget(n, rand) {
   const nRing = Math.round(n * 0.52);
 
   for (let i = 0; i < nBody; i++) {
+    if (tick(i)) yield;
     randDir(rand, d);
     const surface = rand() < 0.8;
     const rr = surface ? Rp * (1 + gauss(rand) * 0.006) : Rp * Math.cbrt(rand()) * 0.96;
@@ -382,6 +415,7 @@ export function planetTarget(n, rand) {
   let guard = 0;
   let placed = 0;
   while (placed < nRing && guard++ < nRing * 20) {
+    if (tick(guard)) yield;
     const r = Math.sqrt(r0 * r0 + rand() * (r1 * r1 - r0 * r0));
     const dens = ringDensity(r);
     if (rand() > dens) continue;
@@ -395,11 +429,12 @@ export function planetTarget(n, rand) {
   // faint outer haze
   const haze = new THREE.Color('#9aa8ff');
   while (!w.full) {
+    if (tick(w.i)) yield;
     const r = 3.0 + rand() * 0.7;
     const ang = rand() * TAU;
     w.push(Math.cos(ang) * r, gauss(rand) * 0.05, Math.sin(ang) * r, haze, 0.1 + 0.12 * rand(), 1);
   }
-  return w.finish(rand);
+  return yield* w.finish(rand);
 }
 
 // ------------------------------------------------------------------ 6 text
@@ -451,7 +486,7 @@ function layoutLines(ctx, str) {
   return byChars ? byChars.lines : [str];
 }
 
-function rasterise(str) {
+function* rasterise(str) {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   // Synthetic "black" weight smears Chinese / Japanese / Korean strokes together.
@@ -475,6 +510,7 @@ function rasterise(str) {
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#fff';
   lines.forEach((line, i) => ctx.fillText(line, canvas.width / 2, pad + lineH * (i + 0.5)));
+  yield;
   const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const W = canvas.width;
   const Hh = canvas.height;
@@ -486,6 +522,7 @@ function rasterise(str) {
   let maxY = 0;
   const on = (x, y) => x >= 0 && y >= 0 && x < W && y < Hh && data[(y * W + x) * 4 + 3] > 127;
   for (let y = 0; y < Hh; y++) {
+    if ((y & 31) === 31) yield;
     for (let x = 0; x < W; x++) {
       if (!on(x, y)) continue;
       const idx = y * W + x;
@@ -505,12 +542,14 @@ function rasterise(str) {
  * Only as many dots as the letters can hold go into them (so a short word does not
  * burn out to a flat blob); the rest become a faint glowing dust that hugs the letters.
  */
-export function textTarget(n, text, rand) {
+export const textTarget = (n, text, rand) => run(textSteps(n, text, rand));
+
+export function* textSteps(n, text, rand) {
   let str = String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, 24);
-  let img = str ? rasterise(str) : null;
+  let img = str ? yield* rasterise(str) : null;
   if (!img || img.filled.length < 20) {
     str = 'HELLO';
-    img = rasterise(str);
+    img = yield* rasterise(str);
   }
   const { W, filled, edges, minX, maxX, minY, maxY, lines } = img;
   const w = new Writer(n);
@@ -530,6 +569,7 @@ export function textTarget(n, text, rand) {
   const pick = (edge) => (edge ? edges[Math.floor(rand() * edges.length)] : filled[Math.floor(rand() * filled.length)]);
 
   for (let i = 0; i < nLetter; i++) {
+    if (tick(i)) yield;
     const edge = edges.length > 0 && rand() < 0.32;
     const idx = pick(edge);
     const px = (idx % W) + rand();
@@ -561,6 +601,7 @@ export function textTarget(n, text, rand) {
   }
   // faint dust around the strokes: a soft particle glow, a little deeper than the letters
   while (!w.full) {
+    if (tick(w.i)) yield;
     const idx = pick(false);
     const px = (idx % W) + rand();
     const py = Math.floor(idx / W) + rand();
@@ -573,7 +614,7 @@ export function textTarget(n, text, rand) {
     const r = rand();
     w.push(X, Y, Z, c, 0.015 + 0.11 * r * r * r, t);
   }
-  const out = w.finish(rand);
+  const out = yield* w.finish(rand);
   out.text = str;
   return out;
 }

@@ -3,7 +3,8 @@
 //   ☝️ point+move push the particles (springy hole with a wake that ripples back)
 //   🤏 pinch+drag rotate with inertia          ✊ fist → ✋ open   squeeze into a core, then explode
 //   ✋ tilt       rotate around the view axis  hand closer / wheel  scale
-//   mouse click   next shape                   GUI                  shape list + your own text
+//   mouse click / touch tap  next shape        right-drag / long-press, then let go  squeeze, explode
+//   GUI           shape list + your own text
 //
 // One hand pose can mean two things (1 finger = point = push; 5 fingers = open palm =
 // tilt / explode), so a finger count only picks a shape as a deliberate "dwell": the pose
@@ -14,11 +15,13 @@ import { BaseScene } from '../core/BaseScene.js';
 import { createShapeMaterial, createStarMaterial, TRAIL_SLOTS } from './shapes/shaders.js';
 import {
   mulberry32,
-  sphereTarget,
-  knotTarget,
-  heartTarget,
-  dnaTarget,
-  planetTarget,
+  run,
+  sphereSteps,
+  knotSteps,
+  heartSteps,
+  dnaSteps,
+  planetSteps,
+  textSteps,
   textTarget,
   cloudTarget,
 } from './shapes/targets.js';
@@ -27,6 +30,8 @@ const TAU = Math.PI * 2;
 const SPREAD = 0.45; // share of the morph used for the per-particle stagger (must match uSpread)
 const PUFF = 0.16; // outward bloom mid-flight (must match uPuff)
 const SWEEP_MIX = 0.7; // how much the shape's own order drives the stagger
+// Time to pick a shape: 2 / 3 fingers or 👍 ≈ 0.1 + 0.6 = 0.7 s held still. 1 finger (☝️) and
+// the open hand (4 / 5) also push / turn / explode, so they wait longer: 0.3 + 0.95 ≈ 1.25 s.
 const HOLD_TIME = 0.6; // seconds 2 / 3 fingers or 👍 must be held still
 const HOLD_TIME_SHARED = 0.95; // 1 finger and the open palm also push / turn / explode: wait longer
 const SETTLE = 0.3; // a new point / open-palm pose must settle before it starts counting
@@ -43,20 +48,29 @@ const PLANET = 4;
 const TEXT = 5;
 const PLANET_CORE = 1.12; // radius that hides what is behind the planet (body radius 1.22)
 const WAKE = TRAIL_SLOTS - 1;
+const SEED = 20261017;
+const BUILD_MS = 3; // per-frame time budget for building the shapes that are not shown yet
+const MULTI_TOUCH_MS = 500; // a tap this soon after a two-finger touch is part of a pinch-zoom
+// Wheel zoom × hand distance stays in this range: bigger, and the camera ends up inside the shape.
+const SCALE_MIN = 0.45;
+const SCALE_MAX = 1.8;
 
 /**
  * tilt: presentation tilt (x, y, z radians), spin: auto-rotation factor, sway: face the viewer,
- * dot: dot-size factor (small dots keep the dense letters crisp).
+ * dot: dot-size factor (small dots keep the dense letters crisp), core: fist-core colour,
+ * steps: point-cloud generator (see targets.js).
  */
 const SHAPES = [
-  { name: 'Sphere', icon: '🔮', fingers: 1, tilt: [0.35, 0, 0.18], spin: 1, dot: 1 },
-  { name: 'Torus knot', icon: '➰', fingers: 2, tilt: [0.45, 0, 0], spin: 1, dot: 1 },
-  { name: 'Heart', icon: '❤️', fingers: 3, tilt: [0, 0, 0], sway: 0.6, dot: 1 },
-  { name: 'DNA helix', icon: '🧬', fingers: 4, tilt: [0, 0, 0.32], spin: 1.6, dot: 0.9 },
-  { name: 'Planet', icon: '🪐', fingers: 5, tilt: [0.4, 0, -0.32], spin: 0.8, dot: 1 },
-  { name: 'Text', icon: '🔤', fingers: 0, tilt: [0, 0, 0], sway: 0.2, dot: 0.68 },
+  { name: 'Sphere', icon: '🔮', fingers: 1, tilt: [0.35, 0, 0.18], spin: 1, dot: 1, core: '#2a8cff', steps: sphereSteps },
+  { name: 'Torus knot', icon: '➰', fingers: 2, tilt: [0.45, 0, 0], spin: 1, dot: 1, core: '#ff4a2a', steps: knotSteps },
+  { name: 'Heart', icon: '❤️', fingers: 3, tilt: [0, 0, 0], sway: 0.6, dot: 1, core: '#ff1f4f', steps: heartSteps },
+  { name: 'DNA helix', icon: '🧬', fingers: 4, tilt: [0, 0, 0.32], spin: 1.6, dot: 0.9, core: '#25b8ff', steps: dnaSteps },
+  { name: 'Planet', icon: '🪐', fingers: 5, tilt: [0.4, 0, -0.32], spin: 0.8, dot: 1, core: '#ff6a1f', steps: planetSteps },
+  { name: 'Text', icon: '🔤', fingers: 0, tilt: [0, 0, 0], sway: 0.2, dot: 0.68, core: '#8f4dff', steps: null },
 ];
-const FINGER_ICON = ['', '☝️', '✌️', '🤟', '🖖', '🖐️'];
+// Emoji for the "hold" indicator. None for 4: no emoji shows four fingers (🖖 shows five).
+const FINGER_ICON = ['', '☝️', '✌️', '🤟', '', '🖐️'];
+const CORE_COLORS = SHAPES.map((sh) => new THREE.Color(sh.core));
 
 /** Settings survive a quality change (the App rebuilds the scene then). */
 let savedSettings = null;
@@ -93,8 +107,8 @@ export default class ShapesScene extends BaseScene {
     subtitle: 'Hold fingers still to pick a shape (mouse: click)',
     icon: '💠',
     hints: [
-      { icon: '✌️', gesture: 'Hold 1 / 2 / 3 fingers', text: 'Sphere / Knot / Heart' },
-      { icon: '🖐️', gesture: 'Hold 4 / 5 fingers / 👍', text: 'DNA / Planet / text' },
+      { icon: '✌️', gesture: 'Hold fingers', text: '1 → Sphere · 2 → Knot · 3 → Heart' },
+      { icon: '🖐️', gesture: 'Hold fingers', text: '4 → DNA · 5 → Planet · 👍 → Text' },
       { icon: '☝️', gesture: 'Point + move', text: 'push the particles' },
       { icon: '🤏', gesture: 'Pinch + drag', text: 'rotate' },
       { icon: '✋', gesture: 'Tilt open hand', text: 'turn the shape' },
@@ -119,17 +133,15 @@ export default class ShapesScene extends BaseScene {
     };
     savedSettings = this.settings;
 
-    const rand = mulberry32(20261017);
+    const rand = mulberry32(SEED);
     this.rand = rand;
-    this.targets = [
-      sphereTarget(n, rand),
-      knotTarget(n, rand),
-      heartTarget(n, rand),
-      dnaTarget(n, rand),
-      planetTarget(n, rand),
-      textTarget(n, this.settings.text, rand),
-    ];
-    this.settings.text = this.targets[TEXT].text;
+    this.current = clamp(Math.round(this.settings.shape) || 0, 0, SHAPES.length - 1);
+    this.settings.shape = this.current;
+    // Only the first shape is built here. The others are built in small time slices over the
+    // next seconds (buildSome), or at once if one is asked for before it is ready (target).
+    this.targets = SHAPES.map(() => null);
+    this.builder = null;
+    this.buildQueue = SHAPES.map((_, k) => (this.current + 1 + k) % SHAPES.length).slice(0, -1);
 
     // ---- particles
     const geo = new THREE.BufferGeometry();
@@ -180,8 +192,6 @@ export default class ShapesScene extends BaseScene {
     this.buildStars(rand);
 
     // ---- state
-    this.current = clamp(Math.round(this.settings.shape) || 0, 0, SHAPES.length - 1);
-    this.settings.shape = this.current;
     this.progress = 0;
     this.morphAge = 0;
     this.swirlEnv = 1;
@@ -195,7 +205,9 @@ export default class ShapesScene extends BaseScene {
     this.scale = 1;
     this.collapse = 0;
     this.collapseRate = 2;
+    this.coreColor = CORE_COLORS[this.current].clone();
     this.fistState = 'idle';
+    this.fistBy = 'none';
     this.fistWait = 0;
     this.explodeAge = 100;
     // the current hand pose ("dwell" session), see updateCounting
@@ -207,11 +219,26 @@ export default class ShapesScene extends BaseScene {
     this.sizeTo = SHAPES[this.current].dot;
     this.beatW = 0;
     this.click = null;
+    // Touches seen by the scene itself: a two-finger pinch-zoom must never count as a tap.
+    this.touchIds = new Set();
+    this.multiAt = -Infinity; // performance.now() of the last moment with two or more touches
+    this.onTouchDown = (e) => {
+      if (e.pointerType !== 'touch') return;
+      this.touchIds.add(e.pointerId);
+      if (this.touchIds.size >= 2) this.multiAt = performance.now();
+    };
+    this.onTouchUp = (e) => {
+      if (e.pointerType !== 'touch') return;
+      if (this.touchIds.size >= 2) this.multiAt = performance.now();
+      this.touchIds.delete(e.pointerId);
+    };
     this.idleT = 0;
     this.demoT = 0;
     this.shake = 0;
     this.camDist = 10;
     this.repel = { x: 0, v: 0 };
+    this.pushDur = 0;
+    this.wasPointing = false;
     this.ptrX = { x: 0, v: 0 };
     this.ptrY = { x: 0, v: 0 };
     this.ptrLive = false;
@@ -220,7 +247,7 @@ export default class ShapesScene extends BaseScene {
     this.lastWake = { x: 9, y: 9 };
 
     // Intro: fly in from a wide cloud and assemble the first shape.
-    const first = this.targets[this.current];
+    const first = this.target(this.current);
     this.attr.from.array.set(cloudTarget(n, rand));
     this.attr.to.array.set(first.pos);
     this.attr.cTo.array.set(first.col);
@@ -230,6 +257,8 @@ export default class ShapesScene extends BaseScene {
     this.attr.carry.array.fill(0);
 
     this.buildIndicator();
+    this.idleBuild = 0;
+    this.scheduleIdleBuild();
   }
 
   buildStars(rand) {
@@ -284,11 +313,21 @@ export default class ShapesScene extends BaseScene {
     this.pointPending = false;
     this.click = null;
     this.idleT = 0;
+    this.touchIds.clear();
+    this.listenTouches(true);
   }
 
   exit() {
     this.showIndicator(false);
     this.indicator.el.remove();
+    this.listenTouches(false);
+  }
+
+  listenTouches(on) {
+    const fn = on ? 'addEventListener' : 'removeEventListener';
+    window[fn]('pointerdown', this.onTouchDown, { passive: true });
+    window[fn]('pointerup', this.onTouchUp, { passive: true });
+    window[fn]('pointercancel', this.onTouchUp, { passive: true });
   }
 
   resize(width, height) {
@@ -309,6 +348,11 @@ export default class ShapesScene extends BaseScene {
 
   dispose() {
     this.indicator?.el.remove();
+    if (this.onTouchDown) this.listenTouches(false);
+    this.builder = null;
+    this.buildQueue = [];
+    if (this.idleBuild) window.cancelIdleCallback?.(this.idleBuild);
+    this.idleBuild = 0;
     super.dispose();
   }
 
@@ -326,6 +370,62 @@ export default class ShapesScene extends BaseScene {
   }
 
   // ------------------------------------------------------------------ shapes
+
+  /** A fresh point-cloud generator for shape `idx` (each shape has its own seed). */
+  makeSteps(idx) {
+    const rand = mulberry32(SEED + 7919 * (idx + 1));
+    return idx === TEXT ? textSteps(this.n, this.settings.text, rand) : SHAPES[idx].steps(this.n, rand);
+  }
+
+  storeTarget(idx, target) {
+    this.targets[idx] = target;
+    const q = this.buildQueue.indexOf(idx);
+    if (q >= 0) this.buildQueue.splice(q, 1);
+    if (idx === TEXT && target.text !== this.settings.text) {
+      this.settings.text = target.text; // e.g. an empty text fell back to "HELLO"
+      this.textCtrl?.updateDisplay();
+    }
+  }
+
+  /** Shape `idx`, built right now if the background builder has not got to it yet. */
+  target(idx) {
+    if (!this.targets[idx]) {
+      const b = this.builder;
+      const mine = b && b.idx === idx;
+      if (mine) this.builder = null;
+      this.storeTarget(idx, run(mine ? b.steps : this.makeSteps(idx)));
+    }
+    return this.targets[idx];
+  }
+
+  /** Build the shapes that are not shown yet, a little per frame (≈ BUILD_MS). */
+  buildSome(budgetMs) {
+    if (!this.builder && !this.buildQueue.length) return;
+    const t0 = performance.now();
+    do {
+      if (!this.builder) {
+        const idx = this.buildQueue[0];
+        this.builder = { idx, steps: this.makeSteps(idx) };
+      }
+      const r = this.builder.steps.next();
+      if (r.done) {
+        const { idx } = this.builder;
+        this.builder = null;
+        this.storeTarget(idx, r.value);
+      }
+    } while ((this.builder || this.buildQueue.length) && performance.now() - t0 < budgetMs);
+  }
+
+  /** Also build in the browser's idle time between frames, where it has requestIdleCallback. */
+  scheduleIdleBuild() {
+    if (typeof window.requestIdleCallback !== 'function' || this.idleBuild) return;
+    this.idleBuild = window.requestIdleCallback((deadline) => {
+      this.idleBuild = 0;
+      if (!this.builder && !this.buildQueue.length) return;
+      this.buildSome(clamp(deadline.timeRemaining() - 1, 0, 8));
+      this.scheduleIdleBuild();
+    }, { timeout: 500 });
+  }
 
   writeDelays(target) {
     const del = this.attr.delay.array;
@@ -381,7 +481,7 @@ export default class ShapesScene extends BaseScene {
     this.settings.shape = idx;
     this.shapeCtrl?.updateDisplay();
     this.startSizeMorph(idx);
-    this.startMorph(this.targets[idx]);
+    this.startMorph(this.target(idx));
     this.swayBase = null;
     this.ses.hold = 0;
     if (toast) {
@@ -396,13 +496,15 @@ export default class ShapesScene extends BaseScene {
 
   setText(value) {
     const str = String(value ?? '');
-    if (this.targets[TEXT].text === str.replace(/\s+/g, ' ').trim().slice(0, 24) && this.current === TEXT) {
-      this.settings.text = this.targets[TEXT].text;
+    const old = this.targets[TEXT];
+    if (old && old.text === str.replace(/\s+/g, ' ').trim().slice(0, 24) && this.current === TEXT) {
+      this.settings.text = old.text;
       this.textCtrl?.updateDisplay();
       return;
     }
+    if (this.builder?.idx === TEXT) this.builder = null; // it was building the old text
     const target = textTarget(this.n, str, this.rand);
-    this.targets[TEXT] = target;
+    this.storeTarget(TEXT, target);
     this.settings.text = target.text;
     this.textCtrl?.updateDisplay();
     if (this.current === TEXT) {
@@ -417,6 +519,7 @@ export default class ShapesScene extends BaseScene {
     const u = this.material.uniforms;
     const s = this.settings;
 
+    this.buildSome(BUILD_MS);
     this.updateCounting(dt, input);
     this.updateClick(time, input);
     this.updateIdle(dt, input);
@@ -436,6 +539,8 @@ export default class ShapesScene extends BaseScene {
     this.collapse += ((this.fistState === 'squeeze' || this.fistState === 'wait' ? 1 : 0) - this.collapse) *
       damp(this.fistState === 'squeeze' ? 3.2 : this.fistState === 'wait' ? 0 : this.collapseRate, dt);
     this.explodeAge = Math.min(100, this.explodeAge + dt);
+    this.coreColor.lerp(CORE_COLORS[this.current], damp(3, dt));
+    u.uCoreColor.value.copy(this.coreColor);
     u.uCollapse.value = this.collapse;
     u.uExplodeT.value = this.explodeAge;
 
@@ -565,8 +670,11 @@ export default class ShapesScene extends BaseScene {
     const wanted = ses.shape >= 0 && ses.shape !== this.current && !ses.used && !blocked &&
       ses.fam !== 'none' && ses.fam !== 'busy';
     // A still, upright point that may still become "1 finger → Sphere" does not push yet;
-    // once it pushes, it stays a push.
-    this.pointPending = wanted && ses.fam === 'point';
+    // once it pushes, it stays a push. A point that is still inside the GRACE window of the
+    // previous pose (open palm → point, ✌️ → point, ...) is pending too: otherwise the push
+    // would start, then snap shut a moment later when the point session begins.
+    const pointSoon = fam === 'point' && ses.fam !== 'point' && this.current !== 0 && !blocked;
+    this.pointPending = (wanted && ses.fam === 'point') || pointSoon;
     if (ses.fam === 'point' && !this.pointPending && live) ses.used = true;
 
     const need = shared ? HOLD_TIME_SHARED : HOLD_TIME;
@@ -588,7 +696,8 @@ export default class ShapesScene extends BaseScene {
 
     if (charging) {
       const sh = SHAPES[ses.shape];
-      const text = ses.shape === TEXT ? `👍 → ${sh.name}` : `${FINGER_ICON[sh.fingers]} ${sh.fingers} → ${sh.name}`;
+      const f = sh.fingers;
+      const text = ses.shape === TEXT ? `👍 → ${sh.name}` : `${FINGER_ICON[f]} ${f} ${f === 1 ? 'finger' : 'fingers'} → ${sh.name}`.trim();
       this.showIndicator(true, text, ses.hold / need);
     } else {
       this.showIndicator(false);
@@ -615,10 +724,16 @@ export default class ShapesScene extends BaseScene {
     }
   }
 
-  /** Mouse: a click without dragging → next shape. */
+  /**
+   * Mouse / touch: a quick click or tap without dragging → next shape. Not when a second finger
+   * touched during (or just before) it: on a phone a two-finger pinch-zoom makes the mouse
+   * input end and restart its "left button" (pinchend / pinchstart) as fingers land and lift.
+   */
   updateClick(time, input) {
+    const now = performance.now();
+    if (this.touchIds.size >= 2) this.multiAt = now;
     if (input.events.has('pinchstart')) {
-      this.click = { t: time, moved: 0, mouse: input.source === 'mouse' };
+      this.click = { t: time, wall: now, moved: 0, x: input.pointer.x, y: input.pointer.y, mouse: input.source === 'mouse' };
     } else if (this.click && input.pinching) {
       this.click.moved += Math.hypot(input.dragDelta.x, input.dragDelta.y);
     }
@@ -627,7 +742,11 @@ export default class ShapesScene extends BaseScene {
     if (input.events.has('pinchend') && this.click) {
       const c = this.click;
       this.click = null;
-      if (c.mouse && input.source === 'mouse' && c.moved < 0.02 && time - c.t < 0.3 && !input.uiCaptured) this.nextShape();
+      // the pointer jumps to a second finger when it lands
+      const jump = Math.hypot(input.pointer.x - c.x, input.pointer.y - c.y);
+      const multi = this.multiAt > c.wall - MULTI_TOUCH_MS;
+      const tap = c.moved < 0.02 && jump < 0.03 && time - c.t < 0.3;
+      if (c.mouse && input.source === 'mouse' && tap && !multi && !input.uiCaptured) this.nextShape();
     }
   }
 
@@ -648,6 +767,7 @@ export default class ShapesScene extends BaseScene {
 
   updateFist(dt, input) {
     const fistOn = input.active && !input.uiCaptured && input.fist;
+    if (fistOn) this.fistBy = input.source;
     switch (this.fistState) {
       case 'idle':
         if (fistOn) this.fistState = 'squeeze';
@@ -666,7 +786,10 @@ export default class ShapesScene extends BaseScene {
           break;
         }
         this.fistWait += dt;
-        const opened = input.active && (input.source === 'mouse' || input.open || input.gesture === 'open' || input.fingers >= 4);
+        // Mouse / touch: letting go is the "open" (a lifted finger also makes the input
+        // inactive). Hand: a real open palm; a hand that left the camera never explodes.
+        const opened = this.fistBy === 'mouse' ||
+          (input.active && input.source === 'hand' && (input.open || input.gesture === 'open' || input.fingers >= 4));
         if (opened) this.explode(input);
         else if (this.fistWait > 1.0) {
           this.fistState = 'idle';
@@ -700,12 +823,17 @@ export default class ShapesScene extends BaseScene {
       this.lastWake.x = this.lastWake.y = 9;
     }
     this.ptrLive = pointing || this.repel.x > 0.02;
+    if (pointing && !this.wasPointing) this.pushDur = 0;
+    if (pointing) this.pushDur += dt;
+    this.wasPointing = pointing;
     if (input.active) {
       spring(this.ptrX, input.pointer.x, 24, 0.75, dt);
       spring(this.ptrY, input.pointer.y, 24, 0.75, dt);
     }
     spring(this.repel, pointing ? 1 : 0, 13, 0.42, dt);
-    const head = clamp(this.repel.x, -0.25, 1.3);
+    // The spring overshoots below 0 when the push ends (the hole "ripples" shut). After a
+    // very short push that would only pull the dots into a bright clump, so skip it then.
+    const head = clamp(this.repel.x, this.pushDur > 0.3 ? -0.12 : 0, 1.3);
 
     if (pointing) {
       const dx = this.ptrX.x - this.lastWake.x;
@@ -799,9 +927,9 @@ export default class ShapesScene extends BaseScene {
     this.autoGroup.rotation.y = this.autoYaw;
 
     // ---- size: wheel / two-hand zoom, and hand distance from the camera
-    if (input.zoom) this.zoom = clamp(this.zoom * Math.exp(input.zoom * 1.2), 0.45, 2.4);
-    const depthF = hand ? 1 + (clamp(input.depth, 0, 1) - 0.5) * 0.9 : 1;
-    this.scale += (this.zoom * depthF - this.scale) * damp(4, dt);
+    if (input.zoom) this.zoom = clamp(this.zoom * Math.exp(input.zoom * 1.2), 0.5, 1.7);
+    const depthF = hand ? 1 + (clamp(input.depth, 0, 1) - 0.5) * 0.7 : 1;
+    this.scale += (clamp(this.zoom * depthF, SCALE_MIN, SCALE_MAX) - this.scale) * damp(4, dt);
     this.root.scale.setScalar(this.scale);
   }
 }

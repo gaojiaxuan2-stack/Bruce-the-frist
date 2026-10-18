@@ -81,7 +81,7 @@ uniform float uViewGain;
 uniform float uFlash;
 uniform float uStreams;
 uniform float uBeam;
-uniform vec4 uShock;     // radius, amplitude, width, -
+uniform vec4 uShock;     // release shock front in the disk: radius, amplitude, width, -
 uniform vec3 uCol0;
 uniform vec3 uCol1;
 uniform vec3 uCol2;
@@ -215,8 +215,8 @@ void main() {
   I *= 1.0 + uFeed * 0.8 * (1.0 - t) + uFlash * 0.9;
 
   // The release shock front glows white-hot as it rolls through the disk.
-  col = mix(col, uCol0 * 1.4, clamp(shock * 0.8, 0.0, 1.0));
-  I += shock * (0.05 + 0.1 * aRand.z) * fade;
+  col = mix(col, uCol0 * 1.4, clamp(shock * 0.9, 0.0, 1.0));
+  I += shock * (0.16 + 0.18 * aRand.z) * fade;
 
 #ifdef SECONDARY
   I *= weight * 1.3;
@@ -254,6 +254,8 @@ uniform float uTime;
 uniform float uLensStar;
 uniform float uStarBright;
 varying vec3 vColor;
+varying float vHalo;
+varying float vScale;
 void main() {
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   float stretch;
@@ -263,18 +265,28 @@ void main() {
   float tw = 0.7 + 0.3 * sin(uTime * (0.8 + aStar.w * 2.5) + aStar.w * 61.0);
   vec3 c = mix(vec3(0.62, 0.74, 1.0), vec3(1.0, 0.82, 0.62), aStar.z);
   // stars bunched up near the Einstein ring get a touch brighter (magnified)
-  vColor = c * aStar.y * tw * uStarBright * min(sqrt(stretch), 2.5);
-  gl_PointSize = aStar.x * uPixelRatio * (uViewportHeight / 900.0) * min(sqrt(stretch), 1.8);
+  c *= aStar.y * tw * uStarBright * min(sqrt(stretch), 2.5);
+  // Stay under the bloom threshold: bloom would turn a one-pixel star into a
+  // square smudge. The big stars draw their own soft round glow instead.
+  float peak = max(max(c.r, c.g), c.b);
+  vColor = c * min(1.0, 0.22 / max(peak, 1e-4));
+  vHalo = smoothstep(2.2, 5.0, aStar.x);
+  vScale = 1.0 + 3.0 * vHalo;
+  float core = aStar.x * uPixelRatio * (uViewportHeight / 900.0) * min(sqrt(stretch), 1.8);
+  gl_PointSize = core * vScale;
 }
 `;
 
 export const starFragment = /* glsl */ `
 varying vec3 vColor;
+varying float vHalo;
+varying float vScale;
 void main() {
   vec2 d = gl_PointCoord - 0.5;
   float r2 = dot(d, d) * 4.0;
   if (r2 > 1.0) discard;
-  float a = exp(-r2 * 5.0);
+  // sharp core + (big stars only) a wide, faint round glow that fades to 0 at the edge
+  float a = exp(-r2 * vScale * vScale * 5.0) + vHalo * 0.22 * exp(-r2 * 4.0) * (1.0 - r2);
   gl_FragColor = vec4(vColor * a, 1.0);
 }
 `;
@@ -292,14 +304,14 @@ uniform float uFeed;
 uniform float uLensA;
 uniform float uDust;
 uniform float uFlash;
-uniform vec4 uShock;
+uniform vec4 uShockDust; // the same blast, carried on through the dust: radius, amplitude, width, -
 uniform vec3 uCol1;
 uniform vec3 uCol2;
 varying vec3 vColor;
 void main() {
   float r = aDust.x * (1.0 - 0.12 * uFeed);
-  float sd = (r - uShock.x * 1.15) / (uShock.z * 2.0);
-  float shock = uShock.y * exp(-sd * sd);
+  float sd = (r - uShockDust.x) / uShockDust.z;
+  float shock = uShockDust.y * exp(-sd * sd);
   r += shock * 1.6;
   float th = aDust.y + uOrbitK * 0.45 * pow(aDust.x, -1.5) * uClock;
   vec3 pos = vec3(r * cos(th), aDust.z * (1.0 + shock * 0.4), r * sin(th));
@@ -383,47 +395,89 @@ void main() {
 }
 `;
 
+// ---------------------------------------------------------------- shadow (see ShadowPasses.js)
+
+/** Copies the square around the shadow out of the scene render, 1:1 (before bloom). */
+export const copyFragment = /* glsl */ `
+uniform sampler2D tDiffuse;
+uniform vec2 uBoxMin;
+uniform vec2 uSrcSize;
+void main() {
+  gl_FragColor = texture2D(tDiffuse, (uBoxMin + gl_FragCoord.xy) / uSrcSize);
+}
+`;
+
 /**
- * "Light sink": the bloom pass would otherwise smear the bright ring and disk
- * into the shadow and turn it grey. The scene is rendered into a half-float
- * target, so this billboard writes NEGATIVE light inside the shadow, exactly
- * the glow the bloom pass added there on the previous frame (its composite
- * texture, colour * alpha). Bloom then adds this frame's glow on top and the
- * shadow ends up pure black, while the near side of the disk that passes in
- * front of the shadow keeps its own brightness.
+ * After bloom: inside the shadow, put back the un-bloomed copy (output colour is
+ * premultiplied: copy * w over bloomed * (1 - w)). Everything in front of the hole
+ * is in that copy, so it stays; only the glow that bloom smeared into the shadow
+ * goes. Where the view ray crosses the bright inner band of the near disk, most
+ * of the glow is kept so the band looks the same inside and outside the shadow.
  */
-export const sinkFragment = /* glsl */ `
+export const shadowMaskFragment = /* glsl */ `
 uniform float uRing;
-uniform float uSink;
 uniform float uRin;
-uniform float uRout;
-uniform sampler2D uBloomTex;
-uniform vec2 uScreen;
+uniform sampler2D uPre;
+uniform vec2 uBoxMin;
+uniform vec2 uBoxSize;
+uniform float uPreSize;
 varying vec2 vP;
 varying vec3 vWorld;
 
-// Does this view ray hit the near half of the disk (plane y = h) in front of the hole?
-float bandHit(vec3 ro, vec3 rd, float h) {
-  if (abs(rd.y) < 1e-5) return 0.0;
-  float t = (h - ro.y) / rd.y;
-  if (t <= 0.0) return 0.0;
-  vec3 p = ro + rd * t;
-  if (dot(p, ro) <= 0.0) return 0.0;
-  float rho = length(p.xz);
-  // only the bright inner part matters: the faint outer band never reaches the bloom threshold
-  return smoothstep(uRin * 0.78, uRin * 0.92, rho) * (1.0 - smoothstep(uRin * 1.1, uRin * 1.45, rho));
+// disk half-thickness (about 2 sigma of the particle heights)
+float slab(float rho) {
+  return 0.045 + 0.06 * max(rho - uRin, 0.0);
+}
+
+// Does the segment ro -> ro + seg (camera -> hole centre plane) cross the inner band?
+float bandCover(vec3 ro, vec3 seg) {
+  float rMax = uRin * 1.5;
+  float hMax = slab(rMax) * 1.25;
+  float t0 = 0.0;
+  float t1 = 1.0;
+  // inside the slab |y| < hMax ...
+  if (abs(seg.y) > 1e-6) {
+    float ta = (-hMax - ro.y) / seg.y;
+    float tb = (hMax - ro.y) / seg.y;
+    t0 = max(t0, min(ta, tb));
+    t1 = min(t1, max(ta, tb));
+  } else if (abs(ro.y) > hMax) {
+    return 0.0;
+  }
+  // ... and inside the cylinder rho < rMax
+  vec2 o = ro.xz;
+  vec2 d = seg.xz;
+  float a = dot(d, d);
+  float b = dot(o, d);
+  float c = dot(o, o) - rMax * rMax;
+  float disc = b * b - a * c;
+  if (disc <= 0.0 || a < 1e-8) return 0.0;
+  float sq = sqrt(disc);
+  t0 = max(t0, (-b - sq) / a);
+  t1 = min(t1, (-b + sq) / a);
+  if (t1 <= t0) return 0.0;
+  float cover = 0.0;
+  for (int i = 0; i < 16; i++) {
+    vec3 p = ro + seg * mix(t0, t1, (float(i) + 0.5) / 16.0);
+    float rho = length(p.xz);
+    float h = slab(rho);
+    float w = smoothstep(uRin * 0.8, uRin * 0.96, rho) * (1.0 - smoothstep(uRin * 1.12, rMax, rho));
+    w *= 1.0 - smoothstep(h * 0.55, h * 1.15, abs(p.y));
+    cover = max(cover, w);
+  }
+  return cover;
 }
 
 void main() {
   float r = length(vP) / uRing;
-  float k = 1.0 - smoothstep(0.84, 0.99, r);
-  // Leave the part of the disk that passes in front of the shadow alone: it
-  // keeps its own glow, and it must not feed back into the bloom (flicker).
-  vec3 rd = normalize(vWorld - cameraPosition);
-  float band = max(bandHit(cameraPosition, rd, 0.0), max(bandHit(cameraPosition, rd, 0.12), bandHit(cameraPosition, rd, -0.12)));
-  k *= 1.0 - band;
-  vec4 b = texture2D(uBloomTex, gl_FragCoord.xy / uScreen);
-  // a little over-subtraction keeps it black while the glow is ramping up
-  gl_FragColor = vec4(-b.rgb * b.a * k * uSink * 1.25, 1.0);
+  float m = 1.0 - smoothstep(0.87, 0.99, r);
+  if (m <= 0.0) discard;
+  vec2 q = gl_FragCoord.xy - uBoxMin;
+  if (q.x < 0.0 || q.y < 0.0 || q.x > uBoxSize.x || q.y > uBoxSize.y) discard;
+  float keep = 0.8 * bandCover(cameraPosition, vWorld - cameraPosition);
+  float w = m * (1.0 - keep);
+  if (w <= 0.001) discard;
+  vec3 pre = max(texture2D(uPre, q / uPreSize).rgb, vec3(0.0));
+  gl_FragColor = vec4(pre * w, w);
 }
 `;

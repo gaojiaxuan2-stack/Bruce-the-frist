@@ -16,6 +16,7 @@ export const STYLE_IDS = { Color: 0, Mono: 1, Matrix: 2, Thermal: 3 };
 export const vertexShader = /* glsl */ `
 #define VOIDS ${VOID_COUNT}
 #define TAU 6.28318530718
+#define HOLE_SPREAD 1.8
 
 attribute vec4 aRand;
 
@@ -23,6 +24,8 @@ uniform float uTime;
 uniform float uPixelRatio;
 uniform float uViewportHeight;
 uniform float uFovScale;      // 1 / (2 tan(fov / 2))
+uniform float uTanHalf;       // tan(fov / 2)
+uniform float uCamDist;       // camera distance to the sheet
 
 uniform sampler2D uMap;
 uniform float uMapLinear;     // 1: sampler returns linear colour (sRGB image), 0: raw sRGB (video)
@@ -49,7 +52,8 @@ uniform float uIntro;         // 0..1 fly-in
 uniform float uStyle;
 uniform float uFacing;        // 1 facing the camera .. ~0.35 seen edge-on
 
-uniform vec4 uVoids[VOIDS];   // xy centre (sheet space), z radius, w strength
+uniform vec4 uVoids[VOIDS];   // xy centre, z radius (screen units: NDC * (aspect, 1)), w strength
+uniform float uVoidOn;        // 1 while any void is active
 uniform vec4 uFist;           // xyz ball centre, w ball radius
 uniform float uCollapse;      // 0..1 how far the particles have been pulled into the ball
 uniform vec4 uBlast;          // xyz explosion centre, w strength
@@ -130,19 +134,43 @@ void main() {
   }
 
   // ---- finger void (+ its springy trail)
+  // Worked out on SCREEN, so the hole sits exactly under the fingertip whatever the
+  // particle's depth (dust far behind, person in front) or the sheet's tilt.
+  // Each void moves particles outward so that r'^2 = r^2 + (R w)^2 fall(r): an
+  // area-preserving push that leaves a clean hole of radius ~R and piles the
+  // particles into a soft, wide rim (max ~2x density) instead of a hard ring.
+  // Particles are also pushed back along their own view ray, which keeps them
+  // exactly where they are on screen. Negative strength (springy release, trail
+  // ripples) only bulges the particles forward - it never pulls them through
+  // the centre into a bright star.
   float rim = 0.0;
-  for (int i = 0; i < VOIDS; i++) {
-    vec4 v = uVoids[i];
-    vec2 d = p.xy - v.xy;
-    float r2 = dot(d, d);
-    float R = max(v.z, 1e-3);
-    float f = exp(-r2 / (R * R * 0.6)) * v.w;
-    float r = sqrt(r2) + 1e-4;
-    p.xy += d / r * R * f;
-    p.z -= f * R * 0.9;
-    rim += abs(f) * (1.0 - min(abs(f), 1.0)) * 4.0;
+  if (uVoidOn > 0.5) {
+    vec3 mv0 = (modelViewMatrix * vec4(p, 1.0)).xyz;
+    float zd = max(-mv0.z, 0.5);
+    vec2 s = mv0.xy / (zd * uTanHalf);
+    float dens = 1.0;
+    float back = 0.0;
+    for (int i = 0; i < VOIDS; i++) {
+      vec4 v = uVoids[i];
+      if (abs(v.w) < 1e-3) continue;
+      vec2 d = s - v.xy;
+      float r2 = max(dot(d, d), 1e-10);
+      float R2 = v.z * v.z;
+      float fall = exp(-r2 / (R2 * HOLE_SPREAD));
+      // w^2: the hole's radius grows linearly with strength (sqrt would leave a visible
+      // pinhole for every faint trail ripple)
+      float w = max(v.w, 0.0);
+      w *= w * (0.82 + 0.36 * aRand.y);
+      s = v.xy + d * sqrt(1.0 + R2 * w * fall / r2);
+      dens *= max(1.0 - w * fall / HOLE_SPREAD, 0.2);
+      back += v.w * exp(-r2 / (R2 * 0.6)) * v.z;
+    }
+    float zn = zd + back * 0.9 * uCamDist * uTanHalf;
+    vec3 mv1 = vec3(s * (zn * uTanHalf), -zn);
+    // view-space offset back into the sheet's own space (pure rotation: transpose = inverse)
+    p += transpose(mat3(modelViewMatrix)) * (mv1 - mv0);
+    rim = min(1.0 / dens - 1.0, 1.5);
   }
-  rim = min(rim, 1.5);
 
   // ---- fist: collapse into a swirling ball
   float t = 0.0;
@@ -199,23 +227,30 @@ void main() {
   }
 
   // ---- style
+  // Auto exposure: the last mip level is the average brightness of the whole frame,
+  // so a bright wall or an over-exposed video does not flood the screen. Mostly off
+  // while the background is removed (the person alone is the picture then).
+  float avg = luma(srcSrgb(vec2(0.5), 14.0));
+  float expo = mix(clamp(0.5 / max(avg, 0.05), 0.6, 1.3), 1.0, uMaskOn * 0.75);
+  float lumE = lum * expo;
+  float detail = (lum - blur) * expo;
   float sz = mix(0.6, 1.4, aRand.x);
   vec3 col;
   if (uStyle < 0.5) {
     // Color: the real picture, a little richer
     vec3 s = clamp(mix(vec3(lum), srgb, 1.18), 0.0, 1.0);
     s = clamp((s - 0.5) * 1.06 + 0.5, 0.0, 1.0);
-    col = toLinear(s) * 1.05;
+    col = toLinear(s) * 0.95 * mix(1.0, expo, 0.7);
     sz *= mix(0.8, 1.1, lum);
   } else if (uStyle < 1.5) {
     // Mono: white dots, bigger where bright
-    float v = smoothstep(0.04, 0.92, lum);
-    col = vec3(0.9, 0.94, 1.0) * (0.05 + 0.9 * v * v);
+    float v = smoothstep(0.04, 0.92, lumE);
+    col = vec3(0.9, 0.94, 1.0) * (0.05 + 0.75 * v * v);
     sz *= mix(0.3, 1.25, v);
   } else if (uStyle < 2.5) {
-    // Matrix: mint glow + falling code streaks. Local contrast (detail vs. its
-    // blurred surroundings) keeps big flat bright walls from turning into a mint flood.
-    float v = smoothstep(0.04, 0.9, lum * 0.8 + (lum - blur) * 1.4 + 0.08);
+    // Matrix: mint glow + falling code streaks. Edges / highlights (detail vs. the
+    // blurred surroundings) glow; big flat areas stay a calm, darker green.
+    float v = smoothstep(0.04, 0.9, lumE * 0.72 + detail * 1.6 + 0.08);
     float colId = floor(g.x * uGrid.x / 2.0);
     float speed = 0.08 + hash11(colId) * 0.22;
     float head = 1.0 - fract(uTime * speed + hash11(colId + 31.7));
@@ -227,14 +262,19 @@ void main() {
     sz *= mix(0.4, 1.3, v) * (1.0 + streak * 0.25);
   } else {
     // Thermal: brightness + person -> heat
-    float h = clamp(lum * 0.78 + person * uMaskOn * 0.28 - 0.04, 0.0, 1.0);
+    float h = clamp(lumE * 0.78 + person * uMaskOn * 0.28 - 0.04, 0.0, 1.0);
     col = thermal(h) * 0.95;
     sz *= mix(0.7, 1.15, h);
   }
 
-  // void rim glow
-  col += vec3(0.55, 1.0, 0.85) * rim * 0.22 * (0.35 + lum);
-  sz *= 1.0 + rim * 0.25;
+  // void rim: a faint mint tint; the packed particles themselves make the glow
+  col += vec3(0.55, 1.0, 0.85) * rim * 0.08 * (0.35 + lum);
+  sz *= 1.0 + rim * 0.1;
+  alpha *= 1.0 / (1.0 + 0.35 * rim);
+
+  // soft fade at the sheet's edges (no hard cut, no bloom blobs in the corners)
+  vec2 edge = min(g, 1.0 - g) * uSheet;
+  alpha *= mix(smoothstep(0.0, 0.7, min(edge.x, edge.y)), 1.0, t);
 
   // soft highlight roll-off so white shirts / walls do not burn out
   col = col / (1.0 + 0.45 * max(max(col.r, col.g), col.b));

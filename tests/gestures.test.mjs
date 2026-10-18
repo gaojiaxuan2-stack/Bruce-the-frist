@@ -6,10 +6,12 @@ import assert from 'node:assert/strict';
 import {
   GestureStabilizer,
   OneEuroFilter,
+  PinchAim,
   PinchDetector,
   SwipeDetector,
   THRESHOLDS,
   analyzeHand,
+  clamp,
   classifyGesture,
   classifyShape,
   countFingers,
@@ -335,6 +337,112 @@ test('PinchDetector: a blocked shape (fist) cannot start a pinch; enterFrames de
   assert.equal(p.update(0.2, true), false);
 });
 
+test('PinchDetector: closing the hand into a fist ends a pinch (fold flag), and a fist cannot re-pinch', () => {
+  const p = new PinchDetector({ releaseFrames: 2 });
+  assert.equal(p.update(0.2), true);
+  // In a fist the thumb rests on the curled index: the distance stays below the exit line.
+  assert.equal(p.update(0.22, false, true), true, 'one folded frame is noise');
+  assert.equal(p.update(0.22, false, true), false, 'two release it');
+  assert.equal(p.update(0.22, false, true), false);
+  assert.equal(p.update(0.2, true, false), true, 'the index opens again: a new pinch');
+  // A single folded frame between unfolded ones does not release.
+  assert.equal(p.update(0.2, true, true), true);
+  assert.equal(p.update(0.2, true, false), true);
+  assert.equal(p.update(0.2, true, true), true);
+});
+
+test('PinchDetector: the synthetic pinch -> fist sequence releases', () => {
+  const p = new PinchDetector({ enterFrames: 2, releaseFrames: 2 });
+  const pinch = analyzeHand(transform(makeHand(POSES.pinch), { roll: 15 }));
+  const fist = analyzeHand(transform(makeHand(POSES.fist), { roll: 15 }));
+  p.update(pinch.pinchDist, pinch.pinchAllowed, pinch.indexFolded);
+  assert.equal(p.update(pinch.pinchDist, pinch.pinchAllowed, pinch.indexFolded), true);
+  assert.ok(fist.pinchDist < THRESHOLDS.pinchExit, 'the distance alone would not release');
+  p.update(fist.pinchDist, fist.pinchAllowed, fist.indexFolded);
+  assert.equal(p.update(fist.pinchDist, fist.pinchAllowed, fist.indexFolded), false);
+});
+
+// ------------------------------------------------------------------ PinchAim
+
+/** Feed PinchAim a pinch forming from an open thumb/index: the fingertip drops as it closes. */
+function formPinch(aim, t0, { steps = 6, ms = 200, aimX = 0.2, aimY = -1.3, drop = 0.55 } = {}) {
+  let t = t0;
+  const out = [];
+  for (let i = 1; i <= steps; i++) {
+    const k = i / steps;
+    const d = 1.2 - k * 1.0; // 1.2 -> 0.2
+    const strength = clamp((THRESHOLDS.pinchNone - d) / (THRESHOLDS.pinchNone - THRESHOLDS.pinchFull), 0, 1);
+    const pinching = d < THRESHOLDS.pinchEnter;
+    out.push({ ...aim.update((t += ms / steps), d, strength, pinching, aimX + 0.1 * k, aimY + drop * k), pinching });
+  }
+  return { t, out };
+}
+
+test('PinchAim: follows the fingertip exactly while no pinch is forming', () => {
+  const a = new PinchAim();
+  for (let i = 0; i < 20; i++) {
+    const r = a.update(i * 33, 1.3 + Math.sin(i) * 0.05, 0, false, 0.1 * i, -1.2);
+    assert.equal(r.w, 0);
+    assert.equal(r.x, 0.1 * i);
+  }
+});
+
+test('PinchAim: latches the aim from before the fingers closed; exactly 1 from the pinch start', () => {
+  const a = new PinchAim();
+  let t = 0;
+  for (let i = 0; i < 10; i++) a.update((t += 33), 1.2, 0, false, 0.2, -1.3);
+  const { out } = formPinch(a, t);
+  const start = out.findIndex((r) => r.pinching);
+  assert.ok(start > 0, 'the pinch starts during the sequence');
+  assert.equal(out[start].w, 1, 'the click point is fully latched on the pinch-start frame');
+  // The fingertip dropped 0.55 hand scales; the latched aim kept the pre-pinch offset.
+  assert.ok(Math.abs(out[start].y - -1.3) < 0.02 && Math.abs(out[start].x - 0.2) < 0.02, JSON.stringify(out[start]));
+  // While forming, most of the drift is already hidden (the pointer is mostly latched).
+  for (const r of out.slice(1)) assert.ok(r.w > 0.7, `w ${r.w}`);
+});
+
+test('PinchAim: a very fast pinch (between two frames) still latches the aim', () => {
+  const a = new PinchAim();
+  let t = 0;
+  for (let i = 0; i < 10; i++) a.update((t += 33), 1.1, 0, false, 0.3, -1.25);
+  // One frame later the fingers already touch and the tip dropped.
+  a.update((t += 33), 0.15, 1, false, 0.35, -0.8);
+  const r = a.update((t += 33), 0.15, 1, true, 0.35, -0.8);
+  assert.equal(r.w, 1);
+  assert.ok(Math.abs(r.y - -1.25) < 1e-9, `y ${r.y}`);
+});
+
+test('PinchAim: glides back to the fingertip after the release (no hop), then follows again', () => {
+  const a = new PinchAim();
+  let t = 0;
+  for (let i = 0; i < 5; i++) a.update((t += 33), 1.2, 0, false, 0.2, -1.3);
+  ({ t } = formPinch(a, t));
+  for (let i = 0; i < 10; i++) a.update((t += 33), 0.2, 1, true, 0.3, -0.75);
+  // Release: fingers open again over 200 ms.
+  let prevW = 1;
+  for (let i = 1; i <= 6; i++) {
+    const d = 0.2 + (i / 6) * 1.0;
+    const strength = clamp((0.9 - d) / 0.72, 0, 1);
+    const r = a.update((t += 33), d, strength, d < 0.48, 0.3 - 0.1 * (i / 6), -0.75 - 0.55 * (i / 6));
+    assert.ok(r.w <= prevW + 1e-9, 'w only falls');
+    assert.ok(prevW - r.w < 0.35, `w falls gently (${prevW} -> ${r.w})`);
+    prevW = r.w;
+  }
+  for (let i = 0; i < 30; i++) a.update((t += 33), 1.2, 0, false, 0.5, -1.0);
+  assert.equal(a.w, 0);
+  assert.equal(a.x, 0.5, 'free again: the fingertip offset passes straight through');
+});
+
+test('PinchAim: a hand resting half-pinched slowly re-aims (the latch never goes stale)', () => {
+  const a = new PinchAim();
+  let t = 0;
+  for (let i = 0; i < 5; i++) a.update((t += 33), 1.2, 0, false, 0, -1.2);
+  // Settles at strength ~0.4 (not a pinch), then the finger moves to a new offset and rests.
+  for (let i = 0; i < 4; i++) a.update((t += 33), 1.2 - (i + 1) * 0.15, 0.4, false, 0, -1.2);
+  for (let i = 0; i < 150; i++) a.update((t += 33), 0.6, 0.42, false, 0.4, -1.0);
+  assert.ok(Math.abs(a.x - 0.4) < 0.05 && Math.abs(a.y - -1.0) < 0.05, `x ${a.x} y ${a.y}`);
+});
+
 // ------------------------------------------------------------------ GestureStabilizer
 
 test('GestureStabilizer: a new gesture must persist 3 frames and 80 ms', () => {
@@ -366,6 +474,16 @@ test('GestureStabilizer: flicker never switches, returning to the stable value c
   assert.equal(s.update('fist', (t += 33)), 'open', 'count restarted');
   assert.equal(s.force('pinch'), 'pinch');
   assert.equal(s.value, 'pinch');
+});
+
+test('GestureStabilizer.settle: accepts a pending value seen in enough frames in a row', () => {
+  const s = new GestureStabilizer({ minFrames: 3, minMs: 80, initial: 'open' });
+  assert.equal(s.settle(2), 'open', 'nothing pending');
+  s.update('fist', 33);
+  assert.equal(s.settle(2), 'open', 'seen once');
+  s.update('fist', 66);
+  assert.equal(s.settle(2), 'fist', 'seen twice');
+  assert.equal(s.update('fist', 99), 'fist');
 });
 
 // ------------------------------------------------------------------ SwipeDetector
@@ -420,6 +538,49 @@ test('SwipeDetector: only an open hand swipes; losing it resets the motion', () 
   assert.equal(d2.update(100, -0.4, 0), null, 'a jump after a reset is not a swipe');
 });
 
+/** A natural flick: still for 200 ms, then an eased (slow-fast-slow) move, then still. */
+const flick = (x0, x1, ms, fps = 30) => {
+  const out = [];
+  const dt = 1000 / fps;
+  for (let t = 0; t <= 200 + ms + 200; t += dt) {
+    const k = clamp((t - 200) / ms, 0, 1);
+    out.push([t, x0 + (x1 - x0) * k * k * (3 - 2 * k), 0]);
+  }
+  return out;
+};
+
+test('SwipeDetector: ~0.55 NDC flicks within ~350 ms count, smaller or slower ones do not', () => {
+  assert.deepEqual(runSwipe(new SwipeDetector(), flick(0.3, -0.3, 200)), ['swipeleft'], '0.6 NDC in 200 ms');
+  assert.deepEqual(runSwipe(new SwipeDetector(), flick(-0.3, 0.3, 300)), ['swiperight'], '0.6 NDC in 300 ms');
+  assert.deepEqual(runSwipe(new SwipeDetector(), flick(-0.28, 0.28, 330)), ['swiperight'], '0.56 NDC in 330 ms');
+  assert.deepEqual(runSwipe(new SwipeDetector(), flick(0.2, -0.25, 150)), [], '0.45 NDC is not enough');
+  assert.deepEqual(runSwipe(new SwipeDetector(), flick(0.4, -0.4, 700)), [], '0.8 NDC in 700 ms is a move, not a flick');
+  assert.deepEqual(runSwipe(new SwipeDetector(), ramp(0, 0.4, -0.4, 600)), [], 'steady 1.3 NDC/s drift');
+});
+
+test('SwipeDetector: a missing sample (one camera frame without the hand) does not break a swipe', () => {
+  for (const missing of [2, 3, 4, 5]) {
+    const samples = ramp(0, 0.5, -0.4, 250).filter((_, i) => i !== missing);
+    assert.deepEqual(runSwipe(new SwipeDetector(), samples), ['swipeleft'], `sample ${missing} missing`);
+  }
+  // Two in a row too.
+  const samples = ramp(0, 0.5, -0.4, 250).filter((_, i) => i !== 3 && i !== 4);
+  assert.deepEqual(runSwipe(new SwipeDetector(), samples), ['swipeleft']);
+});
+
+test('SwipeDetector: thresholds follow the hand size (same physical flick near and far)', () => {
+  const run = (size, x0, x1) => {
+    const d = new SwipeDetector();
+    return ramp(0, x0, x1, 200).map(([t, x, y]) => d.update(t, x, y, true, 33, size)).filter(Boolean);
+  };
+  // 0.5 NDC: too small at a comfortable distance, enough for a far (small) hand.
+  assert.deepEqual(run(1, 0.25, -0.25), []);
+  assert.deepEqual(run(0.5, 0.25, -0.25), ['swipeleft']);
+  // 0.65 NDC: enough at a comfortable distance, not for a hand right in front of the camera.
+  assert.deepEqual(run(1, 0.3, -0.35), ['swipeleft']);
+  assert.deepEqual(run(2.2, 0.3, -0.35), []);
+});
+
 test('SwipeDetector: slow tracking (sparse samples) still catches a quick swipe', () => {
   // ~2 tracking frames per second (500 ms apart): the flick happened between two samples.
   const d = new SwipeDetector();
@@ -429,6 +590,18 @@ test('SwipeDetector: slow tracking (sparse samples) still catches a quick swipe'
   const fast = new SwipeDetector();
   assert.equal(fast.update(0, -1.0, 0, true, 33), null);
   assert.equal(fast.update(560, -0.25, 0.02, true, 33), null);
+  // A hand resting for a while (many samples), then caught once mid-flick, 400 ms later.
+  for (const interval of [250, 400, 500]) {
+    const r = new SwipeDetector();
+    let t = 0;
+    for (let i = 0; i < 6; i++) assert.equal(r.update((t += interval), 0.4, 0, true, interval), null);
+    assert.equal(r.update((t += interval), -0.3, 0.05, true, interval), 'swipeleft', `${interval} ms tracking`);
+  }
+  // ...but a hand that was already moving before the window is drifting, not flicking.
+  const drift = new SwipeDetector();
+  let td = 0;
+  const xs = [0.9, 0.6, 0.3, 0.0, -0.3, -0.6];
+  assert.deepEqual(xs.map((x) => drift.update((td += 400), x, 0, true, 400)).filter(Boolean), []);
   // Slow tracking still needs the distance and rejects slow drifts.
   const d2 = new SwipeDetector();
   assert.equal(d2.update(0, -0.3, 0, true, 500), null);

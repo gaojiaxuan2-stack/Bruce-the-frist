@@ -1,6 +1,6 @@
 // Shaders for the Shapes scene. All per-particle animation happens here:
 // morph (aFrom -> position with stagger, puff and curl swirl), breathing, heartbeat,
-// "charging" tremble, fist core, explosion burst, the fingertip push with its wake and
+// "charging" tremble, fist core (view space), explosion burst, the fingertip push with its wake and
 // the planet body hiding whatever is behind it.
 import * as THREE from 'three';
 import { GLSL } from '../../core/glsl.js';
@@ -38,6 +38,7 @@ uniform float uOcclude;    // 0..1: the planet body hides the ring / back side b
 uniform float uOccRadius;  // object-space radius of that body
 uniform float uFocus;
 uniform float uRepelRadius;
+uniform vec3 uCoreColor;   // the fist core's outer colour (the shape's main hue)
 uniform vec4 uTrail[${TRAIL_SLOTS}];
 
 varying vec3 vColor;
@@ -45,6 +46,12 @@ varying float vAlpha;
 
 float easeInOutCubic(float x) {
   return x < 0.5 ? 4.0 * x * x * x : 1.0 - pow(-2.0 * x + 2.0, 3.0) * 0.5;
+}
+
+mat2 rot2(float a) {
+  float c = cos(a);
+  float s = sin(a);
+  return mat2(c, s, -s, c);
 }
 
 void main() {
@@ -84,30 +91,48 @@ void main() {
   p += uTremble * 0.055 * vec3(sin(uTime * 31.0 + ph * 7.0), sin(uTime * 37.0 + ph * 11.0), sin(uTime * 43.0 + ph * 13.0));
   p *= 1.0 - uTremble * 0.04;
 
-  // ---- fist: collapse into a tight spinning core (a bright ball inside a tilted swirl disc)
-  float ci = clamp(uCollapse * 1.4 - aRand.x * 0.4, 0.0, 1.0);
-  ci = ci * ci * (3.0 - 2.0 * ci);
-  if (ci > 0.0) {
-    vec3 dir = shapeP + rnd * 0.9 + vec3(1e-4);
-    if (aRand.x > 0.42) dir.y *= 0.12;
-    dir = normalize(dir);
-    float r = (0.06 + 0.95 * pow(aRand.w, 1.7)) * (1.0 + 0.07 * sin(uTime * 9.0 + ph));
-    float ang = uTime * (0.7 + 0.3 / (r + 0.05)) + ph;
-    float cs = cos(ang);
-    float sn = sin(ang);
-    vec3 core = dir * r;
-    core.xz = mat2(cs, -sn, sn, cs) * core.xz;
-    core.yz = mat2(0.88, 0.47, -0.47, 0.88) * core.yz;
-    p = mix(p, core, ci);
-  }
-
   // ---- open palm after the fist: burst outward, then re-form
+  vec3 boomOff = vec3(0.0);
   if (boom > 0.0005) {
     vec3 dir = normalize(shapeP + rnd * 1.3 + vec3(1e-4));
-    p += dir * boom * uExplodeAmp * (0.3 + 1.2 * aRand.w * aRand.w);
+    boomOff = dir * boom * uExplodeAmp * (0.3 + 1.2 * aRand.w * aRand.w);
   }
 
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
+
+  // ---- fist: collapse into a tight glowing core. It is built in view space, so it always
+  // faces the camera the same way whatever the shape's tilt or spin: a white-hot ball inside
+  // a spinning disc seen from slightly above, with a bright ring (a tiny accretion disc).
+  float ci = clamp(uCollapse * 1.4 - aRand.x * 0.4, 0.0, 1.0);
+  ci = ci * ci * (3.0 - 2.0 * ci);
+  float coreA = 1.0;
+  if (ci > 0.0) {
+    vec3 core;
+    vec3 coreCol;
+    if (aRand.x < 0.12) {
+      // the ball (these dots also collapse first), wrapped in a faint coloured glow
+      float r = 0.025 + 0.3 * pow(aRand.w, 2.2);
+      core = normalize(rnd + vec3(1e-4)) * r;
+      coreCol = mix(vec3(1.0, 0.92, 0.75), uCoreColor, smoothstep(0.06, 0.28, r)) * 1.25;
+      coreA = 0.05;
+    } else {
+      // the disc: brightest along a ring at r ~ 0.62, fading in at its inner edge
+      float r = 0.26 + 1.45 * pow(aRand.w, 1.3);
+      float ang = ph + uTime * (0.45 + 0.6 / (r + 0.1));
+      core = vec3(cos(ang) * r, rnd.y * 0.04 * (0.4 + r), sin(ang) * r);
+      core.yz = rot2(0.56) * core.yz;
+      float ring = exp(-pow((r - 0.62) / 0.12, 2.0));
+      vec3 hot = vec3(1.0, 0.8, 0.5);
+      coreCol = mix(hot, uCoreColor, smoothstep(0.24, 0.6, r)) * (0.8 + 1.2 * ring) * (1.0 - 0.55 * smoothstep(0.9, 1.7, r));
+      coreA = (0.07 + 0.32 * ring) * smoothstep(0.26, 0.4, r);
+    }
+    core.xy = rot2(-0.2) * core.xy;
+    core *= 1.2 * length(modelViewMatrix[0].xyz) * (1.0 + 0.05 * sin(uTime * 7.0 + ph));
+    vec3 centre = (modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    mv.xyz = mix(mv.xyz, centre + core, ci);
+    col = mix(col, coreCol, ci);
+  }
+  mv.xyz += mat3(modelViewMatrix) * boomOff;
 
   // ---- fingertip push (view space; uTrail = ray direction + strength, head + fading wake).
   // Area preserving: a dot at distance d from the finger's ray moves out to
@@ -166,9 +191,10 @@ void main() {
   float tw = 0.78 + 0.22 * sin(uTime * (1.3 + aRand.x * 2.7) + ph * 3.0);
   vAlpha = (0.5 + 0.5 * aRand.w) * tw / (1.0 + dof * 0.22);
   vAlpha *= 1.0 + push * 0.1 + uTremble * 0.7 + boom * 0.3;
-  vAlpha *= mix(1.0, 0.06 + 0.5 * aRand.w * aRand.w, ci); // the dense centre stays soft, the outer swirl keeps its colour
+  vAlpha *= mix(1.0, coreA, ci); // the dense core stays soft, its ring stands out
   vAlpha *= 1.0 - 0.9 * occ;
-  vColor = mix(col, vec3(1.0, 0.93, 0.86) * max(max(col.r, col.g), col.b) * 1.3 + 0.05, clamp(push * 0.04 + ci * 0.15 + boom * 0.1, 0.0, 0.6));
+  vAlpha *= smoothstep(1.5, 4.0, -mv.z); // never a wall of huge blurry dots right in front of the camera
+  vColor = mix(col, vec3(1.0, 0.93, 0.86) * max(max(col.r, col.g), col.b) * 1.3 + 0.05, clamp(push * 0.04 + boom * 0.1, 0.0, 0.6));
 }
 `;
 
@@ -211,6 +237,7 @@ export function createShapeMaterial(shared) {
       uOccRadius: { value: 1.1 },
       uFocus: { value: 10 },
       uRepelRadius: { value: 0.62 },
+      uCoreColor: { value: new THREE.Color('#2a9dff') },
       uTrail: { value: trail },
       uIntensity: { value: 1 },
     },

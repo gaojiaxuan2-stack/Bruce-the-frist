@@ -22,8 +22,8 @@ const LABEL_DENSITY = [0, 1, 0.85, 1, 0.5, 0.8];
 // stays the brightest part and the glow does not haze the background).
 const LABEL_WEIGHT = [1, 1, 1, 1, 0.4, 1];
 
-/** Fraction of particles drawn in Mono mode (see the 3x3 tagging below). */
-export const MONO_FRACTION = 1 / 9;
+/** Fraction of particles drawn in Mono mode (see the 2x2 tagging below). */
+export const MONO_FRACTION = 1 / 4;
 
 export const LABEL = { bg: 0, hair: 1, bodySkin: 2, faceSkin: 3, clothes: 4 };
 
@@ -215,10 +215,10 @@ export async function loadPortrait(targetCount) {
       // Sparser regions get bigger dots so the coverage stays even.
       info[n * 4 + 3] = 1 / Math.sqrt(Math.max(0.25, LABEL_DENSITY[lab]));
       extra[n * 4] = lab;
-      // One particle per 3x3 block of cells (a jittered coarse grid) is tagged
-      // for the Mono halftone look by giving it rand2 < 1/9; rand2 stays uniform.
-      const bh = blockHash(Math.floor(gx / 3), Math.floor(gy / 3));
-      const tagged = gx % 3 === bh % 3 && gy % 3 === Math.floor(bh / 3) % 3;
+      // One particle per 2x2 block of cells (a jittered coarse grid) is tagged
+      // for the Mono halftone look by giving it rand2 < 1/4; rand2 stays uniform.
+      const bh = blockHash(gx >> 1, gy >> 1);
+      const tagged = (gx & 1) === (bh & 1) && (gy & 1) === ((bh >> 1) & 1);
       extra[n * 4 + 1] = tagged ? r2 * MONO_FRACTION : MONO_FRACTION + r2 * (1 - MONO_FRACTION);
       extra[n * 4 + 2] = LABEL_WEIGHT[lab] * Math.sqrt(fade);
       extra[n * 4 + 3] = l;

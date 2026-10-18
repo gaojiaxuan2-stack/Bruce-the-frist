@@ -31,15 +31,20 @@ const STYLE = `
   background: radial-gradient(circle, rgba(255, 255, 255, 0.08), transparent 70%);
   transition: border-color 160ms, box-shadow 160ms, background-color 160ms; }
 #hand-layer .hc.is-pinch .hc-ring { background-color: var(--hc-fill); }
-#hand-layer .hc.is-hover .hc-ring { border-width: 3px; }
+/* Over a button / tab / widget: a thin, see-through ring so the label under it stays
+   readable (the target's own .hand-hover highlight shows what is hovered). */
+#hand-layer .hc.is-hover .hc-ring { border-width: 1.5px; background: transparent;
+  box-shadow: 0 0 10px var(--hc-glow); }
+#hand-layer .hc.is-hover.is-pinch .hc-ring { background: var(--hc-fill); border-width: 2px; }
+#hand-layer .hc.is-hover .hc-dot { width: 4px; height: 4px; left: -2px; top: -2px; }
 #hand-layer .hc-dot { position: absolute; left: -3px; top: -3px; width: 6px; height: 6px; border-radius: 50%;
   background: #fff; box-shadow: 0 0 8px var(--hc), 0 0 2px #000; transition: opacity 160ms; }
 #hand-layer .hc.is-pinch .hc-dot { opacity: 0; }
 #hand-layer .hc-dwell { position: absolute; left: -35px; top: -35px; width: 70px; height: 70px;
   transform: rotate(-90deg); opacity: 0; transition: opacity 120ms; overflow: visible; }
 #hand-layer .hc-dwell.show { opacity: 1; }
-#hand-layer .hc-dwell circle { fill: none; stroke-width: 3.5; }
-#hand-layer .hc-dwell .hc-track { stroke: rgba(255, 255, 255, 0.16); }
+#hand-layer .hc-dwell circle { fill: none; stroke-width: 3; }
+#hand-layer .hc-dwell .hc-track { stroke: rgba(255, 255, 255, 0.12); }
 #hand-layer .hc-dwell .hc-bar { stroke: var(--hc); stroke-linecap: round; filter: drop-shadow(0 0 4px var(--hc)); }
 #hand-layer .hc-label { position: absolute; left: 30px; top: 14px; white-space: nowrap;
   font: 600 12px/1 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -47,6 +52,9 @@ const STYLE = `
   border: 1px solid rgba(255, 255, 255, 0.14); opacity: 0; transform: translateY(4px);
   transition: opacity 180ms, transform 180ms; }
 #hand-layer .hc-label.show { opacity: 1; transform: none; }
+/* Near the right / bottom edge the label goes to the other side of the cursor. */
+#hand-layer .hc.flip-x .hc-label { left: auto; right: 30px; }
+#hand-layer .hc.flip-y .hc-label { top: auto; bottom: 14px; }
 #hand-layer .hc.secondary { --hc: #8aa8ff; --hc-glow: rgba(138, 168, 255, 0.45); }
 #hand-layer .hc.secondary .hc-ring { left: -12px; top: -12px; width: 24px; height: 24px; opacity: 0.8; }
 #hand-layer .hc.secondary .hc-dot { opacity: 0.8; }
@@ -177,6 +185,8 @@ export class HandCursor {
     this.lastGesture = 'none';
     this.labelTime = 0;
     this.classKey = '';
+    this.flipX = false;
+    this.flipY = false;
     this.debug = { clicks: 0, lastClick: null, hover: null };
   }
 
@@ -239,7 +249,7 @@ export class HandCursor {
       this.hoverEl = hoverEl;
       this.debug.hover = hoverEl ? describe(hoverEl) : null;
     }
-    // The cursor owns this flag in hand mode (InputManager does not reset it per frame).
+    // InputManager clears the flag every frame; in hand mode the cursor sets it.
     state.uiCaptured = !!(this.press || target);
 
     // ---- dwell click on [data-hand-clickable] (not ="pinch")
@@ -280,16 +290,21 @@ export class HandCursor {
     this.root.style.transform = `translate3d(${x}px, ${y}px, 0)`;
     const fist = !!state.fist && !pinching;
     const hovering = !!hoverEl;
-    const base = fist ? 1.3 : hovering ? 1.22 : 1;
+    const base = fist ? 1.3 : hovering ? 0.9 : 1;
     const targetScale = base * (1 - 0.4 * Math.min(1, state.pinch || 0)) * (pinching ? 0.92 : 1);
     this.ringScale += (targetScale - this.ringScale) * damp(22, dt);
     this.ring.style.transform = `scale(${this.ringScale.toFixed(3)})`;
-    const key = `${pinching ? 'p' : ''}${fist ? 'f' : ''}${hovering ? 'h' : ''}`;
+    // Label side, with a little hysteresis so it does not flip back and forth at the line.
+    this.flipX = x > w - (this.flipX ? 190 : 170);
+    this.flipY = y > h - (this.flipY ? 60 : 50);
+    const key = `${pinching ? 'p' : ''}${fist ? 'f' : ''}${hovering ? 'h' : ''}${this.flipX ? 'x' : ''}${this.flipY ? 'y' : ''}`;
     if (key !== this.classKey) {
       this.classKey = key;
       this.root.classList.toggle('is-pinch', pinching);
       this.root.classList.toggle('is-fist', fist);
       this.root.classList.toggle('is-hover', hovering);
+      this.root.classList.toggle('flip-x', this.flipX);
+      this.root.classList.toggle('flip-y', this.flipY);
     }
 
     // Short gesture label next to the cursor whenever the gesture changes.

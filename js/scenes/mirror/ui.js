@@ -39,10 +39,15 @@ const CSS = `
 .mirror-cta button:disabled { opacity: 0.75; cursor: progress; animation: none; }
 .mirror-cta small {
   font-size: 13px;
-  color: rgba(242, 244, 248, 0.78);
-  text-shadow: 0 1px 4px #000, 0 0 12px #000;
+  line-height: 1.35;
+  color: rgba(242, 244, 248, 0.9);
+  background: rgba(0, 0, 0, 0.58);
+  padding: 5px 12px;
+  border-radius: 999px;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
   text-align: center;
-  max-width: min(420px, calc(100vw - 32px));
+  max-width: min(440px, calc(100vw - 32px));
 }
 @keyframes mirror-cta-pulse {
   0%, 100% { box-shadow: 0 0 0 1px rgba(124, 246, 200, 0.55), 0 0 26px rgba(124, 246, 200, 0.35), 0 10px 30px rgba(0, 0, 0, 0.5); }
@@ -116,6 +121,11 @@ export class MirrorUi {
       this.cta.classList.add('out');
       this.hideTimer = setTimeout(() => (this.cta.hidden = true), 340);
     }
+  }
+
+  /** Text under the button; null restores the default. */
+  setNote(text) {
+    this.note.textContent = text || NOTE;
   }
 
   setBusy(busy) {

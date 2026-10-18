@@ -306,11 +306,6 @@ export function indexGrip(lm, index = fingerState(lm, 0), scale = handScale(lm),
   return { free, folded, open, tipPalm };
 }
 
-/** Can a pinch start with this hand shape? (Not while the index is folded into a fist.) */
-export function pinchAllowed(info) {
-  return info.pinchAllowed;
-}
-
 /**
  * Classify a hand shape.
  * @param {ReturnType<typeof analyzeHand>} info
@@ -463,44 +458,105 @@ export class PinchDetector {
 }
 
 /**
- * Where the pointer sits between the index fingertip (0) and the thumb/index midpoint (1).
- * The midpoint barely moves while the fingers meet, so a pinch-click lands where you aimed.
- * Continuous in the pinch distance and damped on the way back (fast in, slow out), so the
- * cursor glides back to the fingertip after a pinch instead of hopping.
+ * Keeps a pinch-click where the user aimed.
+ *
+ * To pinch, the index finger curls down to meet the thumb, so the fingertip (and the
+ * thumb/index midpoint) drop by about half a finger length before the pinch registers:
+ * a click aimed at one lil-gui row would land several rows lower. So while a pinch is
+ * forming or held, the pointer is latched to the palm: palm centre + the fingertip offset
+ * from just before the fingers started to close. It still follows every hand movement
+ * (the palm does not move when the fingers curl) but ignores the finger motion.
+ *
+ * Feed it the fingertip offset from the palm centre (in hand-size units) once per tracking
+ * frame. It returns that offset frozen at the aim, and `w`: how much of the pointer the
+ * latched aim owns (0 = plain fingertip, 1 = latched). `w` rises fast when the fingers
+ * start to close, is exactly 1 from the frame the pinch starts, and glides back to 0 after
+ * the release, so the cursor never hops.
  */
-export class PinchPointBlend {
-  constructor({ near = 0.3, far = 0.8, rise = 30, fall = 9 } = {}) {
-    this.near = near;
-    this.far = far;
+export class PinchAim {
+  /**
+   * @param {{formStrength?: number, closeRate?: number, lookbackMs?: number, rise?: number,
+   *   fall?: number, follow?: number}} [o]
+   *   formStrength: pinch strength at which a pinch counts as forming;
+   *   closeRate: thumb-index closing speed (hand scales / s, negative) that counts as forming;
+   *   lookbackMs: how far back the aim is looked up when the fingers start to close;
+   *   rise / fall: blend rates (1/s); follow: catch-up rate (1/s) of a hand resting half-pinched.
+   */
+  constructor({ formStrength = 0.3, closeRate = -1.5, lookbackMs = 150, rise = 40, fall = 9, follow = 0.8 } = {}) {
+    this.formStrength = formStrength;
+    this.closeRate = closeRate;
+    this.lookbackMs = lookbackMs;
     this.rise = rise;
     this.fall = fall;
-    this.w = 0;
-    this.init = false;
+    this.follow = follow;
+    this.history = [];
+    this.reset();
   }
 
   reset() {
+    this.history.length = 0;
+    this.x = 0;
+    this.y = 0;
     this.w = 0;
-    this.init = false;
+    this.rate = 0;
+    this.holding = false;
+    this.wasPinching = false;
+    this.last = null;
   }
 
   /**
-   * @param {number} d normalised thumb-index distance
-   * @param {number} indexOpen 0..1 (analyzeHand().indexOpen)
-   * @param {boolean} pinching stable pinch state
-   * @param {number} dt seconds since the last update (tracking rate)
-   * @returns {number} 0..1
+   * @param {number} timeMs tracking time stamp (must increase)
+   * @param {number} d normalised thumb-index distance (analyzeHand().pinchDist)
+   * @param {number} strength 0..1 pinch strength (analyzeHand().pinch)
+   * @param {boolean} pinching stable pinch state (PinchDetector)
+   * @param {number} ox fingertip offset from the palm centre, x
+   * @param {number} oy fingertip offset from the palm centre, y
+   * @returns {{x: number, y: number, w: number}} this
    */
-  update(d, indexOpen, pinching, dt) {
-    const t = clamp((d - this.near) / (this.far - this.near), 0, 1);
-    const target = pinching ? 1 : (1 - t * t * (3 - 2 * t)) * clamp(indexOpen, 0, 1);
-    if (!this.init || !(dt > 0)) {
-      this.w = target;
-      this.init = true;
-      return this.w;
+  update(timeMs, d, strength, pinching, ox, oy) {
+    const last = this.last;
+    if (last && timeMs <= last.t) return this;
+    const dt = last ? Math.min(0.5, (timeMs - last.t) / 1000) : 0;
+    if (last && dt > 0) {
+      const r = (d - last.d) / dt;
+      this.rate += (r - this.rate) * 0.5;
     }
-    const k = target > this.w ? this.rise : this.fall;
-    this.w += (target - this.w) * (1 - Math.exp(-k * Math.min(dt, 0.5)));
-    return this.w;
+    const h = this.history;
+    const sample = { t: timeMs, d, x: ox, y: oy };
+    h.push(sample);
+    const interval = last ? timeMs - last.t : 0;
+    const window = Math.max(this.lookbackMs, interval * 2.5);
+    while (h.length > 1 && timeMs - h[0].t > Math.max(400, window)) h.shift();
+    this.last = sample;
+
+    const forming = !pinching && (strength >= this.formStrength || (this.rate < this.closeRate && d < 1.1));
+    const hold = pinching || forming;
+    if (hold && !this.holding) {
+      // The fingers just started to close: the aim is where the fingertip was right
+      // before that, i.e. the most open sample of the last few frames.
+      let best = sample;
+      for (const s of h) if (timeMs - s.t <= window && s.d > best.d) best = s;
+      this.x = best.x;
+      this.y = best.y;
+    } else if (forming && Math.abs(this.rate) < 0.4 && dt > 0) {
+      // Resting half-pinched (fingers not moving): slowly re-aim so the latch never goes stale.
+      const k = 1 - Math.exp(-this.follow * dt);
+      this.x += (ox - this.x) * k;
+      this.y += (oy - this.y) * k;
+    } else if (!hold && this.w < 0.02) {
+      this.x = ox;
+      this.y = oy;
+    }
+    this.holding = hold;
+
+    if (pinching && !this.wasPinching) this.w = 1;
+    else if (dt > 0) {
+      const target = hold ? 1 : 0;
+      this.w += (target - this.w) * (1 - Math.exp(-(target > this.w ? this.rise : this.fall) * dt));
+      if (this.w < 1e-3) this.w = 0;
+    }
+    this.wasPinching = pinching;
+    return this;
   }
 }
 
@@ -530,6 +586,19 @@ export class GestureStabilizer {
   force(value) {
     this.reset(value);
     return value;
+  }
+
+  /**
+   * Accept the pending value now if it was seen in at least `minFrames` updates in a row
+   * (a shorter debounce for moments where the old value is known to be stale).
+   * @returns {*} the (possibly new) stable value
+   */
+  settle(minFrames = 2) {
+    if (this.candidate !== this.value && this.count >= minFrames) {
+      this.value = this.candidate;
+      this.count = 0;
+    }
+    return this.value;
   }
 
   /** @param {*} raw @param {number} timeMs */
@@ -565,17 +634,21 @@ export class GestureStabilizer {
  * 'swipeleft' = toward the left of the (mirrored) screen. After a swipe nothing fires
  * for `cooldown` ms (the hand coming back is not a swipe).
  *
- * `size` scales distance and speeds with the apparent hand size (1 = comfortable
- * distance), so the same physical flick works near and far from the camera.
+ * `size` is the apparent hand size (1 = a comfortable distance from the camera). The
+ * distance and speed thresholds scale with its square root (clamped to 0.75..1.3x): a
+ * hand close to the camera covers more of the picture for the same physical flick, a
+ * far one less, but a far user still has to move the cursor a fair way.
  * Slow tracking (a few frames per second) cannot time a 200 ms flick: pass the
  * sampling interval and the allowed duration grows to ~1.3 intervals (the distance
  * stays the same, the speed threshold drops to match). At 30 fps nothing changes.
+ * A missing sample (one camera frame where the hand was not found) is fine: just skip
+ * it. Only a gap longer than the allowed duration breaks the motion.
  */
 export class SwipeDetector {
   constructor({
-    minDistance = 0.8,
+    minDistance = 0.55,
     maxDuration = 350,
-    minSpeed = 2.5,
+    minSpeed = 2.2,
     fastSteps = 2,
     restSpeed = 1.0,
     maxSlope = 0.6,
@@ -620,29 +693,42 @@ export class SwipeDetector {
     if (last && timeMs - last.t > Math.max(duration, interval * 2.5)) h.length = 0;
     // `first`: the hand just became eligible, so this sample may start a flick.
     h.push({ t: timeMs, x, y, first: h.length === 0 });
-    // Older samples cannot start a flick that is still running.
-    while (h.length > 1 && timeMs - h[0].t > duration) h.shift();
+    // Older samples cannot start a flick that is still running. Keep one sample from before
+    // the window though: it shows whether the hand was at rest when the window began (with
+    // sparse tracking the window holds only a sample or two).
+    while (h.length > 2 && timeMs - h[1].t > duration) h.shift();
     const n = h.length - 1;
     if (n < 1 || timeMs - this.lastSwipe < this.cooldown) return null;
 
-    const s = clamp(size || 1, 0.5, 1.6);
+    const s = clamp(Math.sqrt(size > 0 ? size : 1), 0.75, 1.3);
     const sign = Math.sign(h[n].x - h[n - 1].x);
     if (!sign) return null;
     const need = this.minDistance * s;
     const rest = this.restSpeed * s;
-    const fast = this.minSpeed * s * Math.min(1, this.maxDuration / duration);
-    const fastNeed = interval > 90 ? 1 : this.fastSteps;
+    // Sparse tracking (< ~11 samples/s) only sees speeds averaged over a whole sample
+    // interval: one step clearly faster than covering `need` in the allowed time is enough.
+    const sparse = interval > 90;
+    const fast = sparse ? Math.max(rest, (need / duration) * 1.2) : this.minSpeed * s;
+    const fastNeed = sparse ? 1 : this.fastSteps;
     // Walk back to where this movement started: the last sample where the hand was
-    // nearly still or moving the other way.
+    // nearly still or moving the other way. A flick slows down at the end, so a couple
+    // of slow steps are allowed before (i.e. after, in time) the moving part.
     let k = n;
     let run = 0;
     let bestRun = 0;
+    let moving = false;
+    let tail = 0;
     while (k > 0) {
       const a = h[k - 1];
       const b = h[k];
       const dx = (b.x - a.x) * sign;
+      if (dx <= 0) break;
       const v = dx / ((b.t - a.t) / 1000);
-      if (dx <= 0 || v < rest) break;
+      if (v < rest) {
+        if (moving || ++tail > 2) break;
+      } else {
+        moving = true;
+      }
       run = v >= fast ? run + 1 : 0;
       bestRun = Math.max(bestRun, run);
       k--;
@@ -650,6 +736,13 @@ export class SwipeDetector {
     // Still moving at the oldest sample we kept: the movement began too long ago
     // (unless the hand only just became eligible there).
     if (k === 0 && !h[0].first) return null;
+    // Count the ease-in too: up to two slow steps the same way right before the fast part
+    // (a real flick accelerates from rest), as long as it stays within the duration.
+    for (let extra = 0; extra < 2 && k > 0; extra++) {
+      const a = h[k - 1];
+      if ((h[k].x - a.x) * sign <= 0 || h[n].t - a.t > duration) break;
+      k--;
+    }
     const o = h[k];
     const dx = (h[n].x - o.x) * sign;
     if (dx < need || bestRun < fastNeed || h[n].t - o.t > duration) return null;

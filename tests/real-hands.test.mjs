@@ -3,7 +3,7 @@
 // drawn rotated and mirrored into a 640x480 frame. Raw normalised [x, y, z] per landmark.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { analyzeHand, classifyGesture, toHandSpace } from "../js/input/Gestures.js";
+import { PinchDetector, THRESHOLDS, analyzeHand, classifyGesture, toHandSpace } from "../js/input/Gestures.js";
 
 const ASPECT = 640 / 480;
 
@@ -93,6 +93,27 @@ for (const h of HANDS) {
     if (h.gesture === "open") assert.equal(info.fingers, 5);
   });
 }
+
+test("real fists end a pinch that closes into them (thumb rests on the curled index)", () => {
+  // (Only the fist photos: "thumb_up rot 180" is a thumbs-down, thumb far from the index.)
+  const fists = HANDS.filter((h) => h.src.startsWith("fist"));
+  assert.ok(fists.length >= 5);
+  for (const h of fists) {
+    const info = analyzeHand(toHandSpace(toPoints(h.lm), ASPECT));
+    // The tip distance alone would keep the pinch alive: it is below the exit line...
+    assert.ok(info.pinchDist < THRESHOLDS.pinchExit, `${h.src}: d ${info.pinchDist}`);
+    assert.equal(info.indexFolded, true, `${h.src}: index folded`);
+    // ...so the fold flag (as HandInput passes it) must release it within releaseFrames.
+    const p = new PinchDetector({ enterFrames: 2, releaseFrames: 2 });
+    assert.equal(p.update(0.1, true), false);
+    assert.equal(p.update(0.1, true), true, "pinching before the hand closes");
+    assert.equal(p.update(info.pinchDist, info.pinchAllowed, info.indexFolded), true, `${h.src}: one fist frame`);
+    assert.equal(p.update(info.pinchDist, info.pinchAllowed, info.indexFolded), false, `${h.src}: released`);
+    for (let i = 0; i < 5; i++) {
+      assert.equal(p.update(info.pinchDist, info.pinchAllowed, info.indexFolded), false, `${h.src}: a fist never re-pinches`);
+    }
+  }
+});
 
 test("real hands: mirroring the image flips MediaPipe's handedness label", () => {
   // MediaPipe labels hands assuming a mirrored (selfie) image, so the label depends on

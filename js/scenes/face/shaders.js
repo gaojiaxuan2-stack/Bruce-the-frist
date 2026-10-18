@@ -6,6 +6,7 @@
 //   exploded  = gathered + burst velocity + curl drift  (uBurstT, open palm / intro)
 //   final     = mix(exploded, home, reform)             (uReform, re-assembly)
 import { GLSL } from '../../core/glsl.js';
+import { MONO_FRACTION } from './portrait.js';
 
 export const vertexShader = /* glsl */ `
 ${GLSL.simplex3}
@@ -25,6 +26,7 @@ uniform float uSize;         // user size multiplier
 uniform float uExposure;
 uniform vec3 uMode;          // blend weights: photo, mono, neon
 uniform vec3 uCamLocal;      // camera position in the head's local space
+uniform vec3 uCamFront;      // the same, as if the head faced the camera (no rotation)
 uniform float uLife;         // idle motion amount
 
 uniform sampler2D uTouch;
@@ -187,16 +189,17 @@ void main() {
   vec3 photo = srgbToLinear(aColor) * clamp(mix(1.0, (lumC + 0.03) / (lum + 0.03), 0.65), 0.45, 1.8);
   float sPhoto = mix(0.82, 1.22, lum);
 
-  // Mono: a coarse halftone (1 particle in 9), white dots sized by brightness.
-  float m = smoothstep(0.08, 0.95, lumC);
-  float keep = step(rnd2, 0.1111);
+  // Mono: a coarse halftone (1 particle in 4), white dots sized by brightness.
+  // Bright areas get big dots that merge into a textured surface (the REF look).
+  float m = pow(smoothstep(0.08, 0.95, lumC), 1.25);
+  float keep = 1.0 - step(${MONO_FRACTION.toFixed(5)}, rnd2);
   vec3 cMono = vec3(1.0);
-  float sMono = (0.12 + 0.95 * m) * 1.75 * keep;
+  float sMono = (0.2 + 1.3 * m) * 1.6 * keep;
 
   vec3 neon = mix(uNeonFar, uNeonMid, smoothstep(0.05, 0.45, depth01));
   neon = mix(neon, uNeonNear, smoothstep(0.5, 0.95, depth01));
   float scanPos = 1.15 - fract(uTime * 0.11) * 1.4;
-  float scan = smoothstep(0.03, 0.0, abs(uv.y - scanPos));
+  float scan = 1.0 - smoothstep(0.0, 0.03, abs(uv.y - scanPos));
   // Kept well below clipping so the eyes, brows and mouth stay darker dots.
   vec3 cNeon = neon * (0.03 + 0.9 * pow(lumC, 1.5)) * (1.0 + 1.2 * scan) * (1.0 + 0.7 * (1.0 - edge));
   float sNeon = 1.0 + 0.35 * lumC;
@@ -204,8 +207,9 @@ void main() {
   vec3 col = photo * uMode.x + cMono * uMode.y + cNeon * uMode.z;
   float size = sPhoto * uMode.x + sMono * uMode.y + sNeon * uMode.z;
   float alpha = uExposure * aExtra.z;
-  // Mono: fade dark dots away entirely (the REF look: dots only where it is bright).
-  alpha *= mix(1.0, smoothstep(0.03, 0.14, lumC), uMode.y);
+  // Mono: the darkest dots fade to faint specks (light makes the picture);
+  // the cheeks and shadows keep fine dots, deep shadows do not become holes.
+  alpha *= mix(1.0, mix(0.3, 1.0, smoothstep(0.02, 0.10, lumC)), uMode.y);
 
   // Clean silhouette: smaller, dimmer dots near the edge.
   size *= mix(0.5, 1.0, edge);
@@ -213,16 +217,27 @@ void main() {
 
   // Even brightness when the head turns. Each particle stands for the same
   // patch of the photo plane; seen from the view direction that patch covers
-  // |n . v| = |v.z - slope . v.xy| of its front-on screen area, so the on-screen
-  // density grows by 1 / proj and the alpha has to shrink by proj.
+  // |n . v| = |v.z - slope . v.xy| of its screen area, so the on-screen density
+  // grows by 1 / proj and the alpha has to shrink by proj. It is measured
+  // against the front view, so facing the camera the photo is reproduced
+  // exactly. Grazing dots (proj -> 0) fade out instead of piling up into bright
+  // lines, and once the head is turned the dots on depth cliffs (jaw over the
+  // neck, the outline) fade too: they would form a fake curtain.
+  vec2 slopeW = aSlope * uDepthWorld;
   vec3 view = normalize(uCamLocal - home);
-  float proj = abs(view.z - dot(aSlope * uDepthWorld, view.xy));
-  alpha *= mix(1.0, clamp(proj, 0.2, 1.2), rf);
+  vec3 viewF = normalize(uCamFront - home);
+  float proj = abs(view.z - dot(slopeW, view.xy));
+  float projF = max(abs(viewF.z - dot(slopeW, viewF.xy)), 0.08);
+  float ratio = proj / projF;
+  float turned = smoothstep(0.015, 0.2, 1.0 - dot(view, viewF));
+  float cliff = 1.0 - smoothstep(3.0, 9.0, length(slopeW));
+  float shade = min(ratio, 1.2) * smoothstep(0.03, 0.3, ratio) * mix(1.0, 0.15 + 0.85 * cliff, turned);
+  alpha *= mix(1.0, shade, rf * (1.0 - ge)); // not for dots flying in the fist ball
 
   // Shimmer, plus a rare glint here and there.
   alpha *= 1.0 - 0.18 * uLife * (0.5 + 0.5 * sin(uTime * (2.0 + 3.0 * rnd) + rnd2 * 50.0));
   float glintPhase = fract(uTime * (0.04 + 0.03 * rnd2) + rnd * 13.7);
-  float glint = smoothstep(0.0025, 0.0, abs(glintPhase - 0.5)) * uLife;
+  float glint = (1.0 - smoothstep(0.0, 0.0025, abs(glintPhase - 0.5))) * uLife;
   col *= 1.0 + glint * 1.5;
   size *= 1.0 + glint * 0.35;
 
@@ -241,6 +256,11 @@ void main() {
   size *= mix(1.0, 0.85, dust);
   alpha *= mix(1.0, 0.6 + 0.5 * h3.z, dust);
   vGlow = clamp(uMode.z + dust * 0.6 + ballness * 0.5, 0.0, 1.0);
+
+  // The size slider changes the dot size, not the exposure: the dots overlap
+  // (additive), so the light per dot shrinks with its area. Mono dots overlap
+  // less, so they keep a little more.
+  col *= 1.0 / clamp(pow(uSize, mix(2.0, 1.4, uMode.y)), 0.3, 4.0);
 
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
   gl_Position = projectionMatrix * mv;

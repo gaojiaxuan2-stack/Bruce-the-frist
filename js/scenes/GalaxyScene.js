@@ -7,6 +7,7 @@
 //   hand near/far, wheel, two hands -> zoom
 // All star motion runs in the vertex shader (js/scenes/galaxy/shaders.js).
 import * as THREE from 'three';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { BaseScene } from '../core/BaseScene.js';
 import { buildGalaxyGeometry, buildDustGeometry, buildBackgroundGeometry } from './galaxy/build.js';
 import * as S from './galaxy/shaders.js';
@@ -23,10 +24,14 @@ const BANG_TIME = 2.7;
 const REFORM_TIME = 2.0;
 const COLLAPSE_TIME = 1.3;
 const RELEASE_GRACE = 0.9;
-const IDLE_AFTER = 2.5;
-const ZOOM_RESET_AFTER = 9; // seconds without any input before a wheel / hand zoom eases back
+const IDLE_AFTER = 2.5;     // seconds without input before the slow idle spin + bob
+const VIEW_RESET_AFTER = 30; // seconds without any input before a user's tilt / zoom eases back
 const POINT_HOLD = 0.35;    // a ☝️ well survives this long through a blurry 'none' pose
 const CORE_WHITE = new THREE.Color(1, 0.93, 0.85);
+// Filmic tone mapping (this scene only, restored on exit): a dense core of saturated
+// stars plus its bloom rolls off to white-hot instead of clipping into a flat orange plateau.
+const TONE_MAPPING = THREE.ACESFilmicToneMapping;
+const TONE_EXPOSURE = 1.1;
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const damp = (x, target, k, dt) => x + (target - x) * (1 - Math.exp(-k * dt));
@@ -145,7 +150,11 @@ export default class GalaxyScene extends BaseScene {
 
     // ---- glowing core, gravity-well marker, Big Bang shock wave
     const quad = new THREE.PlaneGeometry(1, 1);
-    this.core = this.makeBillboard(quad, S.coreFragment, { uColor: { value: new THREE.Color() }, uIntensity: { value: 0.5 } });
+    this.core = this.makeBillboard(quad, S.coreFragment, {
+      uColor: { value: new THREE.Color() },
+      uIntensity: { value: 0.5 },
+      uNucleus: { value: 0 },
+    });
     this.core.renderOrder = 1;
     this.wellMarker = this.makeBillboard(quad.clone(), S.wellFragment, {
       uColor: { value: new THREE.Color(1, 0.85, 0.7) },
@@ -191,6 +200,10 @@ export default class GalaxyScene extends BaseScene {
     this.shock.renderOrder = 2;
     this.scene.add(this.shock);
 
+    // ---- highlight roll-off before bloom: a dense core turns white-hot instead of clipping flat
+    this.highlightPass = new ShaderPass(S.highlightShader);
+    this.passes.push(this.highlightPass);
+
     // ---- state
     this.morph = 1;
     this.collapse = 0;
@@ -203,12 +216,15 @@ export default class GalaxyScene extends BaseScene {
     this.flash = 0;
     this.shake = 0;
     this.wellStrength = 0;
+    this.wellEdge = 1;
     this.wellPos = new THREE.Vector3();
     this.wellHit = new THREE.Vector3();
     this.raycaster = new THREE.Raycaster();
     this.yaw = 0.35;
     this.pitchIdle = PITCH_IDLE;
     this.pitch = PITCH_IDLE;
+    this.pitchHome = PITCH_IDLE; // idle bob centre: the user's last tilt, back to pitchIdle after a long rest
+    this.userView = false;       // the user tilted or zoomed on purpose
     this.yawVel = 0;
     this.pitchVel = 0;
     this.zoom = 1;
@@ -382,6 +398,10 @@ export default class GalaxyScene extends BaseScene {
   // ------------------------------------------------------------------ lifecycle
 
   enter() {
+    const r = this.app.renderer;
+    if (!this.savedTone) this.savedTone = { mapping: r.toneMapping, exposure: r.toneMappingExposure };
+    r.toneMapping = TONE_MAPPING;
+    r.toneMappingExposure = TONE_EXPOSURE;
     this.yawVel = this.pitchVel = 0;
     if (!this.entered) {
       // first visit: the galaxy unfurls out of its core
@@ -393,6 +413,17 @@ export default class GalaxyScene extends BaseScene {
     }
   }
 
+  exit() {
+    this.restoreTone();
+  }
+
+  restoreTone() {
+    if (!this.savedTone) return;
+    this.app.renderer.toneMapping = this.savedTone.mapping;
+    this.app.renderer.toneMappingExposure = this.savedTone.exposure;
+    this.savedTone = null;
+  }
+
   resize(width, height) {
     super.resize(width, height);
     const tanH = Math.tan((this.camera.fov * DEG) / 2);
@@ -401,6 +432,7 @@ export default class GalaxyScene extends BaseScene {
     // portrait screens get a more face-on view so the galaxy uses the height too
     this.baseDist = Math.max(10, (aspect < 1 ? 5.8 : 6.2) / (tanH * aspect), 3.9 / tanH);
     this.pitchIdle = aspect < 1 ? 58 * DEG : PITCH_IDLE;
+    if (!this.userView) this.pitchHome = this.pitchIdle;
   }
 
   update(dt, time, input) {
@@ -409,8 +441,10 @@ export default class GalaxyScene extends BaseScene {
     const ui = input.uiCaptured;
     const active = input.active;
 
-    // ---- ✌️ new galaxy
-    if (input.events.has('victorystart') && !ui) this.newGalaxy();
+    // ---- ✌️ new galaxy (not while a fist is held / being released: a hand that
+    // opens slowly from ✊ to ✋ passes through ☝️ and ✌️ on the way)
+    const bangStarting = this.bang >= 0 && this.bang < 0.15;
+    if (input.events.has('victorystart') && !ui && this.collapse === 0 && !bangStarting) this.newGalaxy();
     if (this.morph < 1) {
       this.morph = Math.min(1, this.morph + dt / MORPH_TIME);
       u.uMorph.value = this.morph;
@@ -440,6 +474,11 @@ export default class GalaxyScene extends BaseScene {
       this.pitch = clamp(this.pitch, PITCH_MIN, PITCH_MAX);
       this.pitchVel = 0;
     }
+    // a tilt the user made becomes the new resting view (idle only bobs around it)
+    if (dragging || Math.abs(this.pitchVel) > 0.01) {
+      this.pitchHome = this.pitch;
+      this.userView = true;
+    }
 
     // ---- ☝️ gravity well at the fingertip's projection onto the galactic plane
     this.updateWell(dt, input);
@@ -449,9 +488,19 @@ export default class GalaxyScene extends BaseScene {
     this.idleTime = active || zooming ? 0 : this.idleTime + dt;
     const idle = this.idleTime > IDLE_AFTER;
     if (!dragging) this.yaw += dt * (idle ? 0.04 : 0.015);
-    if (idle) this.pitch = damp(this.pitch, this.pitchIdle + 0.07 * Math.sin(time * 0.17), 0.45, dt);
-    if (this.idleTime > ZOOM_RESET_AFTER) this.zoomTarget = damp(this.zoomTarget, 1, 0.3, dt);
-    if (zooming) this.zoomTarget = clamp(this.zoomTarget * Math.exp(-input.zoom * 1.1), 0.4, 2.4);
+    if (this.idleTime > VIEW_RESET_AFTER && this.userView) {
+      // nobody around for a long time: ease back to the default view
+      this.pitchHome = damp(this.pitchHome, this.pitchIdle, 0.35, dt);
+      this.zoomTarget = damp(this.zoomTarget, 1, 0.35, dt);
+      if (Math.abs(this.pitchHome - this.pitchIdle) < 0.002 && Math.abs(this.zoomTarget - 1) < 0.002) {
+        this.userView = false;
+      }
+    }
+    if (idle) this.pitch = damp(this.pitch, this.pitchHome + 0.07 * Math.sin(time * 0.17), 0.45, dt);
+    if (zooming) {
+      this.zoomTarget = clamp(this.zoomTarget * Math.exp(-input.zoom * 1.1), 0.4, 2.4);
+      this.userView = true;
+    }
     this.zoom = damp(this.zoom, this.zoomTarget, 8, dt);
     const depthTarget = input.source === 'hand' && active ? clamp(1 - (input.depth - 0.5) * 1.1, 0.5, 1.6) : 1;
     this.depthZoom = damp(this.depthZoom, depthTarget, 2.2, dt);
@@ -472,6 +521,7 @@ export default class GalaxyScene extends BaseScene {
   updateWell(dt, input) {
     const p = this.params;
     let target = 0;
+    let edge = this.wellEdge;
     // ☝️ point (or the mouse pointer) = gravity well. Only a pose that was just
     // 'point' may blur into 'none' for a moment without dropping the well.
     const g = input.gesture;
@@ -489,10 +539,14 @@ export default class GalaxyScene extends BaseScene {
         if (t > 0) {
           this.wellHit.copy(ray.origin).addScaledVector(ray.direction, t);
           this.wellHit.y = 0;
-          const lim = p.radius * 1.3;
+          // Keep the well on the disk: a fingertip over empty sky pulls on the nearest
+          // rim (the clamp point lies on the screen line from the core to the finger).
+          // The marker fades there, so no swirl decal floats alone in black space.
+          const R = p.radius;
           const len = Math.hypot(this.wellHit.x, this.wellHit.z);
-          if (len > lim) this.wellHit.multiplyScalar(lim / len);
-          target = power * smoothstep(0.03, 0.2, Math.abs(dy));
+          if (len > 0.95 * R) this.wellHit.multiplyScalar((0.95 * R) / len);
+          edge = 1 - smoothstep(0.85 * R, 1.15 * R, len);
+          target = power * smoothstep(0.03, 0.2, Math.abs(dy)) * (1 - 0.45 * smoothstep(1.0 * R, 2.2 * R, len));
         }
       }
     }
@@ -500,6 +554,7 @@ export default class GalaxyScene extends BaseScene {
       if (this.wellStrength < 0.03) this.wellPos.copy(this.wellHit);
       else this.wellPos.lerp(this.wellHit, 1 - Math.exp(-11 * dt));
     }
+    this.wellEdge = damp(this.wellEdge, edge, 6, dt);
     this.wellStrength = damp(this.wellStrength, target, target > this.wellStrength ? 2.4 : 3.5, dt);
     if (this.wellStrength < 1e-3 && target === 0) this.wellStrength = 0;
     this.u.uWell.value.copy(this.wellPos);
@@ -536,23 +591,28 @@ export default class GalaxyScene extends BaseScene {
     cu.uColor.value.copy(this.coreColor);
     // the glow is a soft halo seen from afar: it fades out as the camera flies into the core
     const near = smoothstep(2.0, 8.0, this.camDist);
-    cu.uIntensity.value = (0.11 + 0.5 * this.collapse + 0.4 * bangGlow + 0.75 * this.flash) * pulse * near;
+    // a small Size makes the stars fainter: the resting glow follows so the core stays in balance
+    const sizeLight = 0.4 + 0.6 * Math.min(p.size, 1);
+    cu.uIntensity.value = (0.11 * sizeLight + 0.5 * this.collapse + 0.4 * bangGlow + 0.75 * this.flash) * pulse * near;
     cu.uScale.value = p.radius * (0.75 - 0.25 * this.collapse + 0.7 * this.flash);
-    this.core.visible = cu.uIntensity.value > 0.002;
+    // the hot nucleus belongs to the settled galaxy (the collapsed knot has its own heat)
+    const settled = (1 - this.collapse) * (this.bang >= 0 ? smoothstep(0.4, 1, this.bang) : 1);
+    cu.uNucleus.value = 0.32 * sizeLight * settled * near * (1 - 0.6 * this.wellStrength * this.wellNearCore());
+    this.core.visible = cu.uIntensity.value + cu.uNucleus.value > 0.002;
 
     // gravity-well marker
     const wu = this.wellMarker.material.uniforms;
     this.wellMarker.position.copy(this.wellPos);
     this.wellMarker.visible = this.wellStrength > 0.002;
     // marker + swirl are a hint seen from afar; close up they would cover the screen
-    wu.uIntensity.value = this.wellStrength * 0.8 * (0.15 + 0.85 * near);
+    wu.uIntensity.value = this.wellStrength * this.wellEdge * 0.8 * (0.15 + 0.85 * near);
     wu.uScale.value = this.u.uWellRadius.value * 2.2;
     wu.uColor.value.copy(this.coreColor);
     this.wellRing.position.copy(this.wellPos);
     this.wellRing.position.y -= this.u.uWellRadius.value * 0.25 * this.wellStrength;
     this.wellRing.visible = this.wellMarker.visible;
     this.wellRing.scale.setScalar(this.u.uWellRadius.value * 2.4);
-    this.wellRing.material.uniforms.uIntensity.value = this.wellStrength * 0.28 * near * near;
+    this.wellRing.material.uniforms.uIntensity.value = this.wellStrength * this.wellEdge * 0.18 * near * near;
 
     // Big Bang shock wave on the galactic plane
     if (this.shockT >= 0) {
@@ -586,10 +646,18 @@ export default class GalaxyScene extends BaseScene {
     folder.add(p, 'rotationSpeed', 0, 1, 0.01).name('Rotation speed');
   }
 
+  /** 1 when the gravity well sits on the core (it then pulls the nucleus apart). */
+  wellNearCore() {
+    const d = Math.hypot(this.wellPos.x, this.wellPos.z);
+    return 1 - smoothstep(0.05, 0.25, d / Math.max(this.params.radius, 0.1));
+  }
+
   dispose() {
     this.disposed = true;
     clearTimeout(this.regenTimer);
     window.removeEventListener('dblclick', this.onDblClick);
+    this.restoreTone();
+    this.highlightPass.dispose();
     super.dispose();
   }
 }

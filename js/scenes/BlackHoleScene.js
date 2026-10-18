@@ -17,8 +17,8 @@ import {
   jetVertex,
   billboardVertex,
   ringFragment,
-  sinkFragment,
 } from './blackhole/shaders.js';
+import { ShadowPasses } from './blackhole/ShadowPasses.js';
 
 const RS = 1; // event-horizon radius (world units)
 const R_IN = 2.6; // inner edge of the disk
@@ -33,15 +33,27 @@ const HAND_MIN_INCL = 2 * DEG;
 const HAND_MAX_INCL = 60 * DEG;
 const MIN_INCL = -40 * DEG;
 const MAX_INCL = 82 * DEG;
+// Palm height (NDC) for the highest and the lowest view. The top stays well below
+// the tab bar, so looking down on the disk never parks the hand cursor on a tab.
+const PALM_TOP = 0.45;
+const PALM_BOTTOM = -0.6;
 
+// hot inner edge -> mid -> outer -> rim. gain evens out how bright the palettes
+// look (saturated blue and red carry much less light than gold).
 const PALETTES = [
-  { name: 'Interstellar gold', colors: ['#e4eeff', '#ffd27a', '#ff8426', '#5c0c03'] },
-  { name: 'Blue-white', colors: ['#ffffff', '#9cd0ff', '#2f6bff', '#071c5e'] },
-  { name: 'Crimson', colors: ['#fff1d8', '#ff3a1c', '#c4001c', '#4a0008'] },
+  { name: 'Interstellar gold', colors: ['#e4eeff', '#ffd27a', '#ff8426', '#5c0c03'], gain: 1 },
+  { name: 'Blue-white', colors: ['#eef6ff', '#b0d8ff', '#68a6ff', '#3060e0'], gain: 1.25 },
+  { name: 'Crimson', colors: ['#fff1d8', '#ff3a1c', '#c4001c', '#4a0008'], gain: 1.1 },
 ];
 
 const damp = (k, dt) => 1 - Math.exp(-k * dt);
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+/** Palm height -> camera height above the disk (centre = the idle, near edge-on view). */
+function inclFromPalm(y) {
+  if (y >= 0) return IDLE_INCL + Math.min(y / PALM_TOP, 1) * (HAND_MAX_INCL - IDLE_INCL);
+  return IDLE_INCL - Math.min(y / PALM_BOTTOM, 1) * (IDLE_INCL - HAND_MIN_INCL);
+}
 
 function gauss() {
   const u = 1 - Math.random();
@@ -86,6 +98,7 @@ export default class BlackHoleScene extends BaseScene {
     // ---------------------------------------------------------- shared uniforms
     const pal = PALETTES[0].colors.map((c) => new THREE.Color(c));
     this.paletteTarget = pal.map((c) => c.clone());
+    this.paletteGain = PALETTES[0].gain;
     this.u = {
       ...this.app.sharedUniforms,
       uClock: { value: 0 },
@@ -105,6 +118,7 @@ export default class BlackHoleScene extends BaseScene {
       uStreams: { value: 0.5 },
       uBeam: { value: 1 },
       uShock: { value: new THREE.Vector4(0, 0, 1, 0) },
+      uShockDust: { value: new THREE.Vector4(0, 0, 1, 0) },
       uCol0: { value: pal[0] },
       uCol1: { value: pal[1] },
       uCol2: { value: pal[2] },
@@ -115,9 +129,6 @@ export default class BlackHoleScene extends BaseScene {
       uJetClock: { value: 0 },
       uRingBright: { value: 1 },
       uBeamDir: { value: new THREE.Vector2(1, 0) },
-      uSink: { value: 0 },
-      uBloomTex: { value: null },
-      uScreen: { value: new THREE.Vector2(1, 1) },
     };
 
     const additive = (vertexShader, fragmentShader, defines = {}) =>
@@ -175,18 +186,16 @@ export default class BlackHoleScene extends BaseScene {
     this.jets.visible = false;
     this.scene.add(this.jets);
 
-    // ---------------------------------------------------------- photon ring + light sink
-    // Billboards in world units (vP = local xy), big enough for the grown shadow.
-    const quad = new THREE.PlaneGeometry(10, 10);
-    this.ring = new THREE.Mesh(quad, additive(billboardVertex, ringFragment));
+    // ---------------------------------------------------------- photon ring
+    // Billboard in world units (vP = local xy), big enough for the grown shadow.
+    this.ring = new THREE.Mesh(new THREE.PlaneGeometry(10, 10), additive(billboardVertex, ringFragment));
     this.ring.material.depthTest = false;
     this.ring.renderOrder = 5;
     this.scene.add(this.ring);
 
-    this.sink = new THREE.Mesh(quad.clone(), additive(billboardVertex, sinkFragment));
-    this.sink.material.depthTest = false;
-    this.sink.renderOrder = 6;
-    this.scene.add(this.sink);
+    // ---------------------------------------------------------- pure black shadow under the bloom
+    this.shadowFx = new ShadowPasses(this.camera, this.u);
+    this.passes = [this.shadowFx.copyPass];
 
     // ---------------------------------------------------------- state
     this.cam = {
@@ -205,8 +214,9 @@ export default class BlackHoleScene extends BaseScene {
       az: 0,
       incl: IDLE_INCL,
       dist: BASE_DIST,
-      wasActive: false,
-      wasPinching: false,
+      paused: true, // not following the hand (absent, pinch-dragging, on the UI, changing shape)
+      keepIncl: false, // when following resumes, keep the current height (after a drag / the UI)
+      settle: 0,
     };
     this.fit = 1;
     // Fewer particles at lower quality: make each one a bit bigger and brighter.
@@ -325,15 +335,36 @@ export default class BlackHoleScene extends BaseScene {
   // ---------------------------------------------------------------- lifecycle
 
   enter() {
-    this.cam.wasActive = false;
-    this.cam.wasPinching = false;
+    this.cam.paused = true;
+    this.cam.keepIncl = false;
+    this.cam.settle = 0;
+  }
+
+  exit() {
+    // Forget a feed in progress: coming back later with an open hand must not
+    // fire a release flash.
+    this.charge = 0;
+    this.sinceFist = 99;
+    this.feed = 0;
+    this.shock = null;
+    this.flash = 0;
+    this.jetBurst = 0;
+    this.mass = 1;
+    this.shadowFx.detach(this.app.composer);
+  }
+
+  dispose() {
+    this.shadowFx.detach(this.app.composer);
+    this.shadowFx.dispose();
+    super.dispose();
   }
 
   resize(width, height) {
     super.resize(width, height);
     const aspect = width / Math.max(height, 1);
-    // pull back a little on tall (phone) screens; the outer disk may overflow the sides
-    this.fit = aspect < 1.25 ? clamp(0.85 / aspect, 1, 1.75) : 1;
+    // Pull back a little on tall (phone) screens, but keep the shadow and photon
+    // ring big (about 30% of the width); the outer disk may overflow the sides.
+    this.fit = aspect < 1.25 ? clamp(0.6 / aspect, 1, 1.3) : 1;
   }
 
   setPalette(name, announce = false) {
@@ -369,24 +400,40 @@ export default class BlackHoleScene extends BaseScene {
     const fist = active && input.fist && !ui;
 
     // ------------------------------------------------ camera: hand orbit
-    // Horizontal hand position -> azimuth, vertical -> how high above the disk.
-    const handAz = clamp(input.pointer.x, -1, 1) * 1.3;
-    const py = clamp(input.pointer.y, -1, 1);
-    const handIncl = py >= 0
-      ? IDLE_INCL + py * (HAND_MAX_INCL - IDLE_INCL)
-      : IDLE_INCL + py * (IDLE_INCL - HAND_MIN_INCL);
+    // The PALM steers (wrist + knuckles), not the fingertip: it stays put when the
+    // fingers curl into a fist or open again (mouse: palm = cursor).
+    // Horizontal -> azimuth, vertical -> how high above the disk.
+    const handAz = clamp(input.palm.x, -1, 1) * 1.3;
+    const handIncl = inclFromPalm(clamp(input.palm.y, -1, 1));
 
-    const following = active && !ui && !pinching;
-    if (following && (!c.wasActive || c.wasPinching)) {
-      // Hand just appeared or a pinch just ended: re-anchor the azimuth so the
-      // view does not swing around. Height stays absolute (hand up = look from
-      // above), except right after a pinch-drag, which keeps the angle it set.
+    // A hand changing shape jitters a little: hold the view for a moment, then
+    // carry on from where it is.
+    const ev = input.events;
+    if (ev.has('fiststart') || ev.has('fistend') || ev.has('openstart')) c.settle = 0.3;
+    c.settle = Math.max(0, c.settle - dt);
+    // The hand cursor just hovering the UI does not stop the orbit (a pinch there
+    // = clicking / dragging a control does). A mouse over the UI is using the UI.
+    const uiBusy = ui && (input.source !== 'hand' || input.pinching);
+    const following = active && !pinching && !uiBusy && c.settle <= 0;
+    if (!active) {
+      c.paused = true;
+      c.keepIncl = false;
+    } else if (!following) {
+      c.paused = true;
+      if (pinching || uiBusy) c.keepIncl = true;
+    }
+    if (following && c.paused) {
+      // (Re)starting to follow: re-anchor the azimuth so the view does not swing.
+      // The height is absolute (hand up = look from above), except after a
+      // pinch-drag or the UI, which keep the angle they left.
       c.spinAz += c.handAz - handAz;
       c.handAz = c.handAzTarget = handAz;
-      if (c.wasPinching) {
+      if (c.keepIncl) {
         c.dragIncl += c.handIncl - handIncl;
         c.handIncl = c.handInclTarget = handIncl;
       }
+      c.paused = false;
+      c.keepIncl = false;
     }
     if (following) {
       c.handAzTarget = handAz;
@@ -394,8 +441,6 @@ export default class BlackHoleScene extends BaseScene {
     } else if (!active) {
       c.handInclTarget = IDLE_INCL;
     }
-    c.wasActive = active;
-    c.wasPinching = pinching;
 
     c.handAz += (c.handAzTarget - c.handAz) * damp(3, dt);
     c.handIncl += (c.handInclTarget - c.handIncl) * damp(2.5, dt);
@@ -456,19 +501,32 @@ export default class BlackHoleScene extends BaseScene {
     const massTarget = 1 + 0.16 * this.feed + 0.06 * this.charge;
     this.mass += (massTarget - this.mass) * damp(1.5, dt);
 
+    // Release shock: a thick white-hot front sweeps the disk in ~1.6 s (still
+    // rolling after the flash has faded), the blast carries on through the dust.
     const shock = this.u.uShock.value;
+    const shockDust = this.u.uShockDust.value;
     if (this.shock) {
       const s = this.shock;
       s.t += dt;
-      const k = Math.min(s.t / 2.6, 1);
-      shock.set(R_IN + 40 * (1 - Math.pow(1 - k, 2.2)), s.power * Math.pow(1 - k, 1.6), 0.7 + s.t * 1.6, 0);
-      if (k >= 1) this.shock = null;
+      const kd = Math.min(s.t / 1.6, 1);
+      shock.set(R_IN + (R_OUT + 6 - R_IN) * (1 - Math.pow(1 - kd, 1.6)), s.power * Math.pow(1 - kd, 1.3), 0.6 + 0.5 * kd, 0);
+      const ku = Math.min(s.t / 2.8, 1);
+      shockDust.set(R_IN + 42 * (1 - Math.pow(1 - ku, 2)), s.power * Math.pow(1 - ku, 1.6), 1.4 + 3 * s.t, 0);
+      if (ku >= 1) this.shock = null;
     } else {
       shock.set(0, 0, 1, 0);
+      shockDust.set(0, 0, 1, 0);
     }
 
     this.updateCamera(dt);
     this.updateUniforms(dt);
+
+    // Shadow passes: only needed while the bloom is on. The mask has to run
+    // after the bloom; the App rebuilds its pass list on scene / glow changes,
+    // so (re)attach it every frame (no-op when already there).
+    const bloom = this.app.bloomPass;
+    this.shadowFx.enabled = !!bloom?.enabled;
+    this.shadowFx.attach(this.app.composer, bloom);
   }
 
   release(power) {
@@ -509,7 +567,7 @@ export default class BlackHoleScene extends BaseScene {
     u.uFeed.value = this.feed;
     u.uFlash.value = this.flash;
     u.uSize.value = 7 * s.size * this.sizeComp;
-    u.uBright.value = s.brightness * this.brightComp;
+    u.uBright.value = s.brightness * this.brightComp * this.paletteGain;
     u.uDust.value = 0.075 * this.brightComp;
     u.uRs.value = RS * this.mass;
     u.uRing.value = RING * this.mass;
@@ -532,27 +590,14 @@ export default class BlackHoleScene extends BaseScene {
     // Palette cross-fade.
     const k = damp(4, dt);
     [u.uCol0, u.uCol1, u.uCol2, u.uCol3].forEach((uc, i) => uc.value.lerp(this.paletteTarget[i], k));
+    this.paletteGain += (PALETTES[this.paletteIndex].gain - this.paletteGain) * k;
 
-    // Light sink: cancel last frame's bloom inside the shadow so it stays pure black.
-    const bloom = this.app.bloomPass;
-    const bloomTex = bloom?.renderTargetsHorizontal?.[0]?.texture;
-    const target = this.app.composer?.renderTarget1;
-    if (bloom && bloom.enabled && bloomTex && target) {
-      u.uBloomTex.value = bloomTex;
-      u.uScreen.value.set(target.width, target.height);
-      // Last frame's glow is one frame old: when the scene is getting brighter
-      // (feeding, flash, shock) scale it up by how much brighter it got.
-      const level = (1 + 0.8 * this.feed) * (1 + 1.2 * this.flash) * (1 + 0.8 * u.uShock.value.y) * s.brightness;
-      u.uSink.value = clamp(level / (this.prevLevel || level), 1, 3);
-      this.prevLevel = level;
-    } else {
-      u.uSink.value = 0;
-    }
-    this.sink.visible = u.uSink.value > 0;
-
-    // Billboards (photon ring, sink) face the camera; horizon grows with the mass.
-    for (const m of [this.ring, this.sink, this.shadow]) m.quaternion.copy(cam.quaternion);
+    // Billboards (photon ring, shadow disc) face the camera; horizon grows with the mass.
+    for (const m of [this.ring, this.shadow]) m.quaternion.copy(cam.quaternion);
     this.shadow.scale.setScalar(RING * this.mass * 0.985);
     this.horizon.scale.setScalar(this.mass);
+    // On-screen radius of the shadow (it sits at the centre of the screen).
+    const depth = Math.max(-u.uHoleView.value.z, 1);
+    this.shadowFx.radiusNdc = (RING * this.mass) / (depth * Math.tan((cam.fov * DEG) / 2));
   }
 }

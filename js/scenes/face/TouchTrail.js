@@ -11,6 +11,10 @@ import * as THREE from 'three';
 
 const MAX_POINTS = 160;
 const SPRITE_SIZE = 64;
+/** Below this pointer speed (portrait heights / s) nothing is stamped: a resting finger, tracking jitter, the head swaying under a still pointer. */
+const MIN_SPEED = 0.04;
+/** The resting-finger mark fades this long (s) after the last real stroke. */
+const HOVER_HOLD = 0.8;
 
 const easeOutSine = (t) => Math.sin((t * Math.PI) / 2);
 const easeOutQuad = (t) => t * (2 - t);
@@ -58,9 +62,14 @@ export class TouchTrail {
     this.head = 0;
     this.count = 0;
     this.hasLast = false;
-    this.lastU = 0;
+    this.lastU = 0; // last stamp (new stamps every `spacing` of travel)
     this.lastV = 0;
-    /** Soft dent under a finger that is held still (eased presence 0..1). */
+    this.prevU = 0; // pointer last frame (for its speed)
+    this.prevV = 0;
+    this.speed = 0;
+    this.onHead = false;
+    this.sinceStroke = Infinity;
+    /** Small soft mark under the fingertip right after a stroke (eased presence 0..1). */
     this.hover = 0;
     this.hoverTarget = 0;
     this.hoverU = 0;
@@ -74,31 +83,45 @@ export class TouchTrail {
   }
 
   /**
-   * Pointer is at (u, v) (v up). `onHead` = it really touches the person, so a
-   * resting finger leaves a soft dent; off the head it only extends the trail.
+   * Pointer is at (u, v) (v up). `onHead` = it really touches the person (a
+   * small mark follows the fingertip right after a stroke); off the head it
+   * only extends the trail.
    */
   move(u, v, dt, onHead = true) {
-    this.hoverTarget = onHead ? 1 : 0;
+    this.onHead = onHead;
     if (onHead) {
       this.hoverU = u;
       this.hoverV = v;
     }
-    const hadLast = this.hasLast;
+    const aspect = this.width / this.height; // isotropic distances
+    if (!this.hasLast) {
+      this.hasLast = true;
+      this.lastU = this.prevU = u;
+      this.lastV = this.prevV = v;
+      this.speed = 0;
+      return;
+    }
+    // Pointer speed in portrait heights per second, smoothed against jitter.
+    const step = Math.hypot((u - this.prevU) * aspect, v - this.prevV);
+    this.prevU = u;
+    this.prevV = v;
+    this.speed += (step / Math.max(dt, 1 / 240) - this.speed) * (1 - Math.exp(-15 * dt));
+
+    // Stamps are laid along the path every `spacing` of travel (not every
+    // frame), so a resting or slowly drifting finger does not pile them up
+    // into a crater, and the trail looks the same at any frame rate.
     const lu = this.lastU;
     const lv = this.lastV;
-    this.hasLast = true;
+    const dist = Math.hypot((u - lu) * aspect, v - lv);
+    const spacing = this.radius * 0.2;
+    if (dist < spacing) return;
     this.lastU = u;
     this.lastV = v;
-    if (!hadLast) return;
-    const du = (u - lu) * (this.width / this.height); // isotropic distance
-    const dv = v - lv;
-    const dist = Math.hypot(du, dv);
-    if (dist < 1e-4) return;
-    const speed = dist / Math.max(dt, 1 / 240);
-    const force = Math.min(1, 0.25 + speed * 0.9);
-    // Fill fast moves with several stamps so the trail is continuous. The stamp
-    // nearest the previous position was passed first, so it is the oldest.
-    const steps = Math.min(10, Math.max(1, Math.ceil(dist / (this.radius * 0.3))));
+    if (this.speed < MIN_SPEED) return;
+    const force = Math.min(1, 0.25 + this.speed * 0.9);
+    if (force > 0.3) this.sinceStroke = 0;
+    // The stamp nearest the previous one was passed first, so it is the oldest.
+    const steps = Math.min(10, Math.ceil(dist / spacing));
     for (let s = 1; s <= steps; s++) {
       const t = s / steps;
       this.push(lu + (u - lu) * t, lv + (v - lv) * t, (1 - t) * dt, force);
@@ -121,18 +144,22 @@ export class TouchTrail {
   /** Pointer left the portrait / stopped pointing. */
   lift() {
     this.hasLast = false;
-    this.hoverTarget = 0;
+    this.onHead = false;
   }
 
   clear() {
     this.head = this.count = 0;
     this.hasLast = false;
+    this.onHead = false;
+    this.sinceStroke = Infinity;
     this.hover = this.hoverTarget = 0;
     this.dirty = true;
   }
 
   /** Age the points and redraw. Returns true when the texture changed. */
   update(dt) {
+    this.sinceStroke += dt;
+    this.hoverTarget = this.onHead && this.sinceStroke < HOVER_HOLD ? 1 : 0;
     this.hover += (this.hoverTarget - this.hover) * (1 - Math.exp(-(this.hoverTarget > this.hover ? 6 : 3) * dt));
     if (this.hover < 0.002 && this.hoverTarget === 0) this.hover = 0;
     for (let k = 0; k < this.count; k++) this.age[(this.head + k) % MAX_POINTS] += dt;
@@ -159,7 +186,7 @@ export class TouchTrail {
       const intensity = (a < 0.25 ? easeOutSine(a / 0.25) : easeOutQuad(1 - (a - 0.25) / 0.75)) * this.force[i];
       this.blob(this.pu[i] * w, (1 - this.pv[i]) * h, r * (0.8 + 0.4 * a), intensity * 0.55);
     }
-    if (this.hover > 0) this.blob(this.hoverU * w, (1 - this.hoverV) * h, r * 0.8, this.hover * 0.6);
+    if (this.hover > 0) this.blob(this.hoverU * w, (1 - this.hoverV) * h, r * 0.5, this.hover * 0.2);
     ctx.globalAlpha = 1;
     this.texture.needsUpdate = true;
     return true;
