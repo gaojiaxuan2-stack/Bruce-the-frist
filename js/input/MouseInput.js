@@ -138,7 +138,7 @@ export class MouseInput {
     state.pinch = pinching ? 1 : 0;
     state.fist = fist;
     state.grab = fist ? 1 : 0;
-    state.open = !pinching && !fist;
+    state.open = state.active && !pinching && !fist;
     state.fingers = state.open ? 1 : 0;
     state.gesture = fist ? 'fist' : pinching ? 'pinch' : state.active ? 'point' : 'none';
     state.roll = 0;
