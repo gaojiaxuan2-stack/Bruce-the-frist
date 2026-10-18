@@ -20,11 +20,12 @@ export const FILTERS = [
 
 // Frame colour of a filter at time t, as [r,g,b] 0..1. Neon cycles its hue
 // in 24 steps so CSS strings (and cached glow sprites) stay bounded.
-export function filterColor(f, t) {
-  if (f.color) return f.color;
-  const h = Math.floor(((t * 0.07) % 1) * 24) / 24;
-  const k = (n) => { const x = (n + h * 6) % 6; return 1 - Math.max(0, Math.min(1, Math.min(x, 4 - x))) * 0.8; };
+const HUES = Array.from({ length: 24 }, (_, i) => {
+  const k = (n) => { const x = (n + (i / 24) * 6) % 6; return 1 - Math.max(0, Math.min(1, Math.min(x, 4 - x))) * 0.8; };
   return [k(5), k(3), k(1)];
+});
+export function filterColor(f, t) {
+  return f.color || HUES[Math.floor(((t * 0.07) % 1) * 24) % 24];
 }
 
 // --- GLSL ------------------------------------------------------------------
@@ -42,6 +43,16 @@ uniform float u_flash;    // white flash 0..1
 uniform vec3 u_tint;      // frame colour
 uniform float u_open;     // background: how open the portal is
 uniform vec2 u_fade;      // phantom preview: (amount, 1 = real hand on the right)
+uniform float u_cell;     // halftone cell size, CSS px (smaller on phones)
+uniform vec2 u_band;      // HUD-free y range (device px): the window dims outside it
+
+// Local-contrast tone curve for the cell filters: compares a cell with its
+// surroundings (4 wide taps) so a face in shadow still reads.
+float tone(vec2 c, float l, float R) {
+  float m = 0.25 * (luma(cam(c + vec2(-R, -R))) + luma(cam(c + vec2(R, -R)))
+                  + luma(cam(c + vec2(-R, R))) + luma(cam(c + vec2(R, R))));
+  return clamp(0.5 + (l - m) * 1.6 + (m - 0.45) * 0.9, 0.0, 1.0);
+}
 
 // Signed distance to the edge a->b (positive = outside a clockwise quad).
 float edgeSD(vec2 p, vec2 a, vec2 b) {
@@ -58,7 +69,7 @@ const MAIN = `
 void main() {
   vec2 px = v_px;
   float w = u_wipeDir > 0.0 ? v_local.y : 1.0 - v_local.y;
-  float shown = smoothstep(u_wipe + 0.012, u_wipe - 0.012, w);  // u_wipe = 9 when idle
+  float shown = 1.0 - smoothstep(u_wipe - 0.012, u_wipe + 0.012, w);  // u_wipe = 9 when idle
   float band = exp(-abs(w - u_wipe) * 22.0);
   if (u_wipeInv > 0.5) { shown = 1.0 - shown; band = 0.0; }
   // Glitchy row tearing right at the wipe front.
@@ -75,17 +86,24 @@ void main() {
   vec2 q = abs(v_local - 0.5) * 2.0;
   float r = max(q.x, q.y);
   float rr = u_reveal * 1.25;
-  float rev = smoothstep(rr, rr - 0.12, r);
+  float rev = 1.0 - smoothstep(rr - 0.12, rr, r);
   c += u_tint * exp(-abs(r - rr + 0.06) * 26.0) * (1.0 - u_reveal) * 2.0;
 
   c += (u_tint * 0.9 + 0.35) * band;
   c = mix(c, vec3(1.0), u_flash);
   float a = u_alpha * rev * max(shown, band * 0.85);
-  // Phantom preview: solid at the real hand, dissolving into flickering
-  // blocks toward the missing one.
+  // Keep the HUD bars readable when the window reaches under them.
+  float sp = 18.0 * u_dpr;
+  a *= mix(0.3, 1.0, smoothstep(u_band.x - sp, u_band.x, v_px.y) * (1.0 - smoothstep(u_band.y, u_band.y + sp, v_px.y)));
+  // Phantom preview: a hologram, solid at the real hand and fading toward
+  // the missing one, with a few flickering data blocks at the fading front.
   float g = u_fade.y > 0.5 ? 1.0 - v_local.x : v_local.x;
-  float blk = hash12(floor(v_px / (9.0 * u_dpr)) + floor(u_time * 4.0) * 0.731);
-  a *= mix(1.0, step(blk, 1.15 - g) * (1.0 - 0.7 * g), u_fade.x);
+  float blk = hash12(floor(v_px / (12.0 * u_dpr)) + floor(u_time * 6.0) * 0.731);
+  float front = exp(-(g - 0.6) * (g - 0.6) * 12.0);
+  float holo = 1.0 - smoothstep(0.05, 0.8, g);
+  holo = max(holo, step(0.9, blk) * front * 0.75);
+  holo *= 0.86 + 0.14 * sin(v_px.y / u_dpr * 1.4 - u_time * 9.0);
+  a *= mix(1.0, holo, u_fade.x);
   outColor = vec4(c, a);
 }
 `;
@@ -105,28 +123,31 @@ void main() {
 `;
 
 const BODIES = {
-  // 1. The reference clip: electric-blue panel, luminance halftone dots.
+  // 1. The reference clip: an electric-blue panel; the scene as a halftone
+  // of pale dots whose area follows brightness, deep navy in the shadows,
+  // a fine navy outline and a soft LED glow.
   dots: `
 vec3 filt(vec2 px) {
-  float cs = 11.0 * u_dpr;
+  float cs = u_cell * u_dpr;
   vec2 cell = floor(px / cs);
   vec2 cc = (cell + 0.5) * cs;
   float o = 0.25 * cs;
   float l = 0.25 * (luma(cam(cc + vec2(-o, -o))) + luma(cam(cc + vec2(o, -o)))
                   + luma(cam(cc + vec2(-o, o))) + luma(cam(cc + vec2(o, o))));
-  l = smoothstep(0.08, 0.9, l);
+  float v = smoothstep(0.1, 0.92, tone(cc, l, 3.0 * cs));
   float d = length(px - cc);
-  float rad = mix(0.06, 0.48, pow(l, 1.1)) * cs;
+  float rad = (0.05 + 0.39 * sqrt(v)) * cs;
   float aa = 0.8 * u_dpr;
   float dm = 1.0 - smoothstep(rad - aa, rad + aa, d);
-  vec3 navy = vec3(0.02, 0.05, 0.32);
+  vec3 navy = vec3(0.015, 0.04, 0.3);
   vec3 blue = mix(vec3(0.12, 0.235, 1.0), vec3(0.17, 0.36, 1.0), v_local.x * 0.6 + v_local.y * 0.4);
-  vec3 bg = mix(navy, blue, 0.35 + 0.65 * smoothstep(0.0, 0.45, l));
+  vec3 bg = mix(navy, blue, 0.28 + 0.72 * smoothstep(0.05, 0.55, v));
   float e = sobel(px, 1.5 * u_dpr);
-  bg = mix(bg, vec3(0.01, 0.02, 0.16), smoothstep(0.2, 0.7, e) * 0.75);
-  vec3 dc = mix(vec3(0.42, 0.66, 1.0), vec3(0.92, 0.99, 1.0), smoothstep(0.2, 0.75, l));
+  bg = mix(bg, vec3(0.01, 0.02, 0.15), smoothstep(0.25, 0.7, e) * 0.7);
+  vec3 dc = mix(vec3(0.4, 0.64, 1.0), vec3(0.93, 0.99, 1.0), smoothstep(0.3, 0.85, v));
+  dc += 0.18 * (1.0 - smoothstep(0.0, rad, d)) * v;  // hot LED core
   vec3 c = mix(bg, dc, dm);
-  c += vec3(0.35, 0.6, 1.0) * exp(-max(d - rad, 0.0) / (0.15 * cs)) * l * 0.5 * (1.0 - dm);
+  c += vec3(0.3, 0.55, 1.0) * exp(-max(d - rad, 0.0) / (0.14 * cs)) * v * 0.45 * (1.0 - dm);
   return c;
 }`,
 
@@ -196,10 +217,11 @@ vec3 filt(vec2 px) {
   matrix: `
 uniform sampler2D u_glyphs;  // 8x8 glyph atlas, 32 px per glyph
 vec3 filt(vec2 px) {
-  vec2 cs = vec2(12.0, 16.0) * u_dpr;
+  vec2 cs = vec2(12.0, 16.0) * (u_cell / 10.0) * u_dpr;
   vec2 cell = floor(px / cs);
   vec2 f = fract(px / cs);
-  float l = smoothstep(0.03, 0.6, luma(cam((cell + 0.5) * cs)));
+  vec2 cc = (cell + 0.5) * cs;
+  float l = smoothstep(0.15, 0.85, tone(cc, luma(cam(cc)), 2.5 * cs.y));
   float ch = hash12(vec2(cell.x, 11.0));
   float speed = 5.0 + ch * 13.0;
   float rows = u_res.y / cs.y + 24.0;
@@ -218,21 +240,21 @@ vec3 filt(vec2 px) {
   float lod = max(0.0, log2(32.0 / cs.y * 1.25));
   float gl = textureLod(u_glyphs, guv, lod).r;
   gl += textureLod(u_glyphs, guv, lod + 2.0).r * 0.45;  // blurry mip = cheap glyph glow
-  float b = gl * (0.3 + trail * 0.9) * (0.06 + 1.2 * l);
-  vec3 col = vec3(0.1, 1.0, 0.42) * b + vec3(0.8, 1.0, 0.88) * gl * head * (0.3 + 0.7 * l);
-  return col + vec3(0.0, 0.14, 0.05) * l * l;
+  float b = gl * (0.4 + trail * 0.85) * (0.03 + 1.25 * pow(l, 1.4));
+  vec3 col = vec3(0.1, 1.0, 0.42) * b + vec3(0.8, 1.0, 0.88) * gl * head * (0.25 + 0.75 * l);
+  return col + vec3(0.01, 0.2, 0.07) * l * l;
 }`,
 
   // 5. Terminal ASCII art (amber phosphor).
   ascii: `
 uniform sampler2D u_ascii;  // ramp " .:-=+*#%@", 10 glyphs in a row
 vec3 filt(vec2 px) {
-  vec2 cs = vec2(8.0, 12.0) * u_dpr;
+  vec2 cs = vec2(8.0, 12.0) * (0.5 + 0.5 * u_cell / 10.0) * u_dpr;
   vec2 cell = floor(px / cs);
   vec2 f = fract(px / cs);
   vec2 cc = (cell + 0.5) * cs;
   float l = 0.5 * (luma(cam(cc - vec2(0.0, cs.y * 0.25))) + luma(cam(cc + vec2(0.0, cs.y * 0.25))));
-  l = smoothstep(0.08, 0.78, l);
+  l = smoothstep(0.1, 0.9, tone(cc, l, 2.0 * cs.y));
   float idx = min(floor(l * 10.0), 9.0);
   float g = textureLod(u_ascii, vec2((idx + f.x) / 10.0, f.y), max(0.0, log2(48.0 / cs.y))).r;
   vec3 col = vec3(1.0, 0.66, 0.08) * g * (0.45 + 0.8 * l) + vec3(1.0, 0.93, 0.72) * g * smoothstep(0.75, 1.0, l) * 0.5;
@@ -278,7 +300,7 @@ vec3 filt(vec2 px) {
   float o = bs * 0.3;
   float l = luma(cam(bc)) * 0.5 + 0.125 * (luma(cam(bc + vec2(o, 0.0))) + luma(cam(bc - vec2(o, 0.0)))
                                          + luma(cam(bc + vec2(0.0, o))) + luma(cam(bc - vec2(0.0, o))));
-  l = smoothstep(0.05, 0.85, l);
+  l = smoothstep(0.08, 0.92, tone(bc, l, 4.0 * bs));
   float lv = clamp(floor(l * 3.0 + 0.5 + (bayer4(b) - 0.5) * 0.9), 0.0, 3.0);
   vec3 col = lv < 0.5 ? vec3(0.059, 0.22, 0.059) : lv < 1.5 ? vec3(0.19, 0.384, 0.19)
            : lv < 2.5 ? vec3(0.545, 0.675, 0.059) : vec3(0.79, 0.86, 0.5);
@@ -311,7 +333,7 @@ vec3 filt(vec2 px) {
   vec2 p = px - u_center;
   float r = length(p);
   float seg = 6.2831853 / 8.0;
-  float a0 = mod(atan(p.y, p.x) + u_time * 0.25, seg);
+  float a0 = mod(atan(p.y, p.x + 1e-3) + u_time * 0.25, seg);  // no atan(0, 0)
   float a = abs(a0 - 0.5 * seg) - u_time * 0.12;
   float zr = r * (0.85 + 0.12 * sin(u_time * 0.6)) + 6.0 * u_dpr;
   vec3 col = cam(u_center + vec2(cos(a), sin(a)) * zr);

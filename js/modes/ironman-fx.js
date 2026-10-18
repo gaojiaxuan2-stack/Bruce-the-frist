@@ -153,7 +153,10 @@ export class GlowLayer {
       const sg = this.sg, sw = this.shadow.width, sh = this.shadow.height;
       sg.globalCompositeOperation = 'source-over';
       sg.clearRect(0, 0, sw, sh);
-      for (let i = 0; i < 3; i++) sg.drawImage(this.levels[1].c, 0, 0);
+      sg.drawImage(this.levels[1].c, 0, 0);
+      sg.drawImage(this.levels[1].c, 0, 0);
+      sg.drawImage(this.levels[2].c, 0, 0, sw, sh);
+      sg.drawImage(this.levels[2].c, 0, 0, sw, sh);
       sg.globalCompositeOperation = 'source-in';
       sg.fillStyle = '#00060d';
       sg.fillRect(0, 0, sw, sh);

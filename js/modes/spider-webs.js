@@ -26,11 +26,12 @@ function rng(seed) {
   };
 }
 
-// Height of the HUD bars (CSS px) that webs and lettering keep clear of.
-export function hudBands(W, H) {
-  const top = W < 600 ? 112 : W < 1180 ? 104 : 74;
-  const bottom = W < 900 ? 150 : 124;
-  return { top: Math.max(top, H * 0.04), bottom: Math.max(bottom, H * 0.04) };
+// The y-range between the HUD bars (CSS px) that splats and lettering stay in.
+function bandsOf(app, H) {
+  const b = app.ui && app.ui.bands ? app.ui.bands() : null;
+  const top = b && isFinite(b.top) ? b.top : H * 0.12;
+  const bottom = b && isFinite(b.bottom) ? b.bottom : H * 0.84;
+  return { top: Math.max(top, H * 0.04), bottom: Math.min(bottom, H * 0.96) };
 }
 
 function easeOutElastic(x) {
@@ -148,9 +149,14 @@ export class WebSystem {
 
     const s = clamp(hand.size || 80, 30, 400);
     const minD = Math.min(W, H);
-    const R = clamp(s * 0.8, minD * 0.075, minD * 0.15);
-    const band = hudBands(W, H);
-    const rect = { l: W * 0.04, r: W * 0.96, t: band.top + R, b: H - band.bottom - R * 0.6 };
+    const band = bandsOf(app, H);
+    const bandH = Math.max(1, band.bottom - band.top);
+    const R = Math.min(clamp(s * 0.8, minD * 0.075, minD * 0.15), bandH * 0.32);
+    // Splats stretch 1.1x along the shot, so they sit ~1.05 R below the top
+    // bar. On short screens (landscape phones) the face fills the band, so
+    // there they sit right under the bar instead.
+    const roomy = clamp((bandH - 200) / 200, 0, 1);
+    const rect = { l: W * 0.04, r: W * 0.96, t: band.top + R * 1.05 * roomy, b: band.bottom - R * (0.3 + 0.3 * roomy) };
     if (rect.t > rect.b) rect.t = rect.b = (rect.t + rect.b) / 2;
     let d = rayExit(wr, dx, dy, rect);
     if (!isFinite(d)) d = minD * 0.4;
@@ -185,7 +191,7 @@ export class WebSystem {
     if (nx * side < 0) { nx = -nx; ny = -ny; }
     const size = clamp(s * 0.55, 30, 70);
     const tx = clamp(wr.x + nx * s * 0.9 - dx * s * 0.2, size * 1.8, W - size * 1.8);
-    const ty = clamp(wr.y + ny * s * 0.9 - dy * s * 0.2 - s * 0.3, band.top + size * 0.7, H - band.bottom - size * 0.7);
+    const ty = clamp(wr.y + ny * s * 0.9 - dy * s * 0.2 - s * 0.3, band.top + size * 0.7, band.bottom - size * 0.7);
     this.texts.push({ text: WORDS[(Math.random() * WORDS.length) | 0], x: tx, y: ty, t0: t, size, rot: (Math.random() - 0.5) * 0.4, alt: this.seq % 2 });
     if (this.texts.length > 6) this.texts.shift();
 
@@ -257,11 +263,19 @@ export class WebSystem {
         if (w.travel >= w.dist && w.dieT === Infinity) this._impact(w, t, app);
       } else for (let i = 0; i < steps; i++) this._rope(w, dt, g, t, app);
     }
-    this.webs = this.webs.filter((w) => {
-      if (w.dieT !== Infinity) return t - w.dieT < SHRIVEL;
-      return !(w.stuck && t - w.relT > SPLAT_FADE[1]);
-    });
-    this.texts = this.texts.filter((x) => t - x.t0 < 0.95);
+    // drop finished webs and lettering in place (no per-frame arrays)
+    const list = this.webs;
+    let j = 0;
+    for (let i = 0; i < list.length; i++) {
+      const w = list[i];
+      const keep = w.dieT !== Infinity ? t - w.dieT < SHRIVEL : !(w.stuck && t - w.relT > SPLAT_FADE[1]);
+      if (keep) list[j++] = w;
+    }
+    list.length = j;
+    const T = this.texts;
+    j = 0;
+    for (let i = 0; i < T.length; i++) if (t - T[i].t0 < 0.95) T[j++] = T[i];
+    T.length = j;
     this.fx.update(frame.dt);
   }
 

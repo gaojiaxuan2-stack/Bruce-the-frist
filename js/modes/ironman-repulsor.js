@@ -2,7 +2,8 @@
 // plus the two-palm unibeam.
 //
 //   open palm ✋      charges the repulsor (0 → 1 in CHARGE_S)
-//   push toward cam  fires (palm grows ≥ 12 % within 250 ms), or
+//   push toward cam  fires at full charge (palm grows ≥ 12 % within 250 ms;
+//                    a push that starts just before full is remembered), or
 //   keep holding     fires by itself after HOLD_FIRE_S at full charge
 //   fist ✊          cancels the charge with a fizzle
 //   palms together   (both open, < UNI_NEAR hand sizes apart) for UNI_S → unibeam
@@ -18,15 +19,17 @@ const HOLD_FIRE_S = 0.6;
 const COOLDOWN_S = 0.5;
 const PUSH_GROW = 1.12;
 const PUSH_WINDOW = 0.25;
-const PUSH_MIN = 0.7;              // a push fires once the charge is this full
+const PUSH_ARM = 0.6;              // pushes count from this charge on…
+const PUSH_MEMORY = 0.35;          // …and are remembered this long (until full)
+const GRACE_S = 0.2;               // brief pose flicker (motion blur) keeps the charge
 const LOCK_S = 0.32;               // reticle snap-on
 const RELEASE_S = 0.45;            // reticle fade after the hand is lost
 const UNI_NEAR = 1.7, UNI_FAR = 2.1;
 const UNI_S = 1.0, UNI_COOL = 1.5;
 const HIST = 40;                   // palm-size samples: covers PUSH_WINDOW even at 120 Hz
 const STREAKS = 40;
-const LBL = '700 12px Rajdhani, "Segoe UI", sans-serif';
-const LBL2 = '600 11px Rajdhani, "Segoe UI", sans-serif';
+const LBL = '700 13px Rajdhani, "Segoe UI", sans-serif';
+const LBL2 = '600 12px Rajdhani, "Segoe UI", sans-serif';
 
 class Target {
   constructor(h, n, t) {
@@ -34,7 +37,8 @@ class Target {
     this.x = h.palm.x; this.y = h.palm.y; this.s = clamp(h.size, 20, 420);
     this.side = h.side; this.ghost = false; this.open = false;
     this.alive = true; this.lostT = 0; this.locked = false; this.seen = 0;
-    this.charge = 0; this.full = 0; this.cool = 0; this.ready = false; this.readyT = -99;
+    this.charge = 0; this.full = 0; this.cool = 0; this.ready = false;
+    this.lastOpen = -99; this.pushT = -99;
     this.link = 0;   // 0..1 merged into a unibeam lock
     this.fired = -99; this.fizzled = -99; this.spin = Math.random() * TAU; this.looping = false;
     this.ht = new Float64Array(HIST); this.hs = new Float32Array(HIST); this.hn = 0; this.hi = 0;
@@ -54,13 +58,17 @@ export class Repulsors {
     this.shake = { x: 0, y: 0 };
     this.pal = null;
     this.onEvent = null;   // (type, target) for HUD messages
+    this.band = null;      // HUD layout ({top, bot}): labels stay off the bars
     this.sndAt = {};
-    this.gl = { lights: [[0, 0, 1, 0], [0, 0, 1, 0], [0, 0, 1, 0]], blast: [0, 0, 1, 0], flash: 0 };
+    this.lastT = -1;
+    this.frameDt = 1 / 30;  // smoothed real frame time (slow phones / headless)
+    this.gl = { lights: [[0, 0, 1, 0, 0], [0, 0, 1, 0, 0], [0, 0, 1, 0, 0]], blast: [0, 0, 1, 0], wave: [0, 0, 0, 0], flash: 0 };
     this.hudInfo = { targets: [], rpl: [{ label: 'L', charge: 0, state: 'OFFLINE' }, { label: 'R', charge: 0, state: 'OFFLINE' }], steer: 0 };
   }
 
   reset(app) {
     this.stopSounds(app.sfx);
+    this.lastT = -1;
     this.targets.clear();
     this.blasts.length = 0;
     this.parts.clear();
@@ -82,7 +90,12 @@ export class Repulsors {
 
   // ---------------------------------------------------------------- logic
   update(frame, app) {
-    const t = frame.t, dt = Math.min(frame.dt, 0.1), sfx = app.sfx;
+    // Gesture timers run on real elapsed time (frame.dt is capped at 0.1 s,
+    // which would slow charging down on a 6 fps device).
+    const t = frame.t, sfx = app.sfx;
+    const dt = this.lastT < 0 ? Math.min(frame.dt, 0.1) : clamp(t - this.lastT, 0, 0.25);
+    this.lastT = t;
+    this.frameDt += (dt - this.frameDt) * 0.1;
     this.tick++;
     for (const h of frame.hands) {
       let T = this.targets.get(h.id);
@@ -140,26 +153,34 @@ export class Repulsors {
     T.hi = (T.hi + 1) % HIST; T.hn = Math.min(HIST, T.hn + 1);
 
     const open = h.pose === 'open' && !h.overUI;
+    if (open) T.lastOpen = t;
     T.open = open;
+    // still "open" through a short flicker (a fast push blurs the fingers)
+    const live = open || (h.pose !== 'fist' && !h.overUI && t - T.lastOpen < GRACE_S);
+    if (live && T.cool <= 0 && T.charge >= PUSH_ARM && this.pushed(T, t)) T.pushT = t;
     if (T.cool > 0) {
       T.cool -= dt;
       T.charge = Math.max(0, T.charge - dt * 3);
-    } else if (open) {
-      T.charge = Math.min(1, T.charge + dt / CHARGE_S);
+    } else if (live) {
+      if (open) T.charge = Math.min(1, T.charge + dt / CHARGE_S);
       if (T.charge >= 1) {
         if (!T.ready) {
-          T.ready = true; T.readyT = t;
+          T.ready = true;
           sfx.tone({ type: 'sine', f0: 1900, f1: 2600, dur: 0.1, vol: 0.05 });
           this.onEvent?.('ready', T);
         }
         T.full = U.on ? 0 : T.full + dt;   // no hold-to-fire while linked into a unibeam
+        if (!U.on && U.cool <= 0) {
+          if (t - T.pushT < PUSH_MEMORY) this.fire(T, t, sfx, true);
+          else if (T.full >= HOLD_FIRE_S) this.fire(T, t, sfx, false);
+        }
       }
-      if (!U.on && U.cool <= 0) {
-        if (T.charge >= PUSH_MIN && this.pushed(T, t)) this.fire(T, t, sfx, true);
-        else if (T.full >= HOLD_FIRE_S) this.fire(T, t, sfx, false);
-      }
-    } else if (h.pose === 'fist' && T.charge > 0.15) {
-      this.fizzle(T, t, sfx);
+    } else if (h.pose === 'fist') {
+      // a fist cancels with a fizzle; closing the hand right after a shot
+      // just powers the recharge down quietly
+      if (t - T.fired < 1.2) T.charge = Math.max(0, T.charge - dt * 6);
+      else if (T.charge > 0.15) this.fizzle(T, t, sfx);
+      else T.charge = Math.max(0, T.charge - dt * 1.6);
     } else {
       T.charge = Math.max(0, T.charge - dt * 1.6);
     }
@@ -191,16 +212,23 @@ export class Repulsors {
     }
   }
 
+  // Did the palm grow by PUSH_GROW within the last PUSH_WINDOW seconds?
+  // (a little longer at low frame rates, where the smoothed size lags)
   pushed(T, t) {
+    const win = Math.max(PUSH_WINDOW, this.frameDt * 2.6);
     let min = Infinity;
-    for (let i = 0; i < T.hn; i++) if (t - T.ht[i] <= PUSH_WINDOW && T.hs[i] < min) min = T.hs[i];
+    for (let k = 0; k < T.hn; k++) {
+      const i = (T.hi - 1 - k + HIST) % HIST;   // newest first
+      if (t - T.ht[i] > win) break;
+      if (T.hs[i] < min) min = T.hs[i];
+    }
     return min > 1 && min < Infinity && T.hand.size / min >= PUSH_GROW;
   }
 
   fire(T, t, sfx, pushed) {
-    const power = pushed ? 0.8 + 0.3 * T.charge : 1;
+    const power = pushed ? 1.1 : 1;
     this.addBlast(T.x, T.y, T.s, power, false, t);
-    T.charge = 0; T.full = 0; T.ready = false; T.cool = COOLDOWN_S; T.fired = t; T.hn = 0;
+    T.charge = 0; T.full = 0; T.ready = false; T.cool = COOLDOWN_S; T.fired = t; T.hn = 0; T.pushT = -99;
     for (const p of T.intake) p.on = false;
     sfx.play('blast');
     sfx.tone({ type: 'sine', f0: 2600, f1: 380, dur: 0.3, vol: 0.1 });
@@ -209,15 +237,16 @@ export class Repulsors {
 
   fizzle(T, t, sfx) {
     const P = this.pal;
-    const s = T.s, n = Math.round(12 + 18 * T.charge);
+    const s = T.s, n = Math.round(18 + 24 * T.charge);
     this.parts.burst(T.x, T.y, n, (i) => {
-      const a = Math.random() * TAU, v = s * (1 + Math.random() * 2.6);
+      const a = Math.random() * TAU, v = s * (1.2 + Math.random() * 3.2);
       return {
-        x: T.x + Math.cos(a) * s * 0.15, y: T.y + Math.sin(a) * s * 0.15, vx: Math.cos(a) * v, vy: Math.sin(a) * v - s * 0.6,
-        life: 0.3 + Math.random() * 0.4, size: 2 + Math.random() * 2, color: i % 3 ? P.line : '#ffffff', drag: 0.1, gravity: s * 5, kind: 'spark',
+        x: T.x + Math.cos(a) * s * 0.15, y: T.y + Math.sin(a) * s * 0.15, vx: Math.cos(a) * v, vy: Math.sin(a) * v - s * 0.8,
+        life: 0.35 + Math.random() * 0.45, size: 2.5 + Math.random() * 2.5, color: i % 4 === 0 ? P.alert : i % 3 ? P.line : '#ffffff',
+        drag: 0.1, gravity: s * 5, kind: 'spark',
       };
     });
-    T.charge = 0; T.full = 0; T.ready = false; T.fizzled = t; T.hn = 0;
+    T.charge = 0; T.full = 0; T.ready = false; T.fizzled = t; T.hn = 0; T.pushT = -99;
     for (const p of T.intake) p.on = false;
     this.snd('fizzle', 0.2, t, () => {
       sfx.play('spark');
@@ -306,7 +335,7 @@ export class Repulsors {
     this.addBlast(U.x, U.y, U.s * 1.5, 1.4, true, t);
     for (const T of [U.a, U.b]) {
       if (!T) continue;
-      T.charge = 0; T.full = 0; T.ready = false; T.cool = UNI_COOL; T.fired = t; T.hn = 0;
+      T.charge = 0; T.full = 0; T.ready = false; T.cool = UNI_COOL; T.fired = t; T.hn = 0; T.pushT = -99;
       for (const p of T.intake) p.on = false;
     }
     U.charge = 0; U.on = false; U.cool = UNI_COOL;
@@ -351,18 +380,18 @@ export class Repulsors {
     for (const T of this.targets.values()) {
       if (n >= 3 || !T.alive) continue;
       const after = Math.max(0, 1 - (t - T.fired) / 0.5);
-      const k = Math.max(T.charge * 0.75, after * 0.9);
+      const k = Math.max(T.charge * 0.7 * (1 - T.link * 0.75), after * 0.9);
       if (k < 0.01) continue;
       const L = G.lights[n++];
-      L[0] = T.x; L[1] = T.y; L[2] = T.s * (2.2 + T.charge * 1.4); L[3] = k;
+      L[0] = T.x; L[1] = T.y; L[2] = T.s * (2.2 + T.charge * 1.4); L[3] = k; L[4] = T.cool > 0 ? 0 : T.charge * 0.8;
     }
     const U = this.uni;
     if (U.charge > 0.01 && n < 3) {
       const L = G.lights[n++];
-      L[0] = U.x; L[1] = U.y; L[2] = U.s * (2.5 + 3 * U.charge); L[3] = U.charge * 0.9;
+      L[0] = U.x; L[1] = U.y; L[2] = U.s * (2.5 + 3 * U.charge); L[3] = U.charge * 0.9; L[4] = U.charge;
     }
-    for (; n < 3; n++) G.lights[n][3] = 0;
-    G.blast[3] = 0; G.flash = 0;
+    for (; n < 3; n++) { G.lights[n][3] = 0; G.lights[n][4] = 0; }
+    G.blast[3] = 0; G.flash = 0; G.wave[3] = 0;
     for (const b of this.blasts) {
       const a = t - b.t0, dur = b.uni ? 0.9 : 0.55;
       if (a > dur) continue;
@@ -372,8 +401,15 @@ export class Repulsors {
         G.blast[2] = b.s * 2.5 + m * (b.uni ? 0.7 : 0.35) * easeOutCubic(clamp(a / 0.2));
         G.blast[3] = k;
       }
+      // the newest blast drives the refracting shockwave
+      const wl = b.uni ? 1.0 : 0.7;
+      if (a < wl) {
+        G.wave[0] = b.x; G.wave[1] = b.y;
+        G.wave[2] = b.s * 0.4 + m * (b.uni ? 1.1 : 0.65) * b.power * easeOutCubic(a / wl);
+        G.wave[3] = Math.pow(1 - a / wl, 1.5) * Math.min(1, b.power);
+      }
       const fd = b.uni ? 0.32 : 0.16;
-      if (a < fd) G.flash = Math.max(G.flash, Math.pow(1 - a / fd, 2) * (b.uni ? 0.85 : 0.42) * b.power);
+      if (a < fd) G.flash = Math.max(G.flash, Math.pow(1 - a / fd, 2) * (b.uni ? 0.6 : 0.4) * b.power);
     }
     return G;
   }
@@ -481,49 +517,63 @@ export class Repulsors {
     if (T.link < 0.98) this.drawLabel(g, T, t, P, r, fade * (1 - T.link), col, frame);
   }
 
-  // Label on the outer side of the reticle (away from the centre of the
+  // Label tag on the outer side of the reticle (away from the centre of the
   // view, so two hands never label into each other); without room there it
-  // sits centred above the box.
+  // sits centred above the box, or below it when the top bar is in the way.
+  // A dark tag behind the text keeps it legible over a bright room.
   drawLabel(g, T, t, P, r, fade, col, frame) {
-    const LW = 118;
-    let sgn = T.x < frame.W / 2 ? -1 : 1;
-    if (sgn > 0 ? T.x + r + LW > frame.W - 6 : T.x - r - LW < 6) sgn = 0;
-    let x0, y0, lx, ly;
+    const st = this.stateOf(T, t);
+    const status = !T.alive ? 'LOST' : T.locked ? 'LOCK' : (Math.sin(t * 30) > 0 ? 'ACQ' : '');
+    const title = `TGT ${T.n < 10 ? '0' : ''}${T.n} · ${status}`;
+    let sub;
+    if (T.link > 0.5 && T.alive) sub = 'UNIBEAM LINK';
+    else if (st === 'CHRG') sub = `CHARGING ${Math.round(T.charge * 100)}%`;
+    else if (st === 'READY') sub = Math.sin(t * 10) > -0.4 ? 'READY · PUSH TO FIRE' : 'READY';
+    else if (st === 'COOL') sub = 'RPLSR RECHARGE';
+    else if (st === 'FIRE') sub = 'REPULSOR FIRE';
+    else if (st === 'ABORT') sub = 'CHARGE ABORTED';
+    else if (st === 'OFFLINE') sub = 'SIGNAL LOST';
+    else sub = T.open ? 'ARMING…' : 'OPEN PALM TO ARM';
+    g.font = LBL;
+    const w1 = g.measureText(title).width;
+    g.font = LBL2;
+    const LW = Math.max(w1, g.measureText(sub).width, 92) + 16;
+    const top = this.band ? this.band.top : 0, W = frame.W;
+    let sgn = T.x < W / 2 ? -1 : 1;
+    if (sgn > 0 ? T.x + r + 12 + LW > W - 6 : T.x - r - 12 - LW < 6) sgn = 0;
+    let lx, ly, below = false;
+    if (sgn) { lx = T.x + sgn * (r + 12); ly = T.y - r - 12; }
+    else { lx = clamp(T.x, LW / 2 + 6, W - LW / 2 - 6); ly = T.y - r - 30; }
+    if (ly - 18 < top) { sgn = 0; below = true; lx = clamp(T.x, LW / 2 + 6, W - LW / 2 - 6); ly = T.y + r + 32; }
+    const bx = sgn > 0 ? lx : sgn < 0 ? lx - LW : lx - LW / 2;
+    // tag
+    g.globalAlpha = fade * 0.62;
+    g.fillStyle = '#01060c';
+    g.fillRect(bx, ly - 17, LW, 33);
+    g.globalAlpha = fade;
+    g.fillStyle = col;
+    g.fillRect(sgn < 0 ? bx + LW - 2 : bx, ly - 17, 2, 33);
+    // leader line from the bracket corner
     g.globalAlpha = fade * 0.75;
     g.strokeStyle = col;
     g.lineWidth = 1;
     g.beginPath();
-    if (sgn) {
-      x0 = T.x + sgn * r; y0 = T.y - r;
-      lx = x0 + sgn * 12; ly = y0 - 12;
-      g.moveTo(x0, y0); g.lineTo(lx, ly); g.lineTo(lx + sgn * 84, ly);
-    } else {
-      lx = clamp(T.x, LW / 2 + 6, frame.W - LW / 2 - 6); ly = T.y - r - 30;
-      g.moveTo(T.x, T.y - r - 4); g.lineTo(T.x, ly + 14);
-      g.moveTo(lx - 42, ly); g.lineTo(lx + 42, ly);
-    }
+    if (sgn) { g.moveTo(T.x + sgn * r, T.y - r); g.lineTo(lx, ly); g.lineTo(lx + sgn * LW, ly); }
+    else if (below) { g.moveTo(T.x, T.y + r + 4); g.lineTo(T.x, ly - 17); }
+    else { g.moveTo(T.x, T.y - r - 4); g.lineTo(T.x, ly + 16); }
     g.stroke();
+    const tx = sgn > 0 ? lx + 8 : sgn < 0 ? lx - 8 : lx;
     g.textAlign = sgn > 0 ? 'left' : sgn < 0 ? 'right' : 'center';
     g.font = LBL;
     g.fillStyle = col;
     g.globalAlpha = fade;
     g.textBaseline = 'bottom';
-    const status = !T.alive ? 'LOST' : T.locked ? 'LOCK' : (Math.sin(t * 30) > 0 ? 'ACQ' : '');
-    g.fillText(`TGT ${T.n < 10 ? '0' : ''}${T.n} · ${status}`, lx + sgn * 2, ly - 2);
+    g.fillText(title, tx, ly - 2);
     g.textBaseline = 'top';
     g.font = LBL2;
-    const st = this.stateOf(T, t);
-    let sub;
-    if (T.link > 0.5 && T.alive) sub = 'UNIBEAM LINK';
-    else if (st === 'CHRG') sub = `RPLSR CHARGING ${Math.round(T.charge * 100)}%`;
-    else if (st === 'READY') sub = Math.sin(t * 10) > -0.4 ? 'READY · PUSH TO FIRE' : 'READY';
-    else if (st === 'COOL') sub = 'RPLSR RECHARGE';
-    else if (st === 'FIRE') sub = 'FIRE';
-    else if (st === 'ABORT') sub = 'CHARGE ABORTED';
-    else if (st === 'OFFLINE') sub = 'SIGNAL LOST';
-    else sub = '✋ OPEN PALM TO ARM';
-    g.globalAlpha = fade * (st === 'STBY' ? 0.65 : 0.95);
-    g.fillText(sub, lx + sgn * 2, ly + 3);
+    g.fillStyle = st === 'STBY' ? P.text : col;
+    g.globalAlpha = fade * (st === 'STBY' ? 0.8 : 1);
+    g.fillText(sub, tx, ly + 2);
   }
 
   // One big lock around both palms, the chest-reactor triangle spinning up
@@ -622,6 +672,24 @@ export class Repulsors {
       const k = 1 - fz / 0.45, sputter = Math.sin(t * 71) * Math.sin(t * 43) > 0 ? 1 : 0.3;
       drawGlow(ctx, x, y, s * (0.3 + 0.5 * k), P.beam, 0.55 * k * sputter);
       drawGlow(ctx, x, y, s * 0.14 * k + 1, '#ffffff', 0.8 * k * sputter);
+      // electric crackle sputtering out of the palm (re-rolled ~20 times a second)
+      let seed = (Math.floor(t * 20) * 7919 + T.id * 104729) % 2147483647;
+      const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+      ctx.beginPath();
+      for (let j = 0; j < 5; j++) {
+        let a = rnd() * TAU, r = s * 0.12, px = x + Math.cos(a) * r, py = y + Math.sin(a) * r;
+        ctx.moveTo(px, py);
+        const len = s * (0.5 + rnd() * 0.7) * k;
+        for (let q = 0; q < 4; q++) {
+          a += (rnd() - 0.5) * 1.2; r = len / 4;
+          px += Math.cos(a) * r; py += Math.sin(a) * r;
+          ctx.lineTo(px, py);
+        }
+      }
+      ctx.strokeStyle = P.line;
+      ctx.lineWidth = 1.4;
+      ctx.globalAlpha = k * sputter;
+      ctx.stroke();
       const rr = s * 0.65 * (1 - easeOutCubic(clamp(fz / 0.28)));
       if (rr > 1) {
         ctx.beginPath();
@@ -730,8 +798,8 @@ export class Repulsors {
     const grow = easeOutCubic(clamp(a / (U ? 0.3 : 0.16)));
     const R = lerp(s * 0.6, m * (U ? 1.25 : 0.62) * pw, grow);
     const fade = Math.pow(clamp(1 - a / (U ? 1.1 : 0.6)), 1.6);
-    drawGlow(ctx, x, y, R, P.beam, 0.85 * fade);
-    drawGlow(ctx, x, y, R * 0.42, P.core, 0.95 * fade);
+    drawGlow(ctx, x, y, R, P.beam, 0.65 * fade);
+    drawGlow(ctx, x, y, R * 0.42, P.core, 0.8 * fade);
     // radial light streaks
     const k = clamp(a / (U ? 0.9 : 0.5));
     if (k < 1) {
@@ -745,15 +813,17 @@ export class Repulsors {
       ctx.globalAlpha = Math.pow(1 - k, 1.3) * 0.6;
       ctx.drawImage(starburst(P.beam, b.seed + 3), -sz * 0.7, -sz * 0.7, sz * 1.4, sz * 1.4);
       ctx.restore();
-      // speed lines rushing outward
-      const L = b.lines;
+      // speed lines rushing outward (they die out before reaching the HUD bars)
+      const L = b.lines, cap = m * (U ? 0.8 : 0.6);
       ctx.strokeStyle = P.line;
       ctx.lineWidth = 1.5;
       ctx.globalAlpha = (1 - k) * 0.85;
       ctx.beginPath();
       for (let i = 0; i < STREAKS; i++) {
         const ang = L[i * 3], sp = L[i * 3 + 1], len = L[i * 3 + 2];
-        const r0 = s * (0.7 + a * sp * (U ? 22 : 14)), r1 = r0 + s * len * (0.6 + a * 9);
+        const r0 = s * (0.7 + a * sp * (U ? 22 : 14));
+        if (r0 >= cap) continue;
+        const r1 = Math.min(cap, r0 + s * len * (0.6 + a * 9));
         const c = Math.cos(ang), sn = Math.sin(ang);
         ctx.moveTo(x + c * r0, y + sn * r0);
         ctx.lineTo(x + c * r1, y + sn * r1);

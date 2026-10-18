@@ -229,6 +229,8 @@ export class SpiderMask {
     ctx.strokeStyle = mixc(PAL.line, PAL.lineM, miles);
     ctx.lineWidth = lw;
     ctx.stroke();
+    // Miles: the lenses glow red into the black hood (kept inside the mask)
+    if (miles > 0.01) this._lenses(ctx, lm, amt * miles, 1, true);
     ctx.restore();   // unclip
 
     // ink outline (comic looks) / dark seam (plain)
@@ -260,7 +262,8 @@ export class SpiderMask {
     ctx.restore();
   }
 
-  _lenses(ctx, lm, amt, miles) {
+  // glowOnly: just the soft red Miles glow behind each lens.
+  _lenses(ctx, lm, amt, miles, glowOnly = false) {
     const ca = { x: (lm[33].x + lm[133].x) / 2, y: (lm[33].y + lm[133].y) / 2 };
     const cb = { x: (lm[263].x + lm[362].x) / 2, y: (lm[263].y + lm[362].y) / 2 };
     const left = ca.x < cb.x ? ca : cb, right = ca.x < cb.x ? cb : ca;
@@ -291,11 +294,13 @@ export class SpiderMask {
       ctx.translate(0.04, -0.09);
       const unit = Math.sqrt(sx * sy);
 
-      if (miles > 0.01) {
+      if (glowOnly) {
         ctx.globalCompositeOperation = 'lighter';
-        ctx.globalAlpha = amt * miles;
-        drawGlow(ctx, 0.06, -0.02, 1.35, '#ff1a30', 0.9);
+        ctx.globalAlpha = amt;
+        drawGlow(ctx, 0.08, -0.03, 1.05, '#ff1a30', 0.75);
         ctx.globalCompositeOperation = 'source-over';
+        ctx.restore();
+        continue;
       }
       this._lensPath(ctx, sq);
       ctx.globalAlpha = amt;

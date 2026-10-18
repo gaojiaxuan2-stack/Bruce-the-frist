@@ -14,9 +14,10 @@ const CLOSE_S = 0.34;    // CRT-style collapse
 const WIPE_S = 0.3;      // filter change wipe
 const SCRAMBLE = '#%&@$*!?<>/=01ｱｶｻﾀﾅ';
 const HINTS = {
-  none: 'Raise <b>both hands</b> — your thumbs &amp; index fingers frame a filter window',
-  one: 'Raise your other hand ✋ · <b>swipe</b> ↔ to change filter',
-  open: '<b>Pinch 🤏</b> to switch filter · point at a chip to pick one',
+  none: 'Raise <b>both hands</b> 🙌 to frame a window',
+  one: 'Raise your other hand ✋ · <b>swipe</b> ↔ filters',
+  two: '<b>Spread</b> thumb &amp; index ✋✋ to open it',
+  open: '<b>Pinch 🤏</b> for the next filter',
 };
 
 const pt = () => ({ x: 0, y: 0 });
@@ -27,12 +28,12 @@ const lightCss = (c) => css([lerp(c[0], 1, 0.55), lerp(c[1], 1, 0.55), lerp(c[2]
 
 // Runtime state (one portal at a time).
 const S = {
-  cur: 'dots', prev: null, wipe: 1, wipeDir: 1, flash: 0, switchAt: -9, lastSwitch: -9,
-  quad: quad4(), dq: quad4(), present: false, open: 0, ids: [0, 0], span: 0, openedAt: 0,
+  t: 0, cur: 'dots', prev: null, wipe: 1, wipeDir: 1, flash: 0, switchAt: -9, lastSwitch: -9, pending: null,
+  quad: quad4(), dq: quad4(), present: false, open: 0, ids: [0, 0], span: 0, openedAt: 0, closedAt: -9,
   gq: quad4(), gReal: 0, ghostA: 0, ghostHand: 0, preview: 0, swipeFx: null,
   memo: new Map(), uiUntil: new Map(),
-  uiScale: 1, hintKey: null, humOn: false, sfxOpenAt: -9, sfxCloseAt: -9,
-  safeTop: 128, safeBot: 9999, hudAt: -9, W: 1, H: 1,
+  uiScale: 1, hintKey: null, hintWant: null, hintSince: 0, humOn: false, sfxOpenAt: -9, sfxCloseAt: -9,
+  safeTop: 120, safeBot: 9999, W: 1, H: 1, lab: { l: 0 }, pagerIn: false,
   particles: new Particles(320), atlas: null, warm: [], warmAt: 0,
 };
 
@@ -40,7 +41,7 @@ const S = {
 const U = {
   bg: { u_quad: new Float32Array(8), u_open: 0, u_tint: [1, 1, 1] },
   f: {
-    u_quad: new Float32Array(8), u_center: [0, 0], u_span: 1, u_alpha: 1, u_reveal: 1,
+    u_quad: new Float32Array(8), u_center: [0, 0], u_span: 1, u_alpha: 1, u_reveal: 1, u_cell: 10, u_band: [0, 1e5],
     u_wipe: 9, u_wipeDir: 1, u_wipeInv: 0, u_flash: 0, u_tint: [1, 1, 1], u_fade: [0, 0], u_glyphs: null, u_ascii: null,
   },
 };
@@ -139,48 +140,39 @@ function phantom(h, W) {
   ux = clamp(ux, 26, W - 26); lx = clamp(lx, 26, W - 26);
   const g = S.gq;
   const set = (p, x, y) => { p.x = x; p.y = y; };
+  if (!Number.isFinite(ux + lx)) return false;
   if (left) { set(g[0], up.x, up.y); set(g[1], ux, up.y); set(g[2], lx, lo.y); set(g[3], lo.x, lo.y); S.gReal = 0; }
   else { set(g[0], ux, up.y); set(g[1], up.x, up.y); set(g[2], lo.x, lo.y); set(g[3], lx, lo.y); S.gReal = 1; }
+  if (area(g) < 400) return false;  // squeezed against a screen edge
   S.ghostHand = h.id;
   return true;
 }
 
-// Where the HUD bars are (refreshed once a second).
-function hudBounds(t, H) {
-  if (t - S.hudAt < 1) return;
-  S.hudAt = t;
-  try {
-    let top = 0;
-    for (const sel of ['#modes', '.status']) {
-      const el = document.querySelector(sel);
-      if (el) top = Math.max(top, el.getBoundingClientRect().bottom);
-    }
-    const hint = document.getElementById('hint'), opts = document.getElementById('options');
-    let bot = H;
-    for (const el of [hint, opts]) {
-      if (!el || !el.offsetParent) continue;
-      const r = el.getBoundingClientRect();
-      if (r.height) bot = Math.min(bot, r.top);
-    }
-    S.safeTop = (top || 120) + 8;
-    S.safeBot = bot - 8;
-  } catch (e) { /* no DOM (tests) */ }
+// Where the HUD bars are: busy graphics stay between these y values.
+function hudBands(app, H) {
+  const b = app.ui && app.ui.bands ? app.ui.bands() : null;
+  S.safeTop = b ? b.top : 120;
+  S.safeBot = b ? b.bottom : H - 150;
 }
 
 // --- filters -----------------------------------------------------------------
 
+// Runs the in-window transition to filter `id` (called from setOption).
 function switchTo(mode, app, id, dir, how) {
   if (!BY_ID[id] || id === S.cur) return;
-  const t = S.t || 0;
-  S.prev = S.cur; S.cur = id;
-  S.wipe = 0; S.wipeDir = dir; S.switchAt = t; S.lastSwitch = t;
+  const t = S.t;
+  const visible = S.open > 0.05 || S.ghostA > 0.05;
+  S.prev = visible ? S.cur : null; S.cur = id;
+  S.switchAt = t; S.lastSwitch = t;
+  if (!visible) { S.wipe = 1; return; }  // nothing on screen: switch silently
+  S.wipe = 0; S.wipeDir = dir;
   S.flash = how === 'pinch' ? 0.55 : 0.3;
   S.preview = 1;
-  if (mode.option !== id) { mode.option = id; app.ui.setOption(id); }
-  app.sfx.play('select');
+  // The HUD already beeps for its own chips.
+  if (how !== 'chip') app.sfx.play('select');
   if (how === 'swipe') app.sfx.play('whoosh');
   // Sparks along the edge the wipe starts from.
-  const q = S.present || S.open > 0.5 ? S.dq : S.gq;
+  const q = S.open > 0.05 ? S.dq : S.gq;
   const a = dir > 0 ? q[0] : q[3], b = dir > 0 ? q[1] : q[2];
   const col = css(filterColor(BY_ID[id], t));
   const sc = S.uiScale;
@@ -194,11 +186,21 @@ function switchTo(mode, app, id, dir, how) {
   }
 }
 
+// A gesture picks the next/previous filter. It goes through app.setOption so
+// the chips follow; setOption() below then runs the transition.
 function step(mode, app, delta, how) {
   if (S.t - S.lastSwitch < 0.3) return;
   const i = FILTERS.findIndex((f) => f.id === S.cur);
   const n = FILTERS.length;
-  switchTo(mode, app, FILTERS[(i + delta + n) % n].id, delta > 0 ? 1 : -1, how);
+  const id = FILTERS[(i + delta + n) % n].id;
+  S.pending = { dir: delta > 0 ? 1 : -1, how };
+  if (app.setOption) app.setOption(id);
+  if (S.cur !== id) {  // older core without app.setOption
+    mode.option = id;
+    switchTo(mode, app, id, S.pending.dir, how);
+    app.ui?.setOption?.(id);
+  }
+  S.pending = null;
 }
 
 function burst(x, y, n, sc, colors, speed = 220) {
@@ -294,11 +296,14 @@ function scramble(text, k) {
   return out;
 }
 
-// Filter name riding the top edge (dodges the top HUD by moving inside).
+// Filter name riding the top edge. It moves inside the window (and below the
+// top HUD bar) when the edge is too high, and records where it went in S.lab
+// so the REC readout can stay clear of it.
 function drawLabel(ctx, q, A, t, col) {
   const f = BY_ID[S.cur];
   const a = q[0], b = q[1];
   const len = Math.hypot(b.x - a.x, b.y - a.y);
+  S.lab.l = 0;
   if (!(len > 30)) return;
   const ang = clamp(Math.atan2(b.y - a.y, b.x - a.x), -0.6, 0.6);
   const nx = Math.sin(ang), ny = -Math.cos(ang);
@@ -306,7 +311,9 @@ function drawLabel(ctx, q, A, t, col) {
   const sc = Math.min(S.uiScale, len / 150);
   const off = 17 * sc;
   let x = mx + nx * off, y = my + ny * off;
-  if (y - 12 < S.safeTop) { x = mx - nx * off; y = my - ny * off; }
+  if (y - 14 * sc < S.safeTop) {
+    x = mx - nx * off; y = Math.max(my - ny * off, S.safeTop + 14 * sc);
+  }
   const since = t - S.switchAt;
   const flash = clamp(1 - since / 0.6);
   const full = `${f.sym} ${f.label}`;
@@ -319,6 +326,8 @@ function drawLabel(ctx, q, A, t, col) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   const w = ctx.measureText(full).width + 20, h = 19;
+  // Where the tag starts along the top edge (CSS px from the TL corner).
+  S.lab.l = len / 2 - (w / 2) * sc * pop;
   ctx.globalCompositeOperation = 'lighter';
   ctx.globalAlpha = A * (0.3 + 0.6 * flash);
   ctx.drawImage(glowSprite(css(col)), -w * 0.8, -h * 1.7, w * 1.6, h * 3.4);
@@ -331,10 +340,16 @@ function drawLabel(ctx, q, A, t, col) {
   ctx.fillStyle = '#03050a';
   ctx.fillText(`${f.sym} ${scramble(f.label, since / 0.32)}`, 0, 0.5);
   const i = FILTERS.indexOf(f) + 1;
+  ctx.globalAlpha = A * 0.5;
+  ctx.fillStyle = '#04060c';
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(w / 2 + 2, -7, 34, 14, 7); else ctx.rect(w / 2 + 2, -7, 34, 14);
+  ctx.fill();
+  ctx.globalAlpha = A;
   ctx.font = '700 10px Rajdhani, sans-serif';
   ctx.textAlign = 'left';
-  ctx.fillStyle = 'rgba(255,255,255,0.8)';
-  ctx.fillText(`${String(i).padStart(2, '0')}/${FILTERS.length}`, w / 2 + 6, 0.5);
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.fillText(`${String(i).padStart(2, '0')}/${FILTERS.length}`, w / 2 + 7, 0.5);
   ctx.restore();
 }
 
@@ -342,55 +357,73 @@ function drawLabel(ctx, q, A, t, col) {
 function drawPager(ctx, q, A, col) {
   const a = q[3], b = q[2];
   const len = Math.hypot(b.x - a.x, b.y - a.y);
+  S.pagerIn = false;
   if (!(len > 120)) return;
   const ang = clamp(Math.atan2(b.y - a.y, b.x - a.x), -0.6, 0.6);
   const nx = -Math.sin(ang), ny = Math.cos(ang);
   const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
   const off = 15 * S.uiScale;
   let x = mx + nx * off, y = my + ny * off;
-  if (y + 6 > S.safeBot) { x = mx - nx * off; y = my - ny * off; }
+  if (y + 6 > S.safeBot) { x = mx - nx * off; y = my - ny * off; S.pagerIn = true; }
+  if (y + 6 > S.safeBot || y < S.safeTop) return;
   const cur = FILTERS.findIndex((f) => f.id === S.cur);
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(ang);
   ctx.globalAlpha = A;
   const gap = 9, n = FILTERS.length;
-  for (let i = 0; i < n; i++) {
-    const px = (i - (n - 1) / 2) * gap;
-    if (i === cur) { ctx.fillStyle = css(col); ctx.fillRect(px - 5, -1.5, 10, 3); } else {
-      ctx.fillStyle = 'rgba(255,255,255,0.45)';
-      ctx.fillRect(px - 1.5, -1.5, 3, 3);
-    }
-  }
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  for (let i = 0; i < n; i++) if (i !== cur) ctx.fillRect((i - (n - 1) / 2) * gap - 1.5, -1.5, 3, 3);
+  ctx.fillStyle = css(col);
+  ctx.fillRect((cur - (n - 1) / 2) * gap - 5, -1.5, 10, 3);
   ctx.restore();
 }
 
-// Tiny "REC" + timecode inside the top-left corner, corner coordinates outside.
+// Tiny blinking "REC" + timecode in an inside corner: top-left, or
+// bottom-left when the label spans that corner; corner coordinates outside.
 function drawReadouts(ctx, q, A, t) {
   if (S.span < 150 || A < 0.02) return;
-  const tl = q[0], tr = q[1], bl = q[3];
-  const ul = Math.hypot(tr.x - tl.x, tr.y - tl.y) || 1, vl = Math.hypot(bl.x - tl.x, bl.y - tl.y) || 1;
-  const ux = (tr.x - tl.x) / ul, uy = (tr.y - tl.y) / ul, vx = (bl.x - tl.x) / vl, vy = (bl.y - tl.y) / vl;
   const sc = S.uiScale;
-  ctx.save();
-  ctx.translate(tl.x + ux * 14 * sc + vx * 16 * sc, tl.y + uy * 14 * sc + vy * 16 * sc);
-  ctx.rotate(Math.atan2(uy, ux));
-  ctx.scale(sc, sc);
-  const on = (t * 1.6) % 1 < 0.6;
-  ctx.globalAlpha = A * (on ? 1 : 0.3);
-  ctx.globalCompositeOperation = 'lighter';
-  drawGlow(ctx, 4, 0, 9, '#ff3b3b', 0.6);
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.fillStyle = '#ff3b3b';
-  ctx.beginPath(); ctx.arc(4, 0, 3, 0, Math.PI * 2); ctx.fill();
-  ctx.globalAlpha = A * 0.9;
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '700 10px Rajdhani, sans-serif';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  const s = Math.max(0, Math.floor(t - S.openedAt));
-  ctx.fillText(`REC  ${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`, 11, 0.5);
-  ctx.restore();
+  const need = 80 * sc;  // REC readout length along the edge
+  let o = q[0], e = q[1], side = q[3];
+  if (S.lab.l < need + 10) {
+    // The label covers the top-left corner: use the bottom-left one.
+    const lb = Math.hypot(q[2].x - q[3].x, q[2].y - q[3].y);
+    if (S.pagerIn && lb / 2 - 48 < need) o = null;
+    else { o = q[3]; e = q[2]; side = q[0]; }
+  }
+  if (o) {
+    const ul = Math.hypot(e.x - o.x, e.y - o.y) || 1, vl = Math.hypot(side.x - o.x, side.y - o.y) || 1;
+    const ux = (e.x - o.x) / ul, uy = (e.y - o.y) / ul, vx = (side.x - o.x) / vl, vy = (side.y - o.y) / vl;
+    const x = o.x + ux * 14 * sc + vx * 16 * sc, y = o.y + uy * 14 * sc + vy * 16 * sc;
+    if (ul > need + 40 && y > S.safeTop && y < S.safeBot) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(Math.atan2(uy, ux));
+      ctx.scale(sc, sc);
+      // Dark pill so it reads over any filter.
+      ctx.globalAlpha = A * 0.55;
+      ctx.fillStyle = '#04060c';
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(-5, -8, 70, 16, 8); else ctx.rect(-5, -8, 70, 16);
+      ctx.fill();
+      const on = (t * 1.6) % 1 < 0.6;
+      ctx.globalAlpha = A * (on ? 1 : 0.3);
+      ctx.globalCompositeOperation = 'lighter';
+      drawGlow(ctx, 4, 0, 9, '#ff3b3b', 0.6);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = '#ff3b3b';
+      ctx.beginPath(); ctx.arc(4, 0, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = A * 0.9;
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '700 10px Rajdhani, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      const s = Math.max(0, Math.floor(t - S.openedAt));
+      ctx.fillText(`REC  ${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`, 11, 0.5);
+      ctx.restore();
+    }
+  }
 
   // Corner coordinates, pushed diagonally out of each corner.
   const cx = (q[0].x + q[1].x + q[2].x + q[3].x) / 4, cy = (q[0].y + q[1].y + q[2].y + q[3].y) / 4;
@@ -529,21 +562,31 @@ function drawSwipeFx(ctx, t) {
 
 const portrait = () => typeof innerWidth !== 'undefined' && innerHeight > innerWidth;
 
-// Two hands holding a window, slowly breathing. pinch: right hand pinches.
-function frameHands(t, pinch = false, right = true) {
-  const br = Math.sin(t * 0.9), sw = Math.sin(t * 0.7) * 0.015;
-  const p = portrait();
-  const L = p
-    ? { id: 'L', hand: 'left', pose: 'open', x: -0.08 + br * 0.02, y: 0.8 + sw, size: 0.34, rot: 0.1 }
-    : { id: 'L', hand: 'left', pose: 'open', x: 0.11 + br * 0.025, y: 0.74 + sw, size: 0.3, rot: 0.6 + Math.sin(t * 0.5) * 0.05 };
-  const R = p
-    ? { id: 'R', hand: 'right', pose: pinch ? 'pinch' : 'open', x: 1.08 - br * 0.02, y: 0.8 - sw, size: 0.34, rot: -0.1 }
-    : { id: 'R', hand: 'right', pose: pinch ? 'pinch' : 'open', x: 0.89 - br * 0.025, y: 0.74 - sw, size: 0.3, rot: -0.6 + Math.sin(t * 0.6) * 0.05 };
-  return right ? [L, R] : [L];
+// One sim hand in the "C" pose that frames a window edge: index tip above,
+// thumb tip below. side: 'left' | 'right'. gap widens/narrows the window.
+const frameX = () => (portrait() ? -0.1 : 0.16);
+const frameSize = () => (portrait() ? 0.3 : 0.27);
+function frameHand(t, side, gap = 0, pinch = false, breathe = 1) {
+  const p = portrait(), k = side === 'left' ? 1 : -1;
+  const br = Math.sin(t * 0.9) * (p ? 0.02 : 0.025) * breathe, sw = Math.sin(t * 0.7) * 0.015 * k * breathe;
+  const x = frameX() + br - gap;
+  return {
+    id: side === 'left' ? 'L' : 'R', hand: side, pose: pinch ? 'pinch' : 'open',
+    x: side === 'left' ? x : 1 - x, y: (p ? 0.65 : 0.76) + sw, size: frameSize(),
+    rot: k * ((p ? 0.45 : 0.48) + Math.sin(t * (side === 'left' ? 0.5 : 0.6)) * 0.05 * breathe),
+  };
 }
 
-function oneHand(t, x) {
-  return [{ id: 'R', hand: 'right', pose: 'open', x, y: portrait() ? 0.66 : 0.8, size: portrait() ? 0.28 : 0.27, rot: -0.35 + Math.sin(t * 1.1) * 0.05 }];
+// Two hands holding a window, slowly breathing. pinch: right hand pinches.
+function frameHands(t, pinch = false, right = true) {
+  const L = frameHand(t, 'left');
+  return right ? [L, frameHand(t, 'right', 0, pinch)] : [L];
+}
+
+function oneHand(t, dx = 0) {
+  const R = frameHand(t, 'right');
+  R.x += dx;
+  return [R];
 }
 
 // --- the mode ------------------------------------------------------------------
@@ -561,15 +604,25 @@ export default {
 
   simScenarios: {
     frame: (t) => frameHands(t),
+    // Right hand pinches every 2.2 s: next filter each time.
     cycle: (t) => { const ph = t % 2.2; return frameHands(t, ph > 1.5 && ph < 1.95); },
-    one: (t) => oneHand(t, (portrait() ? 0.86 : 0.74) + Math.sin(t * 0.8) * 0.04),
+    one: (t) => oneHand(t, Math.sin(t * 0.8) * 0.03),
+    // One hand: hold, flick left (next filter), hold, flick right (previous).
     swipe: (t) => {
-      // Hold, flick left, hold, flick right.
-      const P = 3.4, ph = t % P, A = portrait() ? 0.84 : 0.76, B = portrait() ? 0.2 : 0.3;
-      const x = ph < 1.4 ? A : ph < 1.65 ? lerp(A, B, (ph - 1.4) / 0.25) : ph < 3.05 ? B : ph < 3.3 ? lerp(B, A, (ph - 3.05) / 0.25) : A;
-      return oneHand(t, x);
+      const P = 3.4, ph = t % P, B = portrait() ? -0.62 : -0.45;
+      const dx = ph < 1.4 ? 0 : ph < 1.65 ? lerp(0, B, (ph - 1.4) / 0.25) : ph < 3.05 ? B : ph < 3.3 ? lerp(B, 0, (ph - 3.05) / 0.25) : 0;
+      return oneHand(t, dx);
     },
+    // The right hand leaves and comes back: close + open animations.
     blink: (t) => frameHands(t, false, t % 4 < 2.6),
+    // Hands squeeze together until the window collapses, then pull apart.
+    squeeze: (t) => {
+      // The tips sit ~1.26 hand sizes inside the wrist: squeeze until they meet.
+      const W = typeof innerWidth !== 'undefined' ? innerWidth : 1280, H = typeof innerHeight !== 'undefined' ? innerHeight : 720;
+      const meet = 0.5 - frameX() - (1.26 * frameSize() * Math.min(W, H)) / W;
+      const g = -Math.min(1, 1.25 * Math.max(0, Math.sin(t * 0.8))) * meet;
+      return [frameHand(t, 'left', g, false, 0), frameHand(t, 'right', g, false, 0)];
+    },
   },
 
   init(app) {
@@ -581,8 +634,9 @@ export default {
   enter(app) {
     if (!BY_ID[this.option]) this.option = FILTERS[0].id;
     Object.assign(S, {
-      cur: this.option, prev: null, wipe: 1, flash: 0, present: false, open: 0, ghostA: 0,
-      preview: 0, swipeFx: null, hintKey: null, humOn: false, hudAt: -9, switchAt: -9, lastSwitch: -9,
+      cur: this.option, prev: null, wipe: 1, flash: 0, present: false, open: 0, ghostA: 0, pending: null,
+      preview: 0, swipeFx: null, hintKey: null, hintWant: null, hintSince: 0, humOn: false,
+      switchAt: -9, lastSwitch: -9, closedAt: -9, sfxOpenAt: -9, sfxCloseAt: -9,
     });
     S.memo.clear(); S.uiUntil.clear(); S.particles.clear();
     S.warm = FILTERS.map((f) => f.id).filter((id) => id !== S.cur);
@@ -595,20 +649,29 @@ export default {
   },
 
   setOption(id, app) {
-    const a = FILTERS.findIndex((f) => f.id === S.cur), b = FILTERS.findIndex((f) => f.id === id);
-    switchTo(this, app, id, b >= a ? 1 : -1, 'chip');
+    let dir = 1;
+    if (S.pending) dir = S.pending.dir;
+    else {
+      // Chips (and the phone ◀ ▶ arrows): wipe the short way round the list.
+      const n = FILTERS.length;
+      const d = (FILTERS.findIndex((f) => f.id === id) - FILTERS.findIndex((f) => f.id === S.cur) + n) % n;
+      dir = d <= n / 2 ? 1 : -1;
+    }
+    switchTo(this, app, id, dir, S.pending ? S.pending.how : 'chip');
   },
 
   update(frame, app) {
     const { t, dt, W, H } = frame;
     S.t = t; S.W = W; S.H = H;
-    hudBounds(t, H);
+    hudBands(app, H);
+    // Phones get a finer dot grid so a small window still holds a picture.
+    U.f.u_cell = Math.min(W, H) < 560 ? 8 : 10;
     if (this.option !== S.cur && BY_ID[this.option]) switchTo(this, app, this.option, 1, 'chip');
 
     const hs = pickHands(frame.hands, t);
     if (hs.length) {
       const size = hs.reduce((s, h) => s + h.size, 0) / hs.length;
-      S.uiScale = clamp(size / 120, 0.8, 1.3);
+      if (Number.isFinite(size)) S.uiScale = clamp(size / 120, 0.8, 1.3);
     }
 
     // Two hands: the portal.
@@ -622,8 +685,12 @@ export default {
       const ru = ri.y <= rt.y ? ri : rt, rl = ru === ri ? rt : ri;
       const q = orderQuad([lu, ru, rl, ll]);
       const a = area(q);
-      const minA = (Math.min(W, H) * 0.075) ** 2;
-      if (finite(q) && a > (S.present ? minA * 0.45 : minA)) {
+      const m = Math.min(W, H), minA = (m * 0.075) ** 2;
+      // Thickness ~ the window's narrow side: a long thin slit is not a window.
+      // Open above 8% of the short screen side, stay open above 4%.
+      const thick = a / Math.max(1, Math.hypot(q[2].x - q[0].x, q[2].y - q[0].y), Math.hypot(q[3].x - q[1].x, q[3].y - q[1].y));
+      const keep = S.present ? 0.5 : 1;
+      if (finite(q) && a > minA * keep && thick > m * 0.08 * keep) {
         present = true;
         for (let i = 0; i < 4; i++) { S.quad[i].x = q[i].x; S.quad[i].y = q[i].y; }
         S.span = Math.sqrt(a);
@@ -638,10 +705,13 @@ export default {
         const sc = S.uiScale;
         for (const p of S.quad) burst(p.x, p.y, 7, sc, [HANDLE, '#ffffff', css(filterColor(BY_ID[S.cur], t))], 260);
       }
-    } else if (!present && S.present && t - S.sfxCloseAt > 0.3) {
-      S.sfxCloseAt = t;
-      app.sfx.tone({ type: 'sine', f0: 900, f1: 90, dur: 0.22, vol: 0.09 });
-      app.sfx.noise({ dur: 0.12, vol: 0.08, type: 'highpass', f0: 3000 });
+    } else if (!present && S.present) {
+      S.closedAt = t;
+      if (t - S.sfxCloseAt > 0.3) {
+        S.sfxCloseAt = t;
+        app.sfx.tone({ type: 'sine', f0: 900, f1: 90, dur: 0.22, vol: 0.09 });
+        app.sfx.noise({ dur: 0.12, vol: 0.08, type: 'highpass', f0: 3000 });
+      }
     }
     const wasOpen = S.open;
     S.present = present;
@@ -665,34 +735,19 @@ export default {
     const mine = (h) => (S.present ? S.open > 0.6 && (h.id === S.ids[0] || h.id === S.ids[1]) : gOn && h.id === S.ghostHand);
     for (const e of frame.events) {
       if (e.type === 'pinchstart') {
-        const m = S.memo.get(e.hand.id);
-        const soft = m && m.done;  // the soft pinch below already fired
-        if (m) m.done = true;
-        if (soft || e.consumed || e.hand.overUI) continue;
+        if (e.consumed || e.hand.overUI) continue;  // the HUD used it as a click
         if (mine(e.hand)) step(this, app, 1, 'pinch');
       } else if (e.type === 'swipe' && (e.dir === 'left' || e.dir === 'right')) {
-        if (S.present || live !== 1 || e.hand.overUI) continue;
+        // One settled hand only: not a hand flying into view, nor the hand
+        // left behind right after the window closed.
+        const h = e.hand;
+        if (S.present || live !== 1 || h.overUI || h.ghost || (h.age ?? 1) < 0.4 || t - S.closedAt < 0.5) continue;
         const d = e.dir === 'left' ? -1 : 1;
-        S.swipeFx = { t, dir: d, x: e.hand.palm.x, y: e.hand.palm.y };
+        S.swipeFx = { t, dir: d, x: h.palm.x, y: h.palm.y };
         step(this, app, e.dir === 'left' ? 1 : -1, 'swipe');
       } else if (e.type === 'handleave') {
         S.memo.delete(e.hand.id);
         S.uiUntil.delete(e.hand.id);
-      }
-    }
-    // Soft pinch: tips held together briefly even when the core pinch flag
-    // stays off (a tight pinch curls the index past its fist guard). Not
-    // for fists (middle finger curled) or near the HUD bars.
-    for (const h of hs) {
-      const m = S.memo.get(h.id);
-      if (!m || h.ghost || h.overUI) continue;
-      if ((h.pinch || 0) < 0.5) { m.held = 0; m.done = false; continue; }
-      if (m.done || h.pinching || h.pinch < 0.92 || h.curl.middle > 0.55) continue;
-      m.held = (m.held || 0) + dt;
-      const y = h.pinchPoint.y;
-      if (m.held > 0.12 && y > S.safeTop && y < S.safeBot) {
-        m.done = true;
-        if (mine(h)) step(this, app, 1, 'pinch');
       }
     }
 
@@ -700,8 +755,10 @@ export default {
     S.flash = Math.max(0, S.flash - dt * 3.5);
     S.particles.update(dt);
 
-    const key = present ? 'open' : hs.length === 1 ? 'one' : 'none';
-    if (key !== S.hintKey) { S.hintKey = key; app.ui.setHint(HINTS[key]); }
+    // Hint follows the state once it has settled (no flapping on tracking blips).
+    const key = present ? 'open' : hs.length === 2 ? 'two' : hs.length === 1 ? 'one' : 'none';
+    if (key !== S.hintWant) { S.hintWant = key; S.hintSince = t; }
+    if (key !== S.hintKey && (S.hintKey === null || t - S.hintSince > 0.3)) { S.hintKey = key; app.ui.setHint(HINTS[key]); }
 
     // A soft electric hum while the window is open.
     if (S.open > 0.01) {
@@ -728,7 +785,7 @@ export default {
 
     if (showGhost) {
       U.f.u_fade[0] = 1 - S.preview * 0.7; U.f.u_fade[1] = S.gReal;
-      drawFilter(gfx, S.gq, S.ghostA * (0.62 + 0.38 * S.preview), 1, 0, col);
+      drawFilter(gfx, S.gq, S.ghostA * (0.8 + 0.2 * S.preview), 1, 0, col);
       U.f.u_fade[0] = 0;
     }
     if (showPortal) {
@@ -760,6 +817,7 @@ function drawFilter(gfx, q, alpha, reveal, flash, col) {
   u.u_center[0] = cx * d; u.u_center[1] = cy * d;
   u.u_span = Math.max(1, Math.sqrt(Math.abs(area(q)))) * d;
   u.u_alpha = alpha; u.u_reveal = reveal; u.u_flash = flash; u.u_tint = col;
+  u.u_band[0] = S.safeTop * d; u.u_band[1] = S.safeBot * d;
   u.u_wipeDir = S.wipeDir;
   if (S.atlas) { u.u_glyphs = S.atlas.glyphs; u.u_ascii = S.atlas.ascii; }
   const wiping = S.wipe < 1 && S.prev && BY_ID[S.prev];

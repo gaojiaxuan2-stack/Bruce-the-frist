@@ -225,10 +225,9 @@ void main() {
   if (u_bg > 0.001) {
     float m = person(px);
     float pm = smoothstep(0.3, 0.7, m);
-    if (pm < 0.999) {
-      vec3 bg = texture(u_city, vec2(v_px.x / u_res.x, 1.0 - v_px.y / u_res.y)).rgb;
-      outc = mix(outc, mix(bg, outc, pm), u_bg);
-    }
+    // (sampled outside any per-pixel branch: safe derivatives on mobile GPUs)
+    vec3 bg = texture(u_city, vec2(v_px.x / u_res.x, 1.0 - v_px.y / u_res.y)).rgb;
+    outc = mix(outc, mix(bg, outc, pm), u_bg);
     float rim = 1.0 - smoothstep(0.0, 0.13, abs(m - 0.5));
     outc = mix(outc, INK, rim * 0.7 * u_bg * u_grade);
   }
@@ -248,8 +247,9 @@ export function renderComic(gfx, look) {
     // flicker, so it is redrawn into a target now and then, not every frame.
     if (!cache.rt) cache.rt = gfx.renderTarget(1);
     const rt = cache.rt, t = gfx.time;
+    // (0.015 head ≈ 1 device px of parallax on the nearest row)
     const stale = rt.w !== cache.w || rt.h !== cache.h || Math.abs(look.pal - cache.pal) > 0.002
-      || Math.abs(look.head.x - cache.hx) > 0.006 || Math.abs(look.head.y - cache.hy) > 0.006 || t - cache.t > 0.2;
+      || Math.abs(look.head.x - cache.hx) > 0.015 || Math.abs(look.head.y - cache.hy) > 0.015 || t - cache.t > 0.25;
     if (stale) {
       Object.assign(cache, { w: rt.w, h: rt.h, hx: look.head.x, hy: look.head.y, pal: look.pal, t });
       gfx.bindTarget(rt);

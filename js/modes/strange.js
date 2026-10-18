@@ -6,7 +6,7 @@
 // circle detection + portal life cycle: strange-portal.js · shaders: strange-gl.js
 
 import { drawHand } from '../draw.js';
-import { SparkField, PALETTES, TAU, clamp, hudBands, mixSparks, mixRGB, drawGlow } from './strange-fx.js';
+import { SparkField, PALETTES, TAU, clamp, mixSparks, mixRGB, drawBloom } from './strange-fx.js';
 import { sigilArt, drawSigil, rimPoint, LAYERS } from './strange-sigil.js';
 import { findLoop, Portals, CLOSE_HOLD, LOOP_ANGLE } from './strange-portal.js';
 import { renderWorld, renderPortals, TimeEcho } from './strange-gl.js';
@@ -33,7 +33,6 @@ const HINTS = {
   close: 'Hold a <b>✊ fist</b> on a portal to close it',
   closing: '<b>Hold it…</b> sealing the portal',
 };
-const SIM_OPTION = { mirror: 'mirror', time: 'time' };
 
 const S = {
   sparks: null, portals: null, echo: null,
@@ -49,6 +48,7 @@ const S = {
   lights: new Float32Array(16),
   tmp: { x: 0, y: 0, tx: 0, ty: 0 },
   hud: null, hudKey: '',
+  crackleAt: 0,
 };
 
 function sfx(app, name, gap, t) {
@@ -63,13 +63,27 @@ const pal = () => (S.cur.green > 0.5 ? PALETTES.time : PALETTES.mystic);
 // ---------------------------------------------------------------------------
 // Shields
 
+const snapshot = () => ({ x: 0, y: 0, R: 0, amt: 0, spins: LAYERS.map(() => 0), m: [1, 0, 0, 1], t: 0, at: -9 });
+
 function newShield(h) {
   const R = h.size * 1.95;
   return {
     id: h.id, x: h.palm.x, y: h.palm.y, R, Rt: R, amt: 0, on: false, lost: false,
     spins: LAYERS.map(() => Math.random() * TAU), n: [0, 0, 1], lean: 0, speed: 0,
     m: [1, 0, 0, 1], acc: 0, t: 0,
+    echoes: [snapshot(), snapshot(), snapshot()], echoK: 0, echoT: -9,   // TIME afterimages
   };
+}
+
+// TIME: remember where the shield was, for its green afterimages.
+function recordEcho(sh, t) {
+  if (t - sh.echoT < 0.07) return;
+  sh.echoT = t;
+  const e = sh.echoes[sh.echoK];
+  sh.echoK = (sh.echoK + 1) % sh.echoes.length;
+  e.x = sh.x; e.y = sh.y; e.R = sh.R; e.amt = sh.amt; e.t = t; e.at = t;
+  for (let i = 0; i < 4; i++) e.m[i] = sh.m[i];
+  for (let i = 0; i < e.spins.length; i++) e.spins[i] = sh.spins[i];
 }
 
 function trackShield(h, frame, app, m) {
@@ -142,6 +156,7 @@ function animateShields(frame, m) {
     const phi = Math.atan2(ty, tx), c = Math.cos(phi), s = Math.sin(phi);
     sh.m[0] = kk * c * c + s * s; sh.m[1] = sh.m[2] = (kk - 1) * c * s; sh.m[3] = kk * s * s + c * c;
     sh.t = frame.t;
+    if (S.cur.green > 0.05) recordEcho(sh, frame.t);
     // sparks flung off the rim, tangentially, then falling
     if (sh.on && sh.amt > 0.35) {
       sh.acc += (80 + sh.R * 0.45) * S.q * (0.5 + 0.5 * boost) * dt;
@@ -189,7 +204,7 @@ function trackTrail(h, frame, app, m) {
   if (!pointing || t < tr.cool) return;
   let start = tr.pts.length;
   while (start > 0 && tr.pts[start - 1].s === tr.stroke) start--;
-  const loop = findLoop(tr.pts, start, m * 0.055, m * 0.5);
+  const loop = findLoop(tr.pts, start, m * 0.07, m * 0.5);
   if (!loop) return;
   if (loop.closed) {
     openPortal(loop, frame, app, m);
@@ -201,15 +216,20 @@ function trackTrail(h, frame, app, m) {
 }
 
 function openPortal(loop, frame, app, m) {
-  const { W, H, t } = frame;
-  const band = hudBands(W, H);
+  const { W, t } = frame;
+  const band = app.ui.bands();
   let R = clamp(loop.r * 1.12, m * 0.12, m * 0.35);
-  R = Math.max(m * 0.1, Math.min(R, (H - band.top - band.bottom) * 0.62));
+  R = Math.max(m * 0.1, Math.min(R, (band.bottom - band.top) * 0.62));
   const x = clamp(loop.cx, R * 0.75, W - R * 0.75);
-  const lo = band.top + R * 0.8, hi = H - band.bottom - R * 0.8;
-  const y = lo <= hi ? clamp(loop.cy, lo, hi) : (band.top + H - band.bottom) / 2;
-  // a portal drawn over another replaces it; at most two stay open
-  for (const p of S.portals.live()) if (Math.hypot(p.x - x, p.y - y) < (p.R + R) * 0.6) closePortal(p, t, app);
+  const lo = band.top + R * 0.8, hi = band.bottom - R * 0.8;
+  const y = lo <= hi ? clamp(loop.cy, lo, hi) : (band.top + band.bottom) / 2;
+  // a portal drawn over another replaces it, unless it has only just opened
+  // (the finger overshooting the first circle); at most two stay open
+  for (const p of S.portals.live()) {
+    if (Math.hypot(p.x - x, p.y - y) >= (p.R + R) * 0.6) continue;
+    if (t - p.t0 < 2) return;
+    closePortal(p, t, app);
+  }
   let live = S.portals.live();
   while (live.length >= MAX_PORTALS) { closePortal(live[0], t, app); live = S.portals.live(); }
   S.portals.open(x, y, R, t, loop.dir);
@@ -327,7 +347,7 @@ function drawTrails(ctx, frame, P, m) {
           const p = pts[(Math.random() * pts.length) | 0];
           const a = t - p.t;
           if (a > TRAIL_SHOW) continue;
-          drawGlow(ctx, p.x + (Math.random() - 0.5) * 10 * sc, p.y + (Math.random() - 0.5) * 10 * sc, (5 + Math.random() * 9) * sc, P.core, (1 - a / TRAIL_SHOW) * 0.8);
+          drawBloom(ctx, p.x + (Math.random() - 0.5) * 10 * sc, p.y + (Math.random() - 0.5) * 10 * sc, (5 + Math.random() * 9) * sc, P.core, (1 - a / TRAIL_SHOW) * 0.8);
         }
       }
     }
@@ -342,7 +362,7 @@ function drawTrails(ctx, frame, P, m) {
       ctx.globalAlpha = 0.55 + 0.45 * k; ctx.strokeStyle = P.core; ctx.lineWidth = 1.6 * sc; ctx.stroke();
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
-      drawGlow(ctx, g.cx, g.cy, g.r * 0.5, P.glow, 0.06 + 0.12 * k);
+      drawBloom(ctx, g.cx, g.cy, g.r * 0.5, P.glow, 0.06 + 0.12 * k);
     }
   }
   ctx.restore();
@@ -358,8 +378,8 @@ function drawHands(ctx, frame, P, m) {
     if (h.pose === 'point' && !h.ghost && !h.overUI) {
       const p = h.pointer;
       ctx.globalCompositeOperation = 'lighter';
-      drawGlow(ctx, p.x, p.y, 30 * sc, P.glow, 0.55);
-      drawGlow(ctx, p.x, p.y, 9 * sc, P.core, 0.95);
+      drawBloom(ctx, p.x, p.y, 30 * sc, P.glow, 0.55);
+      drawBloom(ctx, p.x, p.y, 9 * sc, P.core, 0.95);
       ctx.globalCompositeOperation = 'source-over';
     }
   }
@@ -375,26 +395,27 @@ function drawHands(ctx, frame, P, m) {
 }
 
 // Fade whatever sits under the HUD bars so the chips and hint stay legible.
-function fadeHud(ctx, W, H) {
-  const key = W + 'x' + H;
+function fadeHud(ctx, W, H, app) {
+  const b = app.ui.bands();
+  const key = `${W}x${H}:${b.top}:${b.bottom}`;
   if (S.hudKey !== key) {
-    const b = hudBands(W, H);
     const top = ctx.createLinearGradient(0, 0, 0, b.top + 30);
     top.addColorStop(0, 'rgba(0,0,0,0.75)');
     top.addColorStop(0.7, 'rgba(0,0,0,0.6)');
     top.addColorStop(1, 'rgba(0,0,0,0)');
-    const bot = ctx.createLinearGradient(0, H - b.bottom - 30, 0, H);
+    const y0 = b.bottom - 30;
+    const bot = ctx.createLinearGradient(0, y0, 0, H);
     bot.addColorStop(0, 'rgba(0,0,0,0)');
-    bot.addColorStop(0.3, 'rgba(0,0,0,0.55)');
+    bot.addColorStop(clamp(30 / Math.max(1, H - y0) * 1.4), 'rgba(0,0,0,0.55)');
     bot.addColorStop(1, 'rgba(0,0,0,0.75)');
-    S.hud = { top, bot, b };
+    S.hud = { top, bot, y0 };
     S.hudKey = key;
   }
-  const { top, bot, b } = S.hud;
+  const { top, bot, y0 } = S.hud;
   ctx.save();
   ctx.globalCompositeOperation = 'destination-out';
   ctx.fillStyle = top; ctx.fillRect(0, 0, W, b.top + 30);
-  ctx.fillStyle = bot; ctx.fillRect(0, H - b.bottom - 30, W, b.bottom + 30);
+  ctx.fillStyle = bot; ctx.fillRect(0, y0, W, H - y0);
   ctx.restore();
 }
 
@@ -469,7 +490,7 @@ export default {
     sigilArt('mystic', PALETTES.mystic);
   },
 
-  enter(app) {
+  enter() {
     const L = LOOKS[this.option] || LOOKS.mystic;
     Object.assign(S.cur, { mirror: 0, echo: L.echo, green: L.green });
     S.segFade = 0;
@@ -477,11 +498,6 @@ export default {
     S.portals.reset(); S.sparks.clear(); S.echo.reset();
     S.hint.key = S.hint.cand = 'default';
     if (L.green) sigilArt('time', PALETTES.time);
-    // test hook: ?sim=strange:mirror / :time (or &opt=<id>) picks that option
-    const want = (app.sim && SIM_OPTION[app.sim.scenarioName]) || app.params?.get('opt');
-    if (want && want !== this.option && this.options.some((o) => o.id === want)) {
-      setTimeout(() => window.__bv?.setOption?.(want), 0);
-    }
   },
 
   exit(app) {
@@ -538,7 +554,10 @@ export default {
     if (hum > 0.01) S.humT = t;
     if (t - (S.humT ?? -9) < 1.5) app.sfx.loop('strange-hum', hum, { type: 'triangle', base: 55, range: 60, vol: 0.1, filter: 380 });
     else app.sfx.stopLoop('strange-hum');
-    if (open) sfx(app, 'spark', 0.12 + Math.random() * 0.25, t);
+    if (open && t > S.crackleAt) {   // the rims crackle now and then
+      sfx(app, 'spark', 0.1, t);
+      S.crackleAt = t + 0.25 + Math.random() * 0.45;
+    }
   },
 
   renderGL(gfx, frame) {
@@ -552,19 +571,27 @@ export default {
     renderPortals(gfx, S.portals.list, frame.W, frame.H, S.rgb);
   },
 
-  draw2D(ctx, frame) {
+  draw2D(ctx, frame, app) {
     const m = Math.min(frame.W, frame.H);
     const P = pal(), g = S.cur.green;
     S.portals.draw2D(ctx, frame, P);
     for (const sh of S.shields.values()) {
       if (sh.amt <= 0) continue;
+      if (g > 0.05) {
+        // TIME: a moving shield leaves fading green afterimages
+        const art = sigilArt('time', PALETTES.time);
+        for (const e of sh.echoes) {
+          const age = frame.t - e.at;
+          if (age < 0.32 && Math.hypot(e.x - sh.x, e.y - sh.y) > sh.R * 0.06) drawSigil(ctx, art, e, g * 0.34 * (1 - age / 0.32));
+        }
+      }
       if (g < 0.995) drawSigil(ctx, sigilArt('mystic', PALETTES.mystic), sh, 1 - g);
       if (g > 0.005) drawSigil(ctx, sigilArt('time', PALETTES.time), sh, g);
     }
     drawTrails(ctx, frame, P, m);
     drawHands(ctx, frame, P, m);
     S.sparks.draw(ctx, S.sparkCols);
-    fadeHud(ctx, frame.W, frame.H);
+    fadeHud(ctx, frame.W, frame.H, app);
   },
 
   simScenarios: {
@@ -616,11 +643,11 @@ export default {
         pointAt('R', x, y, 0.16),
       ];
     },
-    // Mirror Dimension (picks the MIRROR option): one shield, hand low.
+    // Mirror Dimension (run with &opt=mirror): one shield, hand low.
     mirror: (t) => [
       { id: 'L', hand: 'left', pose: 'open', x: 0.2 + Math.sin(t * 0.5) * 0.03, y: 0.86, size: 0.15, rot: -0.3 },
     ],
-    // Time Stone (picks the TIME option): palms sweeping leave green echoes.
+    // Time Stone (run with &opt=time): palms sweeping leave green echoes.
     time: (t) => {
       const tall = vh() > vw();
       return [

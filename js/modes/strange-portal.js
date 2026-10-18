@@ -3,7 +3,7 @@
 // its showering rim of sparks. The view through the portal is drawn in
 // WebGL by strange-gl.js.
 
-import { TAU, clamp, easeOutBack, easeInBack, drawGlow } from './strange-fx.js';
+import { TAU, clamp, easeOutBack, easeInBack, drawBloom } from './strange-fx.js';
 
 export const LOOP_ANGLE = (300 / 180) * Math.PI;   // swept angle that closes a loop
 const OPEN_S = 0.6;
@@ -30,9 +30,13 @@ function kasa(n, sx, sy, sxx, syy, sxy, sxz, syz, sz) {
 // around its best-fit circle, stays round and ends near where it started.
 // Returns that loop with closed = true, or the most-wound round-ish partial
 // arc (closed = false, for the "keep going" guide), or null.
+// Long trails are tested at every 2nd/3rd start point and sampled at the
+// same stride (a 60 fps trail is dense), which keeps this well under a
+// millisecond on phones.
 export function findLoop(pts, start, minR, maxR) {
   const n = pts.length;
   if (n - start < 6) return null;
+  const stride = n - start > 90 ? 3 : n - start > 45 ? 2 : 1;
   const o = pts[n - 1];
   let sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0, sxz = 0, syz = 0, sz = 0, path = 0;
   let best = null;
@@ -41,14 +45,15 @@ export function findLoop(pts, start, minR, maxR) {
     sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y; sxz += x * z; syz += y * z; sz += z;
     if (i < n - 1) path += Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
     const m = n - i;
-    if (m < 6 || path < TAU * minR * 0.45) continue;
+    if (m < 6 || path < TAU * minR * 0.45 || (m - 1) % stride) continue;
     const fit = kasa(m, sx, sy, sxx, syy, sxy, sxz, syz, sz);
     if (!fit || fit.r < minR || fit.r > maxR) continue;
-    let swept = 0, err = 0;
+    let swept = 0, err = 0, cnt = 0;
     let prev = Math.atan2(pts[i].y - o.y - fit.cy, pts[i].x - o.x - fit.cx);
-    for (let j = i; j < n; j++) {
+    for (let j = i; j < n; j = j === n - 1 ? n : Math.min(j + stride, n - 1)) {   // always ends on the newest point
       const dx = pts[j].x - o.x - fit.cx, dy = pts[j].y - o.y - fit.cy;
       err += Math.abs(Math.hypot(dx, dy) - fit.r);
+      cnt++;
       if (j > i) {
         const ang = Math.atan2(dy, dx);
         let d = ang - prev;
@@ -57,12 +62,15 @@ export function findLoop(pts, start, minR, maxR) {
         prev = ang;
       }
     }
-    err /= m * fit.r;
+    err /= cnt * fit.r;
     const sw = Math.abs(swept);
     const gap = Math.hypot(pts[i].x - o.x, pts[i].y - o.y) / fit.r;
-    const cand = { cx: fit.cx + o.x, cy: fit.cy + o.y, r: fit.r, swept: sw, err, gap, dir: Math.sign(swept) || 1, closed: false };
-    if (sw >= LOOP_ANGLE && err < 0.2 && gap < 1.35) { cand.closed = true; return cand; }
-    if (err < 0.28 && (!best || sw > best.swept)) best = cand;
+    if (sw >= LOOP_ANGLE && err < 0.2 && gap < 1.35) {
+      return { cx: fit.cx + o.x, cy: fit.cy + o.y, r: fit.r, swept: sw, err, gap, dir: Math.sign(swept) || 1, closed: true };
+    }
+    if (err < 0.28 && (!best || sw > best.swept)) {
+      best = { cx: fit.cx + o.x, cy: fit.cy + o.y, r: fit.r, swept: sw, err, gap, dir: Math.sign(swept) || 1, closed: false };
+    }
     if (sw > TAU * 1.25) break;   // wound past a full turn without closing cleanly
   }
   return best;
@@ -82,7 +90,7 @@ export class Portals {
   open(x, y, R, t, dir = 1) {
     const p = {
       id: ++this.seq, x, y, R, t0: t, state: 'opening', closeT: 0, k0: 1,
-      k: 0, open: 0, hold: 0, scene: (this.seq - 1) % 3, spin: dir, seed: Math.random() * 50, acc: 0,
+      k: 0, open: 0, hold: 0, scene: (this.seq - 1) % 3, spin: dir, seed: Math.random() * 50, acc: 0, suck: 0,
     };
     this.list.push(p);
     this.flashes.push({ x, y, r: R * 1.6, t0: t, dur: 0.45, color: '#fff3d6' });
@@ -112,6 +120,17 @@ export class Portals {
         const target = 1 - 0.1 * clamp(p.hold / CLOSE_HOLD) + 0.012 * Math.sin(t * 7 + p.seed);
         p.k += (target - p.k) * Math.min(1, dt * 12);
         if (age > LIFE_S) this.close(p, t);
+        if (p.hold > 0.01) {
+          // charging: embers are sucked in toward the rim
+          p.suck += 160 * q * clamp(p.hold / CLOSE_HOLD + 0.3) * dt;
+          while (p.suck >= 1) {
+            p.suck -= 1;
+            const th = Math.random() * TAU, c = Math.cos(th), s = Math.sin(th);
+            const rr = p.R * (1.35 + Math.random() * 0.45), v = p.R * (1.6 + Math.random());
+            sparks.emit(p.x + c * rr, p.y + s * rr, -c * v - s * v * 0.4 * p.spin, -s * v + c * v * 0.4 * p.spin,
+              0.22 + Math.random() * 0.1, 0, 0.6, 1, 0.06);
+          }
+        }
       } else {
         const c = clamp((t - p.closeT) / CLOSE_S);
         p.k = Math.max(0, p.k0 * (1 - easeInBack(c)));
@@ -133,7 +152,7 @@ export class Portals {
           const out = p.R * (0.1 + Math.random() * 0.6);
           sparks.emit(p.x + c * rr, p.y + s * rr,
             -s * sp * p.spin + c * out, c * sp * p.spin + s * out,
-            0.2 + Math.random() * 0.4, m * 1.0, 0.3, Math.random() < 0.25 ? 2 : 1);
+            0.2 + Math.random() * 0.4, m * 1.0, 0.3, Math.random() < 0.25 ? 2 : 1, 0.07);
         }
       }
     }
@@ -146,7 +165,9 @@ export class Portals {
       this.flashes.push({ x: p.x, y: p.y, r: p.R * 0.9, t0: t, dur: 0.35, color: '#fff3d6' });
     }
     if (ended.length) this.list = this.list.filter((p) => !p.dead);
-    this.flashes = this.flashes.filter((f) => t - f.t0 < f.dur);
+    let j = 0;
+    for (const f of this.flashes) if (t - f.t0 < f.dur) this.flashes[j++] = f;
+    this.flashes.length = j;
     return ended;
   }
 
@@ -158,29 +179,36 @@ export class Portals {
     for (const p of this.list) {
       const r = p.R * p.k;
       if (r < 2) continue;
-      drawGlow(ctx, p.x, p.y, r * 1.55, pal.glow, 0.22);
+      drawBloom(ctx, p.x, p.y, r * 1.55, pal.glow, 0.22);
       if (p.hold > 0.001 && p.state === 'live') {
+        // fist charge: a progress ring just outside the spark band
         const k = clamp(p.hold / CLOSE_HOLD);
-        const rr = p.R * 1.16;
-        ctx.globalAlpha = 0.35 + 0.3 * k;
+        const rr = p.R * 1.3 + 8, a0 = -Math.PI / 2, a1 = a0 + k * TAU;
+        ctx.lineCap = 'round';
+        ctx.globalCompositeOperation = 'source-over';   // dark under-stroke: reads over bright video
+        ctx.globalAlpha = 0.4;
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 10;
+        ctx.beginPath(); ctx.arc(p.x, p.y, rr, a0, a1); ctx.stroke();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = 0.45;
         ctx.strokeStyle = pal.mid;
         ctx.lineWidth = 2;
-        ctx.setLineDash([4, 10]);
+        ctx.setLineDash([3, 9]);
         ctx.lineDashOffset = -t * 60;
         ctx.beginPath(); ctx.arc(p.x, p.y, rr, 0, TAU); ctx.stroke();
         ctx.setLineDash([]);
-        ctx.globalAlpha = 1;
-        ctx.strokeStyle = pal.core;
-        ctx.lineWidth = 5;
-        ctx.lineCap = 'round';
-        ctx.beginPath(); ctx.arc(p.x, p.y, rr, -Math.PI / 2, -Math.PI / 2 + k * TAU); ctx.stroke();
-        const ea = -Math.PI / 2 + k * TAU;
-        drawGlow(ctx, p.x + Math.cos(ea) * rr, p.y + Math.sin(ea) * rr, 22, pal.core, 0.9);
+        ctx.beginPath(); ctx.arc(p.x, p.y, rr, a0, a1);
+        ctx.globalAlpha = 0.6; ctx.strokeStyle = pal.glow; ctx.lineWidth = 11; ctx.stroke();
+        ctx.globalAlpha = 1; ctx.strokeStyle = pal.core; ctx.lineWidth = 3.5; ctx.stroke();
+        const hx = p.x + Math.cos(a1) * rr, hy = p.y + Math.sin(a1) * rr;
+        drawBloom(ctx, hx, hy, 30, pal.mid, 0.9);
+        drawBloom(ctx, hx, hy, 12, pal.core, 1);
       }
     }
     for (const f of this.flashes) {
       const u = (t - f.t0) / f.dur;
-      drawGlow(ctx, f.x, f.y, f.r * (0.6 + u * 0.8), f.color, (1 - u) * 0.85);
+      drawBloom(ctx, f.x, f.y, f.r * (0.6 + u * 0.8), f.color, (1 - u) * 0.85);
     }
     ctx.restore();
   }

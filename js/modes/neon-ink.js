@@ -17,12 +17,13 @@ export const MAX_PTS = 1400;      // per stroke; longer lines continue in a new 
 const MAX_TOTAL = 18000;          // points over all strokes
 const MAX_STROKES = 80;
 const CHUNK = 150;                // px of stroke per light sample
+const TRIM_MAX = 10;              // most pen points a release may trim (~25 px)
 
 // Per style: glow reach and core half-width (CSS px at hand scale 1).
 const SHAPE = {
   neon: { R: 25, w: 2.0 },
   rainbow: { R: 25, w: 2.0 },
-  fire: { R: 30, w: 2.3 },
+  fire: { R: 44, w: 2.3 },   // room for the flames to rise
   stars: { R: 22, w: 1.3 },
 };
 
@@ -30,9 +31,13 @@ export function hexRgb(hex) {
   const v = parseInt(hex.slice(1), 16);
   return [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
 }
-export function hsv(h, s, v) {
-  const f = (n) => { const k = (n + h * 6) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); };
-  return [f(5), f(3), f(1)];
+export function hsv(h, s, v, out = [0, 0, 0]) {
+  h = ((h % 1) + 1) % 1;
+  for (let i = 0; i < 3; i++) {
+    const k = (5 - i * 2 + h * 6) % 6;
+    out[i] = v - v * s * Math.max(0, Math.min(k, 4 - k, 1));
+  }
+  return out;
 }
 export function rgbCss(c, a = 1) {
   return `rgba(${Math.round(c[0] * 255)},${Math.round(c[1] * 255)},${Math.round(c[2] * 255)},${a})`;
@@ -54,13 +59,15 @@ export class Stroke {
     this.R = sh.R * scale;
     this.w = sh.w * scale;
     this.seed = Math.random();
+    this.chain = this.id;    // pieces of one long line share it (undo takes all)
+    this.cont = false;       // true for a piece that a longer line carried on from
     this.born = t;
     this.endT = -1;          // when the pen lifted (-1 while drawing)
     this.pts = new Float32Array(256);
     this.pin = new Float32Array(128);   // pinch strength per point (tail trimming)
     this.n = 0;
     this.len = 0;
-    this.geo = null; this.geoN = 0; this.dirty = true;
+    this.geo = null; this.geoN = 0; this.geoVer = 0; this.dirty = true;
     this.chunks = new Float32Array(32); this.nChunks = 0;   // x, y, len, sMid
     this.kill = 0;           // 0..1 dissolve progress
     this.killDur = 0;        // > 0 once dissolving
@@ -92,11 +99,17 @@ export class Stroke {
     this.pts[0] = x; this.pts[1] = y; this.dirty = true;
   }
 
-  // Drop trailing points made while the fingers were already opening.
-  trimTail(minPinch) {
-    let n = this.n;
-    while (n > 2 && this.pin[n - 1] < minPinch) n--;
-    if (n !== this.n) { this.n = n; this.dirty = true; }
+  // Drop the last few points made while the fingers were already opening:
+  // clearly looser than the stroke's own pinch, and at most TRIM_MAX of them.
+  trimTail() {
+    const n0 = this.n;
+    if (n0 < 4) return;
+    let sum = 0;
+    for (let i = 0; i < n0; i++) sum += this.pin[i];
+    const th = (sum / n0) * 0.8;
+    let n = n0;
+    while (n > 2 && n0 - n < TRIM_MAX && this.pin[n - 1] < th) n--;
+    if (n !== n0) { this.n = n; this.dirty = true; }
   }
 
   // Random point on the stroke (between two raw points).
@@ -120,7 +133,7 @@ export class Stroke {
     this.dirty = false;
     buildCurve(this.pts, this.n);
     const m = cn;
-    if (!m) { this.geoN = 0; this.len = 0; this.nChunks = 0; return; }
+    if (!m) { this.geoN = 0; this.geoVer++; this.len = 0; this.nChunks = 0; return; }
     const floats = (m + 2) * 8;
     if (!this.geo || this.geo.length < floats) this.geo = new Float32Array(Math.max(floats, (this.geo?.length || 256) * 2));
     const G = this.geo, R = this.R;
@@ -144,6 +157,7 @@ export class Stroke {
     put(x + tx * R - ty * R, y + ty * R + tx * R, len + R, 1);
     put(x + tx * R + ty * R, y + ty * R - tx * R, len + R, -1);
     this.geoN = k / 4;
+    this.geoVer++;            // tells the GPU side to re-upload
     this.len = len;
     this.buildChunks(m, len);
   }
@@ -219,10 +233,11 @@ export class Ink {
   constructor() {
     this.list = [];
     this.W = 0; this.H = 0;
+    this.ver = 0;            // bumps when every stroke moved (resize)
   }
 
   get count() { let n = 0; for (const s of this.list) if (!s.dying) n++; return n; }
-  get points() { let n = 0; for (const s of this.list) n += s.n; return n; }
+  get points() { let n = 0; for (const s of this.list) if (!s.dying) n += s.n; return n; }
 
   add(stroke) {
     this.list.push(stroke);
@@ -255,11 +270,15 @@ export class Ink {
     return null;
   }
 
+  // Every live piece of the line a stroke belongs to.
+  chainOf(stroke) { return this.list.filter((s) => s.chain === stroke.chain && !s.dying); }
+
   // Strokes stay put relative to the screen when it is resized/rotated.
   resize(W, H) {
     if (this.W && this.H && (W !== this.W || H !== this.H)) {
       const sx = W / this.W, sy = H / this.H;
       for (const s of this.list) s.rescale(sx, sy);
+      this.ver++;
     }
     this.W = W; this.H = H;
   }

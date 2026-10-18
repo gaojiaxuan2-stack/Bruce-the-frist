@@ -2,29 +2,31 @@
 // drawn into a GlowLayer (so it blooms for free): curved "wing" gauges on
 // both sides of the visor, a drifting heading tape, readouts that tick, a
 // radar sweep, warnings, and a boot-up sequence whenever the suit changes.
-// The centre of the view stays clear; the top mode bar and the bottom hint
-// bar are left alone.
+// The helmet faceplate (ironman-visor.js) frames it all and puts smoked
+// glass behind every readout. The centre of the view stays clear, and the
+// HUD bars (app.ui.bands()) are left alone.
 
 import { TAU, clamp, lerp, easeOutCubic, rgba, rng, GlowLayer } from './ironman-fx.js';
+import { Visor } from './ironman-visor.js';
 
 export const PALETTES = {
   mk85: {
     id: 'mk85', name: 'MARK 85', ai: 'J.A.R.V.I.S.', sub: 'MARK 85 · ALL SYSTEMS NOMINAL', full: true,
-    line: '#9ff4ff', main: '#4fd8ff', accent: '#ffcf3a', alert: '#ff3b30', text: '#e6fdff',
+    line: '#9ff4ff', main: '#4fd8ff', accent: '#ffcf3a', alert: '#ff3b30', text: '#ecfdff',
     core: '#e9fbff', beam: '#4fd8ff',
-    gl: { lo: [0.82, 0.97, 1.1], hi: [1.08, 0.99, 0.88], sat: 0.9, expo: 0.9, hud: [0.31, 0.85, 1.0], beam: [0.42, 0.82, 1.0] },
+    gl: { lo: [0.8, 0.97, 1.12], hi: [1.1, 0.99, 0.86], sat: 0.92, expo: 0.92, hud: [0.31, 0.85, 1.0], beam: [0.42, 0.82, 1.0] },
   },
   warmachine: {
     id: 'warmachine', name: 'WAR MACHINE', ai: 'WM-OS', sub: 'WAR MACHINE · WEAPONS HOT', full: true,
-    line: '#eef3f8', main: '#a3b3c4', accent: '#ff8a2a', alert: '#ff3b30', text: '#f3f6fa',
+    line: '#eef3f8', main: '#a9b8c8', accent: '#ff8a2a', alert: '#ff3b30', text: '#f6f8fb',
     core: '#fff4e4', beam: '#ffad5c',
-    gl: { lo: [0.88, 0.95, 1.05], hi: [1.06, 1.0, 0.94], sat: 0.42, expo: 0.9, hud: [0.72, 0.78, 0.86], beam: [1.0, 0.66, 0.34] },
+    gl: { lo: [0.9, 0.96, 1.04], hi: [1.06, 1.0, 0.94], sat: 0.38, expo: 0.92, hud: [0.72, 0.78, 0.86], beam: [1.0, 0.66, 0.34] },
   },
   stealth: {
     id: 'stealth', name: 'STEALTH', ai: 'STEALTH', sub: 'SILENT RUNNING', full: false,
-    line: '#8fe9ff', main: '#2fa8d0', accent: '#9ff4ff', alert: '#ff3b30', text: '#cdf6ff',
+    line: '#8fe9ff', main: '#2fa8d0', accent: '#9ff4ff', alert: '#ff3b30', text: '#d4f8ff',
     core: '#e9fbff', beam: '#4fd8ff',
-    gl: { lo: [0.6, 0.86, 1.06], hi: [0.9, 1.02, 1.12], sat: 0.2, expo: 0.76, hud: [0.18, 0.66, 0.82], beam: [0.42, 0.82, 1.0] },
+    gl: { lo: [0.62, 0.86, 1.06], hi: [0.9, 1.02, 1.12], sat: 0.22, expo: 0.8, hud: [0.18, 0.66, 0.82], beam: [0.42, 0.82, 1.0] },
   },
 };
 
@@ -35,64 +37,83 @@ const CARD = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: '
 const BOOT_TICKS = [0.12, 0.3, 0.48, 0.66, 0.84];
 const SIDES = [-1, 1];
 
-// Where everything goes, in CSS px. Portrait phones, landscape phones and
-// desktops each get their own arrangement around the HUD bars.
-function layoutFor(W, H) {
+// Where everything goes, in CSS px, between the HUD bars (band.top ..
+// band.bottom). Portrait phones, landscape phones and desktops each get
+// their own arrangement. guideTop: top of the gesture legend (bottom-left).
+function layoutFor(W, H, band, guideTop) {
   const portrait = H > W;
   const compact = !portrait && H < 560;
-  const phone = W < 600;
-  const guide = W > 900;                       // gesture legend sits bottom-left
-  const topL = phone ? 140 : 84;
-  const topR = phone ? 140 : W < 1180 ? 122 : 84;
-  const bottom = H - (W < 900 ? 154 : 134);
-  const u = portrait ? clamp(W / 420, 0.8, 1) : clamp(Math.min(W / 1280, H / 720), 0.75, 1.25);
-  const L = { W, H, u, portrait, compact, phone };
+  const top = band.top, bot = band.bottom;
+  const u = portrait ? clamp(W / 420, 0.8, 1) : compact ? clamp(H / 420, 0.75, 1) : clamp(Math.min(W / 1280, H / 720), 0.75, 1.25);
+  const L = { W, H, u, portrait, compact, top, bot, key: `${top}|${bot}|${guideTop}` };
   L.cx = W / 2;
+  const asin = (v) => Math.asin(clamp(v, -0.95, 0.95));
   if (portrait) {
-    // everything stacks at the top; the lower half is left to the hands
-    Object.assign(L, { cy: H * 0.55, rx: W / 2 - 12, ry: H * 0.33 });
-    L.up = L.upR = 25 * DEG;
-    L.dn = L.dnR = 28 * DEG;
-    L.comp = { x: W / 2, y: topL - 2, w: W * 0.46 };
-    L.left = { x: 16, y: topL + 52 };
-    L.right = { x: W - 16, y: topL + 52 };
-    L.radar = { x: W - 16 - 27, y: topL + 52 + 76, r: 27 };
+    // readouts stack under the mode bar; the lower half is left to the hands
+    L.comp = { x: W / 2, y: top + 6, w: W * 0.46 };
+    L.left = { x: 16, y: top + 60 * u };
+    L.right = { x: W - 16, y: top + 60 * u };
+    L.radar = { x: W - 16 - 27 * u, y: L.right.y + 44 * u + 32 * u, r: 27 * u };
     L.rplRows = true;
-    L.msg = { x: W / 2, y: bottom - 6, align: 'center' };
+    const yUp = L.radar.y + L.radar.r + 34 * u, yDn = Math.min(bot - 40, H * 0.62);
+    Object.assign(L, { cy: H * 0.5, rx: W / 2 - 10, ry: H * 0.36 });
+    L.up = L.upR = asin((L.cy - yUp) / L.ry);
+    L.dn = L.dnR = asin((yDn - L.cy) / L.ry);
+    L.msg = { x: W / 2, y: L.radar.y + L.radar.r + 30 * u, align: 'center' };
   } else if (compact) {
-    // short wings below two compact corner panels
-    Object.assign(L, { cy: H * 0.6, rx: W / 2 - 26, ry: H * 0.55 });
-    const yTop = 156, yBot = H - 130;
-    L.up = L.upR = Math.asin(clamp((L.cy - yTop) / L.ry, 0, 0.95));
-    L.dn = L.dnR = Math.asin(clamp((yBot - L.cy) / L.ry, 0, 0.95));
+    // landscape phone: a thin strip between the bars, panels on the sides
     L.comp = null;
-    L.left = { x: 28, y: 84 };
-    L.right = { x: W - 28, y: 128 };
     L.radar = null;
+    L.left = { x: 50, y: top + 10 };
+    L.right = { x: W - 50, y: top + 10 };
     L.rplRows = false;
-    L.msg = { x: W / 2, y: bottom - 4, align: 'center' };
+    Object.assign(L, { cy: (top + bot) / 2, rx: W / 2 - 14, ry: Math.max(60, (bot - top) * 1.5) });
+    L.up = L.upR = L.dn = L.dnR = asin(((bot - top) / 2 - 6) / L.ry);
+    L.msg = { x: W / 2, y: bot - 10, align: 'center' };
   } else {
     Object.assign(L, { cy: H * 0.47, rx: W / 2 - 62 * u, ry: H * 0.6 });
-    const yTopL = topL + 66 * u, yTopR = topR + 66 * u;
-    L.up = Math.asin(clamp((L.cy - yTopL) / L.ry, 0, 0.95));
-    L.upR = Math.asin(clamp((L.cy - yTopR) / L.ry, 0, 0.95));
-    L.dn = Math.asin(clamp(((guide ? H - 336 : bottom - 10) - L.cy) / L.ry, 0, 0.95));
-    L.radar = { x: L.cx + L.rx - 110 * u, y: bottom - 64 * u, r: 46 * u };
-    L.dnR = Math.asin(clamp((L.radar.y - L.radar.r - 26 - L.cy) / L.ry, 0, 0.95));
-    L.comp = { x: W / 2, y: topL + 2, w: Math.min(400, W * 0.3) };
-    L.left = { x: L.cx - L.rx + 100 * u, y: topL + 10 };
-    L.right = { x: L.cx + L.rx - 100 * u, y: topR + 10 };
+    L.comp = { x: W / 2, y: top + 10, w: Math.min(400, W * 0.28) };
+    L.left = { x: L.cx - L.rx + 100 * u, y: top + 20 * u };
+    L.right = { x: L.cx + L.rx - 100 * u, y: top + 20 * u };
+    L.radar = { x: L.cx + L.rx - 110 * u, y: bot - 64 * u, r: 46 * u };
     L.rplRows = true;
-    L.msg = { x: L.left.x, y: L.left.y + 186 * u, align: 'left' };
+    L.up = L.upR = asin((L.cy - (top + 70 * u)) / L.ry);
+    L.dn = asin(((guideTop ? guideTop - 16 : bot - 12) - L.cy) / L.ry);
+    L.dnR = asin((L.radar.y - L.radar.r - 26 * u - L.cy) / L.ry);
+    L.msg = { x: L.left.x, y: L.left.y + 132 * u, align: 'left' };
   }
   const fs = (px, min) => Math.max(min, Math.round(px * u * 10) / 10);
+  const small = portrait || compact;
   L.F = {
-    tiny: `600 ${fs(10.5, 9.5)}px ${UI}`,
-    small: `600 ${fs(12, 10.5)}px ${UI}`,
-    bold: `700 ${fs(14, 12)}px ${UI}`,
-    num: `700 ${fs(portrait || compact ? 11.5 : 15, 11)}px ${DISPLAY}`,
-    big: `900 ${fs(portrait || compact ? 20 : 28, 17)}px ${DISPLAY}`,
+    tiny: `600 ${fs(11.5, 10.5)}px ${UI}`,
+    small: `600 ${fs(13, 11.5)}px ${UI}`,
+    bold: `700 ${fs(15, 13)}px ${UI}`,
+    num: `700 ${fs(small ? 12 : 15, 11)}px ${DISPLAY}`,
+    big: `900 ${fs(small ? 21 : 28, 17)}px ${DISPLAY}`,
   };
+  // footprint of each readout cluster: smoked glass goes behind these
+  const lw = portrait ? 166 * u : compact ? 150 * u : 196 * u;
+  const lh = portrait ? 86 * u : compact ? 58 * u : 108 * u;
+  const rw = compact ? 124 * u : portrait ? 118 * u : 150 * u;
+  const rh = compact ? 26 * u : portrait ? 40 * u : 108 * u;
+  L.boxes = [
+    { x: L.left.x - 12, y: L.left.y - 14, w: lw + 24, h: lh + 22 },
+    { x: L.right.x - rw - 12, y: L.right.y - 14, w: rw + 24, h: rh + 22 },
+  ];
+  // a wing must not run under a readout panel: end it just below the panel
+  if (!portrait && !compact) {
+    for (const s of [-1, 1]) {
+      const box = L.boxes[s < 0 ? 0 : 1], key = s < 0 ? 'up' : 'upR';
+      const xEnd = L.cx + s * L.rx * Math.cos(L[key]);
+      const inside = s < 0 ? xEnd > box.x - 14 : xEnd < box.x + box.w + 14;
+      if (inside) L[key] = Math.min(L[key], asin((L.cy - (box.y + box.h + 16)) / L.ry));
+    }
+  }
+  L.plates = L.boxes.slice();
+  // stealth shows a single status line
+  L.quietPlates = [{ x: L.left.x - 12, y: L.left.y - 14, w: 250 * u + 24, h: 16 * u + 28, a: 0.36 }];
+  if (L.comp) L.plates.push({ x: L.comp.x - L.comp.w * 0.3, y: L.comp.y - 6, w: L.comp.w * 0.6, h: (small ? 36 : 42) * u, a: 0.28, f: 26 });
+  if (L.radar) L.plates.push({ x: L.radar.x - L.radar.r - 6, y: L.radar.y - L.radar.r - 6, w: L.radar.r * 2 + 12, h: L.radar.r * 2 + 12, a: 0.4, f: 8, round: 1 });
   return L;
 }
 
@@ -124,7 +145,7 @@ function wingPt(L, s, k, phi, out) {
   out.x = L.cx + s * L.rx * k * Math.cos(phi);
   out.y = L.cy - L.ry * k * Math.sin(phi);
   // outward normal of the ellipse
-  let nx = (s * Math.cos(phi)) / L.rx, ny = -Math.sin(phi) / L.ry;
+  const nx = (s * Math.cos(phi)) / L.rx, ny = -Math.sin(phi) / L.ry;
   const n = Math.hypot(nx, ny) || 1;
   out.nx = nx / n; out.ny = ny / n;
   return out;
@@ -133,13 +154,17 @@ function wingPt(L, s, k, phi, out) {
 export class HelmetHud {
   constructor() {
     this.layer = new GlowLayer();
+    this.visor = new Visor();
     this.pal = PALETTES.mk85;
     this.next = null;       // palette waiting for the reboot
     this.boot = 0;          // seconds since the HUD (re)booted
+    this.bootT0 = -1;       // real time of the (re)boot
     this.vis = 1;           // fades out before a reboot
     this.bootStep = 0;
     this.L = null;
+    this.guideTop = 0; this.guideAt = -99;
     this.dip = 0;           // power dip after a blast
+    this.flare = 0;         // visor rim lights up with blasts
     this.msg = { text: '', color: '#fff', t: -99, dur: 0 };
     this.radarImg = null; this.sweepImg = null; this.radarKey = '';
     const r = rng(42);
@@ -150,27 +175,36 @@ export class HelmetHud {
   reset(id) {
     this.pal = PALETTES[id] || PALETTES.mk85;
     this.next = null;
-    this.boot = 0; this.bootStep = 0; this.vis = 1; this.dip = 0;
+    this.boot = 0; this.bootT0 = -1; this.bootStep = 0; this.vis = 1; this.dip = 0; this.flare = 0;
     this.msg.t = -99;
+    this.guideAt = -99;
   }
 
+  // Switch suits: power down, then reboot in the new colours (instantly
+  // when the HUD hasn't started yet, e.g. ?opt= on the URL). Returns true
+  // when it switched at once.
   setPalette(id) {
     const p = PALETTES[id];
-    if (!p || (p === this.pal && !this.next)) return;
+    if (!p || (p === this.pal && !this.next)) return false;
+    if (this.bootT0 < 0) { this.pal = p; this.next = null; return true; }
     this.next = p;
+    return false;
   }
 
   say(text, color, t, dur = 1.4) { Object.assign(this.msg, { text, color, t, dur }); }
 
   update(dt, t, app) {
+    // the boot sequence runs on real time, so it never drags on a slow device
+    if (this.bootT0 < 0) this.bootT0 = t;
     if (this.next) {
       this.vis -= dt * 6;
-      if (this.vis <= 0) { this.pal = this.next; this.next = null; this.boot = 0; this.bootStep = 0; this.vis = 0; }
+      if (this.vis <= 0) { this.pal = this.next; this.next = null; this.bootT0 = t; this.bootStep = 0; this.vis = 0; }
     } else {
       this.vis = Math.min(1, this.vis + dt * 6);
-      this.boot += dt;
     }
+    if (!this.next) this.boot = t - this.bootT0;
     this.dip = Math.max(0, this.dip - dt * 0.6);
+    this.flare = Math.max(0, this.flare - dt * 2.2);
     // soft blips as the HUD comes online
     while (this.bootStep < BOOT_TICKS.length && this.boot >= BOOT_TICKS[this.bootStep] && !this.next) {
       app.sfx.tone({ type: 'sine', f0: 1700 + this.bootStep * 260, f1: 2100 + this.bootStep * 260, dur: 0.05, vol: 0.035 });
@@ -178,32 +212,55 @@ export class HelmetHud {
     }
   }
 
-  // Open the layer for this frame (reticles are drawn into it as well).
+  // Top of the gesture legend, which sits bottom-left on wide screens.
+  measureGuide(t, W) {
+    if (t - this.guideAt < 1) return this.guideTop;
+    this.guideAt = t;
+    let top = 0;
+    if (W > 900) {
+      const r = document.getElementById('guide')?.getBoundingClientRect();
+      if (r && r.height > 0) top = Math.round(r.top);
+    }
+    this.guideTop = top;
+    return top;
+  }
+
+  // Open the layer for this frame (skeletons + reticles are drawn into it too).
   begin(frame, app) {
     const { W, H } = frame;
-    if (!this.L || this.L.W !== W || this.L.H !== H) { this.L = layoutFor(W, H); this.radarKey = ''; }
+    const b = app.ui?.bands ? app.ui.bands() : { top: 80, bottom: H - 140 };
+    const band = { top: Math.round(clamp(b.top, 0, H * 0.4)), bottom: Math.round(clamp(b.bottom, H * 0.6, H)) };
+    const gt = this.measureGuide(frame.t, W);
+    const key = `${band.top}|${band.bottom}|${gt}`;
+    if (!this.L || this.L.W !== W || this.L.H !== H || this.L.key !== key) { this.L = layoutFor(W, H, band, gt); this.radarKey = ''; }
+    this.visor.update(this.L, this.pal);
     return this.layer.begin(W, H, Math.min(app.dpr || 1, 2));
   }
+
+  // The dark faceplate around the view (between the light and the HUD).
+  drawFrame(ctx, alpha) { this.visor.draw(ctx, this.L, alpha); }
 
   composite(ctx, frame, shake) {
     const t = frame.t;
     // subtle projector flicker with the odd dropout
-    let a = 0.9 + 0.1 * Math.sin(t * 31) * Math.sin(t * 17.3);
+    let a = 0.92 + 0.08 * Math.sin(t * 31) * Math.sin(t * 17.3);
     const blip = Math.floor(t * 9);
-    if (((blip * 7919) % 101) / 101 > 0.975) a *= 0.6;
-    this.layer.composite(ctx, shake.x, shake.y, a, 0.85);
+    if (((blip * 7919) % 101) / 101 > 0.975) a *= 0.65;
+    this.layer.composite(ctx, shake.x, shake.y, a, 0.85, 0.9);
   }
 
   // info: { targets:[{x,y}], rpl:[{label, charge, state}], steer } (Repulsors.info)
-  draw(g, frame, info) {
-    const L = this.L, P = this.pal, t = frame.t, b = this.boot, A = this.vis;
+  draw(g, frame, info, on) {
+    const L = this.L, P = this.pal, t = frame.t, b = this.boot, A = this.vis * on;
+    this.visor.drawRim(g, P, t, on, this.flare);
     if (A <= 0.01) return;
     g.lineCap = 'butt';
     g.lineJoin = 'miter';
-    if ('letterSpacing' in g) g.letterSpacing = '0.5px';
+    if ('letterSpacing' in g) g.letterSpacing = '0.6px';
     const st = (t0, d) => clamp((b - t0) / d);
 
     if (P.full) {
+      this.drawPlates(g, L, easeOutCubic(st(0.1, 0.5)), A);
       this.drawWings(g, L, t, easeOutCubic(st(0, 0.75)), A);
       if (L.comp) this.drawCompass(g, L, t, easeOutCubic(st(0.2, 0.55)), A, info);
       this.drawLeft(g, L, t, st(0.25, 0.9), A, info);
@@ -211,23 +268,24 @@ export class HelmetHud {
       if (L.radar) this.drawRadar(g, L, t, easeOutCubic(st(0.5, 0.6)), A, info);
     } else {
       // stealth: one quiet status line
-      g.globalAlpha = 0.75 * A * st(0.1, 0.4);
+      const k = st(0.1, 0.6);
+      g.globalAlpha = 0.8 * A * clamp(k * 3);
       g.font = L.F.small;
       g.fillStyle = P.line;
       g.textAlign = 'left';
       g.textBaseline = 'middle';
       const x = L.left.x, y = L.left.y;
-      g.fillText(typed(`● ${P.ai} · ${P.sub}`, st(0.1, 0.6)), x, y);
-      if (info.targets.length) {
-        g.globalAlpha = 0.5 * A;
-        g.fillText(`TGT ${String(info.targets.length).padStart(2, '0')} · SILENT LOCK`, x, y + 15 * L.u);
-      }
+      g.fillText(typed(`● ${P.ai} · ${P.sub}`, k), x, y);
+      g.globalAlpha = 0.6 * A;
+      const n = info.targets.length;
+      g.fillText(n ? `TGT ${String(n).padStart(2, '0')} · SILENT LOCK` : 'PASSIVE SCAN', x, y + 16 * L.u);
     }
     this.drawMessage(g, L, t, A);
+    if ('letterSpacing' in g) g.letterSpacing = '0px';
 
     // boot scan: a bright line sweeping down the visor
     if (b < 0.9) {
-      const k = b / 0.9, y = lerp(L.H * 0.12, L.H * 0.86, easeOutCubic(k));
+      const k = b / 0.9, y = lerp(L.top, L.bot, easeOutCubic(k));
       g.globalAlpha = (1 - k) * 0.7 * A;
       g.strokeStyle = P.line;
       g.lineWidth = 1.2;
@@ -243,10 +301,28 @@ export class HelmetHud {
     g.globalAlpha = 1;
   }
 
+  // Corner ticks framing each readout panel.
+  drawPlates(g, L, k, A) {
+    if (k <= 0.001) return;
+    const P = this.pal, c = 7 * L.u;
+    g.strokeStyle = P.main;
+    g.lineWidth = 1;
+    g.globalAlpha = 0.55 * A * k;
+    g.beginPath();
+    for (const r of L.boxes) {
+      const x0 = r.x, y0 = r.y, x1 = r.x + r.w, y1 = r.y + r.h;
+      g.moveTo(x0, y0 + c); g.lineTo(x0, y0); g.lineTo(x0 + c, y0);
+      g.moveTo(x1 - c, y0); g.lineTo(x1, y0); g.lineTo(x1, y0 + c);
+      g.moveTo(x1, y1 - c); g.lineTo(x1, y1); g.lineTo(x1 - c, y1);
+      g.moveTo(x0 + c, y1); g.lineTo(x0, y1); g.lineTo(x0, y1 - c);
+    }
+    g.stroke();
+  }
+
   // Curved gauges hugging both sides of the visor.
   drawWings(g, L, t, k, A) {
     if (k <= 0.001) return;
-    const P = this.pal, u = L.u, pt = this.pt;
+    const P = this.pal, u = L.u, pt = this.pt, labels = !L.compact;
     for (const s of SIDES) {
       const up = s < 0 ? L.up : L.upR, dn = s < 0 ? L.dn : L.dnR;
       const mid = (up - dn) / 2, half = ((up + dn) / 2) * k;
@@ -280,18 +356,20 @@ export class HelmetHud {
       g.globalAlpha = 0.85 * A;
       g.stroke();
       // degree labels on every other long tick
-      g.font = L.F.tiny;
-      g.fillStyle = P.main;
-      g.textAlign = s < 0 ? 'left' : 'right';
-      g.textBaseline = 'middle';
-      g.globalAlpha = 0.6 * A;
-      for (let i = Math.ceil(p0 / (step * 8)); i * step * 8 <= p1; i++) {
-        wingPt(L, s, 1, i * step * 8, pt);
-        g.fillText(String(Math.round(i * 20)), pt.x - pt.nx * 22 * u, pt.y - pt.ny * 22 * u);
+      if (labels && !L.portrait) {
+        g.font = L.F.tiny;
+        g.fillStyle = P.main;
+        g.textAlign = s < 0 ? 'left' : 'right';
+        g.textBaseline = 'middle';
+        g.globalAlpha = 0.6 * A;
+        for (let i = Math.ceil(p0 / (step * 8)); i * step * 8 <= p1; i++) {
+          wingPt(L, s, 1, i * step * 8, pt);
+          g.fillText(String(Math.round(i * 20)), pt.x - pt.nx * 22 * u, pt.y - pt.ny * 22 * u);
+        }
       }
 
       // inner dashed arc, segments creeping along
-      const kIn = 0.955, span = p1 - p0;
+      const kIn = L.portrait ? 0.93 : 0.955, span = p1 - p0;
       g.strokeStyle = P.line;
       g.lineWidth = 2;
       g.globalAlpha = 0.5 * A;
@@ -307,17 +385,19 @@ export class HelmetHud {
       g.stroke();
 
       // outer gauge: dim track + accent fill (power on the left, thrust on the right)
-      const kOut = 1.03;
+      const kOut = L.portrait ? 1.0 : 1.03;
       const val = s < 0 ? clamp(0.82 + 0.05 * Math.sin(t * 0.7) - this.dip * 0.5) : clamp(0.6 + 0.12 * Math.sin(t * 0.37) + this.dip * 0.3);
+      const ow = (L.portrait ? 2.5 : 3) * u, oo = L.portrait ? 5 : 0;
+      g.lineWidth = ow;
       g.strokeStyle = P.main;
-      g.lineWidth = 3 * u;
       g.globalAlpha = 0.18 * A;
-      g.beginPath(); wingArc(g, L, s, kOut, p0, p1); g.stroke();
+      g.beginPath(); this.outerArc(g, L, s, kOut, p0, p1, oo); g.stroke();
       g.strokeStyle = P.accent;
       g.globalAlpha = 0.85 * A;
-      g.beginPath(); wingArc(g, L, s, kOut, p0, p0 + span * val); g.stroke();
+      g.beginPath(); this.outerArc(g, L, s, kOut, p0, p0 + span * val, oo); g.stroke();
 
       // pitch indicator: a small triangle riding the inside of the arc
+      if (!labels) continue;
       const ph = mid + Math.sin(t * 0.45 + s) * half * 0.55;
       wingPt(L, s, 1, ph, pt);
       const ix = pt.x - pt.nx * 16 * u, iy = pt.y - pt.ny * 16 * u;
@@ -332,8 +412,18 @@ export class HelmetHud {
       g.fill();
       g.font = L.F.tiny;
       g.textAlign = s < 0 ? 'left' : 'right';
+      g.textBaseline = 'middle';
       g.fillText(`${s < 0 ? 'PITCH' : 'ROLL'} ${(Math.sin(t * 0.45 + s) * 12).toFixed(1)}°`, ix - pt.nx * 6 * u, iy - pt.ny * 6 * u);
     }
+  }
+
+  // The outer gauge; on portrait phones it runs just inside the main arc
+  // (there is no room outside it).
+  outerArc(g, L, s, k, p0, p1, inset) {
+    if (!inset) { wingArc(g, L, s, k, p0, p1); return; }
+    const rx = L.rx - inset, ry = L.ry - inset;
+    if (s < 0) g.ellipse(L.cx, L.cy, rx, ry, 0, Math.PI + p0, Math.PI + p1);
+    else g.ellipse(L.cx, L.cy, rx, ry, 0, -p1, -p0);
   }
 
   // Heading tape under the mode bar.
@@ -374,7 +464,7 @@ export class HelmetHud {
     g.beginPath();
     g.moveTo(x - half, y - 2); g.lineTo(x + half, y - 2);
     g.stroke();
-    g.globalAlpha = 0.9 * A;
+    g.globalAlpha = 0.95 * A;
     g.fillStyle = P.text;
     g.font = L.F.num;
     g.textBaseline = 'top';
@@ -396,29 +486,29 @@ export class HelmetHud {
     g.font = L.F.bold;
     g.fillStyle = P.text;
     g.fillText(typed(`${P.ai} ONLINE`, line(0)), x + 11 * u, y);
-    y += 15 * u;
+    y += 16 * u;
     if (!L.compact && !L.portrait) {
       g.font = L.F.tiny;
       g.fillStyle = P.main;
-      g.globalAlpha = 0.75 * A;
+      g.globalAlpha = 0.9 * A;
       g.fillText(typed(P.sub, line(1)), x, y);
       y += 22 * u;
     } else y += 6 * u;
     // PWR
     const pwr = 400 + Math.round(Math.sin(t * 0.7) * 3 + Math.sin(t * 2.3)) - Math.round(this.dip * 70);
-    g.globalAlpha = 0.7 * A * line(2);
+    g.globalAlpha = 0.85 * A * line(2);
     g.font = L.F.tiny;
     g.fillStyle = P.main;
     g.fillText('PWR', x, y);
     g.globalAlpha = A * line(2);
     g.font = L.F.big;
     g.fillStyle = this.dip > 0.3 && Math.sin(t * 20) > 0 ? P.alert : P.text;
-    g.fillText(typed(`${pwr}%`, line(2)), x + 26 * u, y + 2 * u);
-    y += (L.portrait || L.compact ? 20 : 28) * u;
+    g.fillText(typed(`${pwr}%`, line(2)), x + 28 * u, y + 2 * u);
+    y += (L.portrait || L.compact ? 21 : 28) * u;
     // ARC REACTOR with a segmented bar
     const arc = Math.round(98 - this.dip * 9 + Math.sin(t * 0.21));
-    const bw = (L.portrait ? 104 : L.compact ? 120 : 160) * u;
-    g.globalAlpha = 0.85 * A * line(3);
+    const bw = (L.portrait ? 112 : L.compact ? 120 : 164) * u;
+    g.globalAlpha = 0.95 * A * line(3);
     g.font = L.F.small;
     g.fillStyle = P.main;
     g.fillText(typed('ARC REACTOR', line(3)), x, y);
@@ -426,8 +516,8 @@ export class HelmetHud {
     g.fillStyle = P.text;
     g.fillText(`${arc}%`, x + bw, y);
     g.textAlign = 'left';
-    this.segBar(g, x, y + 7 * u, bw, 4 * u, 20, (arc / 100) * line(3), P.line, A * line(3), 0);
-    y += 22 * u;
+    this.segBar(g, x, y + 8 * u, bw, 4 * u, 20, (arc / 100) * line(3), P.line, A * line(3), 0);
+    y += 23 * u;
     if (L.rplRows) this.drawRpl(g, L, x, y, line(4), A, info, t);
   }
 
@@ -435,19 +525,19 @@ export class HelmetHud {
   drawRpl(g, L, x, y, k, A, info, t) {
     if (k <= 0.001) return;
     const P = this.pal, u = L.u;
-    const bw = (L.portrait ? 64 : 92) * u;
+    const bw = (L.portrait ? 62 : 92) * u, lx = 54 * u;
     g.textBaseline = 'middle';
     for (const r of info.rpl) {
       g.textAlign = 'left';
       g.font = L.F.small;
       g.fillStyle = P.main;
-      g.globalAlpha = 0.85 * A * k;
+      g.globalAlpha = 0.95 * A * k;
       g.fillText(`RPLSR ${r.label}`, x, y);
       const col = r.state === 'FIRE' ? P.alert : r.state === 'READY' ? P.accent : P.line;
-      this.segBar(g, x + 50 * u, y - 2 * u, bw, 4 * u, 10, r.charge, col, A * k, r.state === 'READY' ? t : 0);
+      this.segBar(g, x + lx, y - 2 * u, bw, 4 * u, 10, r.charge, col, A * k, r.state === 'READY' ? t : 0);
       g.fillStyle = r.state === 'STBY' || r.state === 'OFFLINE' ? P.main : col;
-      g.globalAlpha = (r.state === 'READY' && Math.sin(t * 14) < 0 ? 0.45 : 0.95) * A * k;
-      g.fillText(r.state === 'CHRG' ? `${Math.round(r.charge * 100)}%` : r.state, x + 56 * u + bw, y);
+      g.globalAlpha = (r.state === 'READY' && Math.sin(t * 14) < 0 ? 0.5 : 1) * A * k;
+      g.fillText(r.state === 'CHRG' ? `${Math.round(r.charge * 100)}%` : r.state, x + lx + 6 * u + bw, y);
       y += 15 * u;
     }
   }
@@ -457,7 +547,7 @@ export class HelmetHud {
     const on = Math.round(clamp(v) * n);
     g.fillStyle = color;
     for (let i = 0; i < n; i++) {
-      g.globalAlpha = (i < on ? (pulse ? 0.7 + 0.3 * Math.sin(pulse * 12 - i * 0.6) : 0.9) : 0.16) * A;
+      g.globalAlpha = (i < on ? (pulse ? 0.7 + 0.3 * Math.sin(pulse * 12 - i * 0.6) : 0.95) : 0.2) * A;
       g.fillRect(x + i * (sw + gap), y, sw, h);
     }
   }
@@ -479,7 +569,7 @@ export class HelmetHud {
     const tight = L.portrait || L.compact;
     if (tight) rows.splice(2, 1);
     if (L.compact) rows.length = 2;
-    const lw = (L.compact ? 150 : tight ? 118 : 132) * u;
+    const lw = (L.compact ? 124 : tight ? 118 : 150) * u;
     g.textBaseline = 'middle';
     rows.forEach(([lbl, val, col], i) => {
       const kk = clamp(k * 5 - i);
@@ -487,7 +577,7 @@ export class HelmetHud {
       g.textAlign = 'left';
       g.font = L.F.small;
       g.fillStyle = P.main;
-      g.globalAlpha = 0.75 * A * kk;
+      g.globalAlpha = 0.9 * A * kk;
       g.fillText(lbl, x - lw, y);
       g.textAlign = 'right';
       g.font = L.F.num;
@@ -502,11 +592,11 @@ export class HelmetHud {
     if (kk <= 0) return;
     const w = lw, h = 18 * u, x0 = x - w;
     y += 4 * u;
-    g.globalAlpha = 0.25 * A * kk;
+    g.globalAlpha = 0.3 * A * kk;
     g.strokeStyle = P.main;
     g.lineWidth = 1;
     g.strokeRect(x0, y, w, h);
-    g.globalAlpha = 0.85 * A * kk;
+    g.globalAlpha = 0.9 * A * kk;
     g.strokeStyle = P.line;
     g.beginPath();
     for (let i = 0; i <= 40; i++) {
@@ -600,7 +690,7 @@ export class HelmetHud {
       g.moveTo(cx, cy - d); g.lineTo(cx + d, cy); g.lineTo(cx, cy + d); g.lineTo(cx - d, cy);
       g.closePath(); g.fill();
     }
-    g.globalAlpha = 0.7 * A * k;
+    g.globalAlpha = 0.8 * A * k;
     g.font = L.F.tiny;
     g.fillStyle = P.main;
     g.textAlign = 'center';
@@ -618,7 +708,6 @@ export class HelmetHud {
     g.fillStyle = m.color;
     g.textAlign = L.msg.align;
     g.textBaseline = 'middle';
-    const txt = `▲ ${m.text}`;
-    g.fillText(txt, L.msg.x, L.msg.y);
+    g.fillText(`▲ ${m.text}`, L.msg.x, L.msg.y);
   }
 }

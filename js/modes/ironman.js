@@ -2,8 +2,9 @@
 // lock on every hand, palm repulsors you charge with an open hand and fire
 // by pushing it at the camera, and a two-palm unibeam.
 //
-// HUD: ironman-hud.js · repulsors + target lock: ironman-repulsor.js ·
-// cinematic grade + visor + blast light: ironman-gl.js · helpers: ironman-fx.js
+// HUD: ironman-hud.js · helmet faceplate: ironman-visor.js · repulsors +
+// target lock: ironman-repulsor.js · cinematic grade + blast light:
+// ironman-gl.js · helpers: ironman-fx.js
 
 import { HAND_CONNECTIONS } from '../gestures.js';
 import { HelmetHud } from './ironman-hud.js';
@@ -95,7 +96,7 @@ export default {
   },
 
   setOption(id, app) {
-    S.hud.setPalette(id);
+    if (S.hud.setPalette(id)) { copyGL(S.gl, S.hud.pal, 1); return; }
     // power down, then the new suit boots up
     app.sfx.tone({ type: 'sawtooth', f0: 600, f1: 90, dur: 0.22, vol: 0.05 });
     app.sfx.tone({ type: 'sine', f0: 300, f1: 1400, dur: 0.35, vol: 0.06, delay: 0.25 });
@@ -104,10 +105,10 @@ export default {
   // HUD reactions to what the repulsors do.
   onRepulsor(type, T, app) {
     const hud = S.hud, P = hud.pal, t = app.frame ? app.frame.t : 0;
-    if (type === 'fire') { hud.say('REPULSOR DISCHARGE', P.alert, t, 1.1); hud.dip = Math.min(1, hud.dip + 0.35); }
+    if (type === 'fire') { hud.say('REPULSOR DISCHARGE', P.alert, t, 1.1); hud.dip = Math.min(1, hud.dip + 0.35); hud.flare = 1; }
     else if (type === 'fizzle') hud.say('CHARGE ABORTED', P.main, t, 1.0);
     else if (type === 'uniStart') hud.say('UNIBEAM ALIGNED · HOLD STEADY', P.accent, t, 1.2);
-    else if (type === 'unibeam') { hud.say('UNIBEAM DISCHARGE', P.alert, t, 1.8); hud.dip = 1; }
+    else if (type === 'unibeam') { hud.say('UNIBEAM DISCHARGE', P.alert, t, 1.8); hud.dip = 1; hud.flare = 1.5; }
     else if (type === 'ready' && t - S.lastReadyMsg > 5 && !S.rep.uni.on) {
       S.lastReadyMsg = t;
       hud.say('REPULSOR READY · PUSH TO FIRE', P.accent, t, 1.4);
@@ -130,66 +131,75 @@ export default {
     renderSuit(gfx, {
       grade: on, lo: G.lo, hi: G.hi, sat: lerp(1, G.sat, on), expo: lerp(1, G.expo, on),
       visor: on, hud: G.hud, beam: G.beam,
-      flash: st.flash, shake: S.rep.shake, blast: st.blast, lights: st.lights,
+      flash: st.flash, shake: S.rep.shake, blast: st.blast, wave: st.wave, lights: st.lights,
     });
   },
 
+  // Light first (cores, blasts, sparks), then the dark helmet faceplate over
+  // it, then the holographic layer (HUD, gauntlet lines, reticles) on top.
   draw2D(ctx, frame, app) {
     const P = S.hud.pal;
+    const on = S.on * S.on * (3 - 2 * S.on);
     const g = S.hud.begin(frame, app);
-    S.hud.draw(g, frame, S.rep.info(frame));
+    S.rep.band = S.hud.L;
+    S.hud.draw(g, frame, S.rep.info(frame), on);
     drawSkeletons(g, frame, P);
     S.rep.drawReticles(g, frame, P);
-    S.hud.composite(ctx, frame, S.rep.shake);
     S.rep.drawEnergy(ctx, frame, P);
+    S.hud.drawFrame(ctx, on);
+    S.hud.composite(ctx, frame, S.rep.shake);
   },
 
+  // Scenarios hold each pose long enough to work at headless frame rates
+  // (5-10 fps): poses take ~2 frames to confirm.
   simScenarios: {
     // Right palm held up, still: charges, then fires by holding (every ~1.9 s).
     charge: (t) => [
-      { id: 'R', hand: 'right', pose: 'open', x: 0.66 + Math.sin(t * 0.7) * 0.015, y: 0.8 + Math.sin(t * 1.1) * 0.01, size: 0.17, rot: -0.12 },
+      { id: 'R', hand: 'right', pose: 'open', x: 0.66 + Math.sin(t * 0.7) * 0.015, y: 0.78 + Math.sin(t * 1.1) * 0.01, size: 0.17, rot: -0.12 },
     ],
-    // Charge, then a quick push toward the camera (the palm grows) fires.
+    // Open palm charges, then a quick push toward the camera (the palm grows
+    // 40 % in 0.12 s) fires; a fist between shots resets it.
     push: (t) => {
-      const u = t < 1 ? 1.8 : (t - 1) % 2;   // starts with a fist while the page loads
+      const u = t < 0.8 ? 2.2 : (t - 0.8) % 2.6;
       let size = 0.15, pose = 'open';
-      if (u >= 1 && u < 1.18) size = 0.15 + 0.065 * clamp((u - 1) / 0.12);
-      else if (u >= 1.18 && u < 1.6) size = 0.215 - 0.065 * clamp((u - 1.18) / 0.42);
-      if (u >= 1.6) pose = 'fist';
-      return [{ id: 'R', hand: 'right', pose, x: 0.66, y: 0.8, size, rot: -0.1 }];
+      if (u >= 1 && u < 1.12) size = 0.15 + 0.06 * clamp((u - 1) / 0.12);
+      else if (u >= 1.12 && u < 2) size = 0.21 - 0.06 * clamp((u - 1.5) / 0.4);
+      if (u >= 2) pose = 'fist';
+      return [{ id: 'R', hand: 'right', pose, x: 0.66, y: 0.78, size, rot: -0.1 }];
     },
-    // Two hands far apart taking turns: charge → push → fist.
+    // Two open palms far apart, taking turns: each charges and pushes, then
+    // rests in a fist while the other one fires.
     dual: (t) => {
-      const hand = (id, side, x, rot, phase) => {
-        const u = t < 1.2 ? 2 : (t - 1.2 + phase) % 2.6;   // fists while the page loads
-        let size = 0.15, pose = u < 1.3 ? 'open' : 'fist';
-        if (u >= 0.95 && u < 1.1) size = 0.15 + 0.06 * clamp((u - 0.95) / 0.1);
-        else if (u >= 1.1 && u < 1.3) size = 0.21;
-        return { id, hand: side, pose, x, y: 0.8, size, rot };
+      const hand = (id, side, x, rot, delay) => {
+        const tt = t - 0.8 - delay, u = tt < 0 ? 2.5 : tt % 3;
+        let size = 0.15;
+        if (u >= 1 && u < 1.12) size = 0.15 + 0.06 * clamp((u - 1) / 0.12);
+        else if (u >= 1.12 && u < 1.95) size = 0.21 - 0.06 * clamp((u - 1.5) / 0.4);
+        return { id, hand: side, pose: u < 1.95 ? 'open' : 'fist', x, y: 0.78, size, rot };
       };
-      return [hand('L', 'left', 0.22, 0.15, 0), hand('R', 'right', 0.78, -0.15, 1.3)];
+      return [hand('L', 'left', 0.24, 0.15, 0), hand('R', 'right', 0.76, -0.15, 1.5)];
     },
-    // Both palms come together, hold → unibeam, then apart and rest.
+    // Both palms come together and hold → unibeam, then apart and rest.
     unibeam: (t) => {
       const u = t % 5;
-      const k = clamp((u - 0.6) / 0.8) * (1 - clamp((u - 2.6) / 0.6));
-      const pose = u < 0.6 || u > 3.25 ? 'fist' : 'open';
+      const k = clamp((u - 0.5) / 0.7) * (1 - clamp((u - 2.8) / 0.5));
+      const pose = u < 0.5 || u > 3.3 ? 'fist' : 'open';
       const e = k * k * (3 - 2 * k);
       return [
-        { id: 'L', hand: 'left', pose, x: 0.3 + 0.13 * e, y: 0.82, size: 0.16, rot: 0.1 + 0.15 * e },
-        { id: 'R', hand: 'right', pose, x: 0.7 - 0.13 * e, y: 0.82, size: 0.16, rot: -0.1 - 0.15 * e },
+        { id: 'L', hand: 'left', pose, x: 0.3 + 0.13 * e, y: 0.8, size: 0.16, rot: 0.1 + 0.15 * e },
+        { id: 'R', hand: 'right', pose, x: 0.7 - 0.13 * e, y: 0.8, size: 0.16, rot: -0.1 - 0.15 * e },
       ];
     },
-    // Charge up, then close the fist: the charge fizzles.
+    // Charge up, then close the fist before it fires: the charge fizzles.
     cancel: (t) => {
-      const u = t % 2.2;
-      return [{ id: 'R', hand: 'right', pose: u < 1.05 ? 'open' : 'fist', x: 0.64, y: 0.8, size: 0.16, rot: -0.1 }];
+      const u = t % 2.4;
+      return [{ id: 'R', hand: 'right', pose: u < 1.0 ? 'open' : 'fist', x: 0.64, y: 0.78, size: 0.16, rot: -0.1 }];
     },
     // Hands come and go: reticles snap on (LOCK) and release (LOST).
     lock: (t) => {
       const u = t % 4, out = [];
-      if (u < 2.6) out.push({ id: 'R', hand: 'right', pose: 'peace', x: 0.62 + Math.sin(t * 1.3) * 0.1, y: 0.78, size: 0.16, rot: -0.1 });
-      if (u > 1.0 && u < 3.6) out.push({ id: 'L', hand: 'left', pose: 'fist', x: 0.3, y: 0.8 + Math.sin(t * 2) * 0.03, size: 0.15, rot: 0.15 });
+      if (u < 2.6) out.push({ id: 'R', hand: 'right', pose: 'peace', x: 0.62 + Math.sin(t * 1.3) * 0.1, y: 0.76, size: 0.16, rot: -0.1 });
+      if (u > 1.0 && u < 3.6) out.push({ id: 'L', hand: 'left', pose: 'fist', x: 0.3, y: 0.78 + Math.sin(t * 2) * 0.03, size: 0.15, rot: 0.15 });
       return out;
     },
   },

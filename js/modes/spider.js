@@ -33,17 +33,20 @@ const S = {
   clearHold: 0, clearLatch: false, clearFlash: -99,
 };
 
-// The tracked face, unless it is stale (the core keeps the last one around
-// when face tracking is switched off).
+// The tracked face (the core clears it whenever needs().face is off).
 function faceOf(frame) {
   const f = frame.face;
-  return f && f.lm && !(frame.now - f.seen > 1500) ? f : null;
+  return f && f.lm && f.lm.length >= 468 ? f : null;
 }
 
 // Where the head is (CSS px). Falls back to the usual selfie framing.
 function headOf(frame) {
   const f = faceOf(frame) || (frame.t - S.lastFaceT < 2 ? S.lastFace : null);
-  if (f && f.width > 10) return { x: f.center.x, y: f.center.y, r: Math.max(f.width, f.height) * 0.58 };
+  if (f && f.width > 10) {
+    // nudged up toward the forehead, like the mask's dome
+    const top = f.lm[10], chin = f.lm[152];
+    return { x: f.center.x + (top.x - chin.x) * 0.1, y: f.center.y + (top.y - chin.y) * 0.1, r: Math.max(f.width, f.height) * 0.6 };
+  }
   const m = Math.min(frame.W, frame.H);
   return { x: frame.W / 2, y: frame.H * 0.4, r: m * 0.17 };
 }
@@ -167,8 +170,10 @@ export default {
       if (h.pose === 'spider') st.lastSpider = t;
       if (t - st.lastSpider <= HOLD_GRACE) hold.set(h.id, h.lm[0]);
       // spider-sense: a fast hand near the head (speed relative to the short
-      // side, so a portrait phone needs the same real motion as a laptop)
-      if (!h.ghost && h.speed > minSide * 1.6 && Math.hypot(h.palm.x - head.x, h.palm.y - head.y) < head.r * 3.2) S.sense.trigger(t, app);
+      // side, so a portrait phone needs the same real motion as a laptop).
+      // Not while that hand is aiming or just fired: that is the user's own web.
+      if (!h.ghost && h.pose !== 'spider' && t - st.lastFire > 0.6 && h.speed > minSide * 1.6
+        && Math.hypot(h.palm.x - head.x, h.palm.y - head.y) < head.r * 3.2) S.sense.trigger(t, app);
     }
     S.webs.update(frame, hold, app);
 
@@ -194,10 +199,10 @@ export default {
     renderComic(gfx, { grade: c.grade, bg, pal: c.miles, glitch: c.glitch, head: S.head });
   },
 
-  draw2D(ctx, frame) {
+  draw2D(ctx, frame, app) {
     const c = S.cur;
     S.mask.draw(ctx, frame, { amt: c.mask, miles: c.miles, comic: c.grade });
-    S.sense.draw(ctx, frame, headOf(frame));
+    if (S.sense.active) S.sense.draw(ctx, frame, headOf(frame), app.ui?.bands ? app.ui.bands().top : 0);
     S.webs.draw(ctx, frame);
     drawHands(ctx, frame);
     S.webs.drawTexts(ctx, frame);
@@ -205,18 +210,20 @@ export default {
 
   simScenarios: {
     // Right hand: open → 🤟 aimed somewhere new → hold (tether) → open …
+    // (Poses are held ≥0.9 s so they still register when face + segmentation
+    // models slow a headless test browser down to a few frames per second.)
     thwip: (t) => {
-      const P = 3.2, n = Math.floor(t / P), u = t % P;
+      const P = 3.4, n = Math.floor(t / P), u = t % P;
       const aims = [0.55, -0.5, 0.95, -0.15, 0.3, -0.85];
       const a0 = aims[(n + aims.length - 1) % aims.length], a1 = aims[n % aims.length];
       const rot = a0 + (a1 - a0) * clamp(u / 0.45);
-      const pose = u > 0.55 && u < 2.4 ? 'spider' : 'open';
+      const pose = u > 0.55 && u < 2.5 ? 'spider' : 'open';
       return [{ id: 'R', hand: 'right', pose, x: 0.64 + Math.sin(t * 0.9) * 0.04, y: 0.8 + Math.sin(t * 1.3) * 0.02, size: 0.17, rot }];
     },
     // Both hands taking turns.
     dual: (t) => {
-      const P = 1.5, n = Math.floor(t / P), u = t % P;
-      const fireL = n % 2 === 0, on = u > 0.25 && u < 1.15;
+      const P = 2.2, n = Math.floor(t / P), u = t % P;
+      const fireL = n % 2 === 0, on = u > 0.2 && u < 1.5;
       const aimsL = [-0.55, -0.2, -0.9, -0.4], aimsR = [0.5, 0.2, 0.85, 0.35];
       return [
         { id: 'L', hand: 'left', pose: fireL && on ? 'spider' : 'open', x: 0.3, y: 0.8, size: 0.16, rot: aimsL[Math.floor(n / 2) % 4] },
@@ -227,24 +234,24 @@ export default {
     tether: (t) => {
       const P = 8, u = t % P;
       const pose = u > 0.4 && u < 6.4 ? 'spider' : 'open';
-      const a = u * 1.1;
+      const a = t * 1.1;   // continuous across loops (no teleport = no false spider-sense)
       return [{ id: 'R', hand: 'right', pose, x: 0.56 + Math.sin(a) * 0.2, y: 0.72 + Math.sin(a * 1.7) * 0.08, size: 0.17, rot: 0.45 + Math.sin(a * 0.8) * 0.15 }];
     },
     // Shoot a few, then both fists to clear.
     clear: (t) => {
-      const P = 7.5, u = t % P;
-      if (u > 4.4 && u < 6.0) {
+      const P = 9, u = t % P;
+      if (u > 5.6 && u < 7.8) {
         return [
           { id: 'L', hand: 'left', pose: 'fist', x: 0.36, y: 0.78, size: 0.16, rot: -0.1 },
           { id: 'R', hand: 'right', pose: 'fist', x: 0.64, y: 0.78, size: 0.16, rot: 0.1 },
         ];
       }
-      const n = Math.floor(u / 0.55), v = u % 0.55;
-      const on = u < 4.4 && v > 0.12 && v < 0.42;
+      const n = Math.floor(u / 1.4), v = u % 1.4;
+      const on = u < 5.6 && v > 0.15 && v < 1.1;
       const left = n % 2 === 0;
       return [
-        { id: 'L', hand: 'left', pose: on && left ? 'spider' : 'open', x: 0.32, y: 0.8, size: 0.16, rot: [-0.3, -0.7, -0.1, -0.95][(n >> 1) % 4] },
-        { id: 'R', hand: 'right', pose: on && !left ? 'spider' : 'open', x: 0.68, y: 0.8, size: 0.16, rot: [0.3, 0.75, 0.05, 1.0][(n >> 1) % 4] },
+        { id: 'L', hand: 'left', pose: on && left ? 'spider' : 'open', x: 0.32, y: 0.8, size: 0.16, rot: [-0.3, -0.75][(n >> 1) % 2] },
+        { id: 'R', hand: 'right', pose: on && !left ? 'spider' : 'open', x: 0.68, y: 0.8, size: 0.16, rot: [0.35, 0.9][(n >> 1) % 2] },
       ];
     },
     // A fast swipe past the head, back and forth.
@@ -302,19 +309,30 @@ function drawHands(ctx, frame) {
     }
     ctx.globalCompositeOperation = 'source-over';
     if (charging && h.is('fist')) {
+      // charge meter: dark track (reads on bright walls) + glowing red arc
       const p = clamp(S.clearHold / CLEAR_HOLD);
-      const r = s * 0.85;
-      ctx.globalAlpha = 0.35;
+      const x = h.palm.x, y = h.palm.y, r = s * (0.8 + 0.08 * Math.sin(t * 18) * p);
+      const a0 = -Math.PI / 2, a1 = a0 + p * Math.PI * 2;
+      ctx.globalAlpha = 0.45;
+      ctx.strokeStyle = '#0a0206';
+      ctx.lineWidth = 9;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 0.6;
       ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(h.palm.x, h.palm.y, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'lighter';
-      drawGlow(ctx, h.palm.x, h.palm.y, r * 1.4, '#ff2a3d', 0.35 * p);
-      ctx.globalCompositeOperation = 'source-over';
+      drawGlow(ctx, x, y, r * 1.5, '#ff2a3d', 0.2 + 0.4 * p);
       ctx.strokeStyle = '#ff2a3d';
+      ctx.lineWidth = 12;
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath(); ctx.arc(x, y, r, a0, a1); ctx.stroke();
+      ctx.globalAlpha = 1;
       ctx.lineWidth = 5;
-      ctx.beginPath(); ctx.arc(h.palm.x, h.palm.y, r, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, r, a0, a1); ctx.stroke();
+      drawGlow(ctx, x + Math.cos(a1) * r, y + Math.sin(a1) * r, Math.max(8, s * 0.13), '#ffffff', 0.9);
+      ctx.globalCompositeOperation = 'source-over';
     }
   }
   // flash where the fists were when the webs let go

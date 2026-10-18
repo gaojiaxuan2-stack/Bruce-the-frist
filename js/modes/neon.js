@@ -26,6 +26,10 @@ const CLEAR_HOLD = 0.6;    // s ✊ to clear
 const UNDO_HOLD = 0.5;     // s ✌️ to undo, then every UNDO_REPEAT while held
 const UNDO_REPEAT = 0.75;
 const TRAIL_LIFE = 0.3;    // s the comet tail lasts
+const IGNITE = 0.45;       // s a finished tube flickers on before it settles
+const RESUME = 0.6;        // s a line cut by a tracking dropout can be picked up again
+const LIFT_GRACE = 0.1;    // s a pinch may flicker open before the line really ends
+const CLEAR_AFTER_PEN = 0.35;  // s after drawing before a ✊ may start clearing
 const HOLD_COLS = { clear: '#ff4d6d', undo: '#38f9ff' };
 const HINTS = {
   start: '<b>Pinch 🤏</b> thumb + index, then move to draw',
@@ -38,17 +42,20 @@ const S = {
   hands: new Map(),         // hand id -> per-hand state
   colorIdx: 0, enterT: 0, t: 0, W: 1, H: 1, sc: 1,
   flash: 0, flashX: 0, flashY: 0,
-  hintKey: null, safeTop: 0, safeBot: 99999, hudAt: -9,
+  hintKey: null, band: { top: 0, bottom: 99999 },
+  orphan: null,             // { s, t, x, y, vx, vy }: the line of a hand the tracker lost
   buzzOn: false, lastEndSfx: -9, nextCrackle: 0, nextChime: 0, fireAcc: 0, starAcc: 0,
-  items: [],                // reused render list
+  settled: [], live: [],    // reused render lists
   light: { L: new Float32Array(32), LC: new Float32Array(24) },
   cells: new Float32Array(6 * 8),
   order: [0, 1, 2, 3, 4, 5],
   tmp: { x: 0, y: 0 },
+  mood: { dark: 0, flash: 0, fx: 0, fy: 0, top: 0, bottom: 0 },
 };
 
 const scOf = (h) => clamp(h.size / 110, 0.65, 1.6);
 const brushOf = (mode) => (BRUSHES[mode.option] ? mode.option : 'neon');
+const inBand = (y) => y > S.band.top && y < S.band.bottom;
 
 // Colour of the next stroke for a brush.
 function nextLook(style) {
@@ -67,12 +74,14 @@ function previewCss(style, t) {
   return nextLook(style).css;
 }
 
+const RAINBOW_TIPS = [];
 function fingerCols(style, t) {
   if (style === 'fire') return FIRE_COLS;
   if (style === 'stars') return STAR_COLS;
   if (style === 'rainbow') {
     const o = Math.floor(t * 4);
-    return [0, 2, 4, 6, 8].map((k) => RAINBOW_COLS[(k + o) % 12]);
+    for (let k = 0; k < 5; k++) RAINBOW_TIPS[k] = RAINBOW_COLS[(k * 2 + o) % 12];
+    return RAINBOW_TIPS;
   }
   return PALETTE;
 }
@@ -81,9 +90,10 @@ function handState(h) {
   let st = S.hands.get(h.id);
   if (!st) {
     st = {
-      pen: null, penT: 0, px: 0, py: 0, vx: 0, vy: 0, soft: 0, armed: true, charge: 0,
+      pen: null, penT: 0, px: 0, py: 0, vx: 0, vy: 0, soft: 0, armed: true, want: false, charge: 0,
+      liftT: -1, lastPen: -9,
       holdKind: null, holdT: 0, holdN: 0, holdP: 0, holdA: 0, holdCol: HOLD_COLS.clear, holdLabel: '',
-      tips: new Float32Array(10), tipAcc: new Float32Array(5), tipsOn: false,
+      tips: new Float32Array(10), tipAcc: new Float32Array(5), tipsOn: false, openA: 0,
       trail: { buf: new Float32Array(3 * 24), N: 24, head: 0, count: 0 },
       seen: 0, x: 0, y: 0, r: 40,
     };
@@ -92,38 +102,29 @@ function handState(h) {
   return st;
 }
 
-// Where the HUD bars are (refreshed once a second).
-function hudBounds(t, H) {
-  if (t - S.hudAt < 1) return;
-  S.hudAt = t;
-  try {
-    let top = 0;
-    for (const sel of ['#modes', '.status']) {
-      const el = document.querySelector(sel);
-      if (el) top = Math.max(top, el.getBoundingClientRect().bottom);
-    }
-    let bot = H;
-    for (const id of ['hint', 'options']) {
-      const el = document.getElementById(id);
-      if (!el || !el.offsetParent) continue;
-      const r = el.getBoundingClientRect();
-      if (r.height) bot = Math.min(bot, r.top);
-    }
-    S.safeTop = (top || 110) + 6;
-    S.safeBot = bot - 6;
-  } catch (e) { /* no DOM */ }
-}
-
 // --- pen -----------------------------------------------------------------------
 
 function startPen(h, st, mode, app, t) {
+  const p = h.pinchPoint, sc = scOf(h);
+  // The tracker dropped the hand mid-line and found it again: carry on.
+  // (Another hand starting a line elsewhere leaves the orphan alone.)
+  const o = S.orphan;
+  const gap = o ? t - o.t : 0;
+  if (o && (gap >= RESUME || o.s.dying || !S.ink.list.includes(o.s))) S.orphan = null;
+  else if (o && Math.hypot(p.x - o.x - o.vx * gap, p.y - o.y - o.vy * gap) < 80 * sc + 0.4 * Math.hypot(o.vx, o.vy) * gap) {
+    S.orphan = null;
+    o.s.endT = -1;
+    st.pen = o.s; st.penT = t - SETTLE; st.px = p.x; st.py = p.y; st.vx = 0; st.vy = 0;
+    st.soft = 0; st.armed = false; st.want = false; st.liftT = -1;
+    return;
+  }
   const style = brushOf(mode), look = nextLook(style);
   S.colorIdx++;
-  const p = h.pinchPoint, sc = scOf(h);
   const s = new Stroke(style, look.col, look.css, look.hue, sc, t);
   s.add(p.x, p.y, 1);
   S.ink.add(s);
-  st.pen = s; st.penT = t; st.px = p.x; st.py = p.y; st.vx = 0; st.vy = 0; st.soft = 0; st.armed = false;
+  st.pen = s; st.penT = t; st.px = p.x; st.py = p.y; st.vx = 0; st.vy = 0; st.soft = 0; st.armed = false; st.want = false;
+  st.liftT = -1;
   S.fx.burst(p.x, p.y, strokeColors(s), 10, sc, 150);
   app.sfx.tone({ type: 'triangle', f0: 420, f1: 840, dur: 0.07, vol: 0.06 });
   app.sfx.noise({ dur: 0.05, vol: 0.05, type: 'highpass', f0: 4000 });
@@ -134,21 +135,25 @@ function continuePen(st, t) {
   const old = st.pen;
   old.endT = t; old.cont = true;
   const s = new Stroke(old.style, old.col, old.css, old.hue, old.scale, old.born);
+  s.seed = old.seed; s.chain = old.chain;
   s.add(old.lastX, old.lastY, 1);
   S.ink.add(s);
   st.pen = s;
 }
 
-function endPen(st, t, app) {
+// lost: the hand vanished (no release) — keep the line whole and resumable.
+function endPen(st, t, app, lost = false) {
   const s = st.pen;
   st.pen = null;
   st.armed = false;
+  st.want = false;
   if (!s) return;
-  s.trimTail(0.75);
+  if (lost) { s.endT = t; S.orphan = { s, t, x: st.px, y: st.py, vx: st.vx, vy: st.vy }; return; }
+  s.trimTail();
   let L = 0;
   for (let i = 1; i < s.n; i++) L += Math.hypot(s.pts[i * 2] - s.pts[i * 2 - 2], s.pts[i * 2 + 1] - s.pts[i * 2 - 1]);
   // A quick tap is not a dot: drop it.
-  if (L < 8 && t - s.born < 0.25) { S.ink.remove(s); return; }
+  if (L < 8 && t - s.born < 0.25 && s.chain === s.id) { S.ink.remove(s); return; }
   s.endT = t;
   if (t - S.lastEndSfx > 0.12) {
     S.lastEndSfx = t;
@@ -190,7 +195,7 @@ const softPinch = (h) => h.pinch >= 0.88 && h.curl.middle < 0.6 && h.pose !== 'f
 // --- erase -----------------------------------------------------------------------
 
 function clearAll(h, app, t) {
-  for (const st of S.hands.values()) if (st.pen) { st.pen.endT = t; st.pen = null; st.armed = false; }
+  for (const st of S.hands.values()) if (st.pen) { st.pen.endT = t; st.pen = null; st.armed = false; st.want = false; }
   const live = S.ink.list.filter((s) => !s.dying);
   if (!live.length) return;
   const sc = scOf(h), small = S.W * S.H < 500000;
@@ -205,12 +210,17 @@ function clearAll(h, app, t) {
   app.sfx.tone({ type: 'sine', f0: 140, f1: 45, dur: 0.35, vol: 0.2 });
 }
 
+// Undo the newest finished line (every piece of it, if it was very long).
 function undo(h, app) {
-  const s = S.ink.lastFinished();
-  if (!s) return false;
-  const sc = scOf(h);
-  s.killDur = 0.6; s.kill = 0; s.shatter = 0;
-  S.fx.dissolve(s, sc, S.W * S.H < 500000 ? 60 : 90);
+  const last = S.ink.lastFinished();
+  if (!last) return false;
+  // (A very long line still being drawn keeps its live piece.)
+  const sc = scOf(h), pieces = S.ink.chainOf(last).filter((s) => s.endT >= 0);
+  const budget = (S.W * S.H < 500000 ? 60 : 90) / pieces.length;
+  for (const s of pieces) {
+    s.killDur = 0.6; s.kill = 0; s.shatter = 0;
+    S.fx.dissolve(s, sc, Math.max(12, Math.round(budget)));
+  }
   S.fx.wave(h.palm.x, h.palm.y, HOLD_COLS.undo, 90 * sc);
   app.sfx.play('pop');
   app.sfx.tone({ type: 'sine', f0: 660, f1: 220, dur: 0.22, vol: 0.06, delay: 0.04 });
@@ -221,8 +231,7 @@ function undo(h, app) {
 
 const lightCol = (s, sMid, t, out) => {
   if (s.style === 'rainbow') {
-    const c = hsv(((s.hue + sMid / 480 - t * 0.28) % 1 + 1) % 1, 0.82, 1);
-    out[0] = c[0]; out[1] = c[1]; out[2] = c[2];
+    hsv(s.hue + sMid / 480 - t * 0.28, 0.82, 1, out);
   } else if (s.style === 'fire') {
     const f = 0.8 + 0.2 * Math.sin(t * 13 + s.seed * 9) * Math.sin(t * 7.3);
     out[0] = f; out[1] = 0.45 * f; out[2] = 0.08 * f;
@@ -233,10 +242,11 @@ const lightCol = (s, sMid, t, out) => {
   return out;
 };
 const LCOL = [0, 0, 0];
+const PCOL = [0, 0, 0];
 
 // Up to 8 lights: pens and pointing fingers first, then strokes clustered on
 // a 3×2 grid (2×3 in portrait). Written in device px.
-function computeLights(frame, d) {
+function computeLights(frame, d, style) {
   const { L, LC } = S.light;
   L.fill(0); LC.fill(0);
   const t = frame.t;
@@ -253,11 +263,12 @@ function computeLights(frame, d) {
     if (st.pen) {
       const s = st.pen;
       lightCol(s, s.len, t, LCOL);
-      put(st.px, st.py, 170 * s.scale, s.style === 'fire' ? 0.7 + 0.25 * Math.random() : 0.75, LCOL);
+      put(st.px, st.py, 150 * s.scale, s.style === 'fire' ? 0.5 + 0.2 * Math.random() : 0.5, LCOL);
     } else if (h.is('point') && !h.overUI) {
-      const style = brushOf(MODE);
-      const c = style === 'fire' ? [1, 0.5, 0.1] : style === 'rainbow' ? hsv((t * 0.33) % 1, 0.8, 1) : nextLook(style).col;
-      put(h.pointer.x, h.pointer.y, 140 * scOf(h), 0.4, c);
+      if (style === 'fire') { PCOL[0] = 1; PCOL[1] = 0.5; PCOL[2] = 0.1; }
+      else if (style === 'rainbow') hsv(t * 0.33, 0.8, 1, PCOL);
+      else { const c = nextLook(style).col; PCOL[0] = c[0]; PCOL[1] = c[1]; PCOL[2] = c[2]; }
+      put(h.pointer.x, h.pointer.y, 130 * scOf(h), 0.35, PCOL);
     }
   }
   const W = S.W, H = S.H, cols = W >= H ? 3 : 2, rows = W >= H ? 2 : 3;
@@ -291,8 +302,6 @@ function computeLights(frame, d) {
 
 // --- the mode --------------------------------------------------------------------
 
-let MODE = null;
-
 export default {
   id: 'neon',
   name: 'NEON DRAW',
@@ -308,18 +317,15 @@ export default {
   simScenarios: SCENARIOS,
 
   init(app) {
-    MODE = this;
     S.fx = new NeonFx(app.W * app.H < 500000 ? 600 : 900);
-    // ?brush=fire, or a scenario named after a brush (?sim=neon:fire).
-    const want = app.params?.get('brush') || (app.params?.get('sim') || '').split(':')[1];
-    if (BRUSHES[want]) this.option = want;
   },
 
   enter(app) {
-    MODE = this;
     S.enterT = app.t;
+    S.t = app.t;
     S.hands.clear();
-    S.hintKey = null; S.hudAt = -9; S.flash = 0;
+    S.orphan = null;
+    S.hintKey = null; S.flash = 0;
     S.fx.clear();
   },
 
@@ -345,24 +351,31 @@ export default {
   update(frame, app) {
     const { t, W, H } = frame;
     const dt = Math.max(0, Math.min(0.1, frame.dt));
+    // Holds are timed in real seconds (frame.dt is capped at 0.1 s, which
+    // would stretch a hold on a struggling device).
+    const holdDt = clamp(t - S.t, 0, 0.25);
     S.t = t; S.W = W; S.H = H;
-    hudBounds(t, H);
+    S.band = app.ui?.bands ? app.ui.bands() : { top: 0, bottom: H };
     S.ink.resize(W, H);
 
     let sum = 0, cnt = 0;
     for (const h of frame.hands) if (!h.ghost) { sum += scOf(h); cnt++; }
     if (cnt) S.sc = sum / cnt;
 
-    // Events: core pinches start a stroke unless the HUD used them.
+    // Events: a pinch the HUD did not use asks for a pen; it goes down as
+    // soon as the pinch is inside the drawing band (between the HUD bars).
     for (const e of frame.events) {
       const h = e.hand;
       if (e.type === 'pinchstart') {
         const st = handState(h);
-        if (e.consumed || h.overUI) { st.armed = false; continue; }
-        if (!st.pen && !h.ghost) startPen(h, st, this, app, t);
+        if (e.consumed || h.overUI) { st.armed = false; st.want = false; continue; }
+        if (!st.pen && !h.ghost) st.want = true;
+      } else if (e.type === 'pinchend') {
+        const st = S.hands.get(h.id);
+        if (st) st.want = false;
       } else if (e.type === 'handleave') {
         const st = S.hands.get(h.id);
-        if (st?.pen) endPen(st, t, app);
+        if (st?.pen) endPen(st, t, app, true);
         S.hands.delete(h.id);
       }
     }
@@ -372,19 +385,22 @@ export default {
     for (const h of frame.hands) {
       const st = handState(h);
       st.seen = t;
-      if (h.overUI) { st.armed = false; st.soft = 0; if (st.pen) endPen(st, t, app); }
+      if (h.overUI) { st.armed = false; st.want = false; st.soft = 0; if (st.pen) endPen(st, t, app); }
 
       // Draw.
       if (st.pen) {
         if (!h.ghost) {
-          if (!penHeld(h)) endPen(st, t, app);
-          else updatePen(h, st, dt, t, app);
+          // A pinch that flickers open for a frame or two keeps its line.
+          if (penHeld(h)) { st.liftT = -1; updatePen(h, st, dt, t, app); }
+          else if (st.liftT < 0) st.liftT = t;
+          else if (t - st.liftT >= LIFT_GRACE) endPen(st, t, app);
         }
-        if (st.pen) { penSpeed = Math.max(penSpeed, Math.hypot(st.vx, st.vy)); penStyle = st.pen.style; }
+        if (st.pen) { st.lastPen = t; penSpeed = Math.max(penSpeed, Math.hypot(st.vx, st.vy)); penStyle = st.pen.style; }
       } else if (!h.ghost && !h.overUI) {
         if (!st.armed && !h.pinching && h.pinch < 0.5) st.armed = true;
-        const y = h.pinchPoint.y;
-        if (st.armed && softPinch(h) && y > S.safeTop && y < S.safeBot) {
+        const inside = inBand(h.pinchPoint.y);
+        if (st.want && penHeld(h) && inside) startPen(h, st, this, app, t);
+        else if (!st.want && st.armed && softPinch(h) && inside) {
           st.soft += dt;
           if (st.soft >= SOFT_START) startPen(h, st, this, app, t);
         } else st.soft = 0;
@@ -396,30 +412,28 @@ export default {
       if (!h.ghost) {
         const kind = st.pen || h.overUI ? null : h.pose === 'fist' ? 'clear' : h.pose === 'peace' ? 'undo' : null;
         if (kind !== st.holdKind) { st.holdKind = kind; st.holdT = 0; st.holdN = 0; st.holdP = 0; }
-        const can = kind === 'clear' ? S.ink.count > 0 : kind === 'undo' ? !!S.ink.lastFinished() : false;
-        let show = false;
-        if (kind && (can || st.holdN) && !(kind === 'clear' && st.holdN)) {
-          if (can) {
-            show = true;
-            st.holdT += dt;
-            const need = kind === 'clear' ? CLEAR_HOLD : st.holdN ? UNDO_REPEAT : UNDO_HOLD;
-            st.holdP = clamp(st.holdT / need);
-            if (st.holdT >= need) {
-              st.holdT = 0; st.holdN++;
-              if (kind === 'clear') clearAll(h, app, t); else undo(h, app);
-            }
+        // A pinch released with curled fingers reads as ✊ for a moment: the
+        // clear gauge waits until the hand has been off the pen briefly.
+        const can = kind === 'clear' ? S.ink.count > 0 && !st.holdN && t - st.lastPen > CLEAR_AFTER_PEN
+          : kind === 'undo' ? !!S.ink.lastFinished() : false;
+        if (can) {
+          st.holdT += holdDt;
+          const need = kind === 'clear' ? CLEAR_HOLD : st.holdN ? UNDO_REPEAT : UNDO_HOLD;
+          st.holdP = clamp(st.holdT / need);
+          if (st.holdT >= need) {
+            st.holdT = 0; st.holdN++;
+            if (kind === 'clear') { clearAll(h, app, t); st.holdP = 1; } else undo(h, app);
           }
         }
-        if (kind) {
-          st.holdCol = HOLD_COLS[kind]; st.holdLabel = kind === 'clear' ? 'CLEAR' : 'UNDO';
-          if (kind === 'clear' && st.holdN) st.holdP = 1;
-        }
-        st.holdA = clamp(st.holdA + (show ? dt * 7 : -dt * 4));
-        st.x = h.palm.x; st.y = h.palm.y; st.r = clamp(h.size * 0.85, 34, 120);
+        if (kind) { st.holdCol = HOLD_COLS[kind]; st.holdLabel = kind === 'clear' ? 'CLEAR' : 'UNDO'; }
+        st.holdA = clamp(st.holdA + (can ? dt * 7 : -dt * 4));
+        st.x = h.palm.x; st.y = h.palm.y; st.r = clamp(h.size * 0.6, 30, 84);
       } else st.holdA = clamp(st.holdA - dt * 4);
 
-      // Glitter from the fingertips of an open hand.
-      if (h.is('open') && !h.overUI && !st.pen) {
+      // Glitter from the fingertips of an open hand (their lights fade in/out).
+      const open = h.is('open') && !h.overUI && !st.pen;
+      st.openA = clamp(st.openA + (open ? dt * 6 : -dt * 5));
+      if (open) {
         const cols = fingerCols(style, t), sc = scOf(h), spacing = 15 * sc;
         for (let i = 0; i < 5; i++) {
           const p = h.lm[FINGER_TIPS[i]];
@@ -442,9 +456,11 @@ export default {
         st.tipsOn = true;
       } else st.tipsOn = false;
 
-      // Comet behind a pointing finger.
-      if (h.is('point')) {
-        const tr = st.trail, p = h.pointer, hd = tr.head * 3;
+      // Comet behind a pointing finger (a stale tail is dropped, never joined).
+      if (h.is('point') && !h.overUI) {
+        const tr = st.trail, p = h.pointer;
+        if (tr.count && t - tr.buf[tr.head * 3 + 2] > TRAIL_LIFE) tr.count = 0;
+        const hd = tr.head * 3;
         if (!tr.count || Math.hypot(p.x - tr.buf[hd], p.y - tr.buf[hd + 1]) > 1.5) {
           tr.head = (tr.head + 1) % tr.N;
           tr.buf[tr.head * 3] = p.x; tr.buf[tr.head * 3 + 1] = p.y; tr.buf[tr.head * 3 + 2] = t;
@@ -455,7 +471,7 @@ export default {
 
     // Forget hands that vanished without an event.
     for (const [id, st] of S.hands) {
-      if (t - st.seen > 0.5) { if (st.pen) endPen(st, t, app); S.hands.delete(id); }
+      if (t - st.seen > 0.5) { if (st.pen) endPen(st, t, app, true); S.hands.delete(id); }
     }
 
     // Finished strokes keep living: flames, glints.
@@ -466,7 +482,7 @@ export default {
       else if (s.style === 'stars') starLen += s.len;
     }
     if (fireLen > 0) {
-      S.fireAcc = Math.min(4, S.fireAcc + dt * Math.min(120, fireLen / 9));
+      S.fireAcc = Math.min(4, S.fireAcc + dt * Math.min(90, fireLen / 12));
       while (S.fireAcc >= 1) { S.fireAcc -= 1; const s = pickByLen('fire', fireLen); if (s) { s.sample(S.tmp); S.fx.ember(S.tmp.x, S.tmp.y, s.scale); } }
     }
     if (starLen > 0) {
@@ -490,25 +506,35 @@ export default {
   },
 
   renderGL(gfx, frame) {
-    const t = frame.t, items = S.items;
-    let n = 0;
+    const t = frame.t, settled = S.settled, live = S.live;
+    let ns = 0, nl = 0, cnt = 0, sum = 0, xor = 0, cost = 0;
     for (const s of S.ink.list) {
       if (s.kill >= 1) continue;
-      let amp = 1;
-      if (s.endT >= 0 && !s.cont) {
+      let amp = 1, hot = 1;
+      if (s.endT >= 0) {
         const age = t - s.endT;
         // A gentle breathing pulse, and the flicker of a tube striking on.
         if (s.style === 'neon' || s.style === 'rainbow') amp = 0.9 + 0.1 * Math.sin(t * 2.1 + s.seed * TAU);
-        if (age < 0.45) amp *= ((age * 37 + s.seed * 7) % 1) < 0.3 ? 0.45 : 1.08;
+        if (!s.cont && age < IGNITE) amp *= ((age * 37 + s.seed * 7) % 1) < 0.3 ? 0.45 : 1.08;
+        hot = clamp(1 - age / 0.4);
       }
-      const it = items[n] || (items[n] = { stroke: null, amp: 1, live: 0 });
-      it.stroke = s; it.amp = amp; it.live = s.endT < 0 ? 1 : clamp(1 - (t - s.endT) / 0.4);
-      n++;
+      // Settled tubes go to the cache; anything changing is drawn live.
+      const still = s.endT >= 0 && !s.dying && t - s.endT > IGNITE + 0.05;
+      const list = still ? settled : live;
+      const i = still ? ns++ : nl++;
+      const it = list[i] || (list[i] = { stroke: null, amp: 1, live: 0 });
+      it.stroke = s; it.amp = amp; it.live = hot;
+      if (still) {
+        cnt++; sum += s.id; xor ^= Math.imul(s.id, 2654435761);
+        cost += (s.len + 2 * s.R) * 2 * s.R;
+      }
     }
-    items.length = n;
-    computeLights(frame, gfx.dpr);
-    const mood = { dark: clamp((t - S.enterT) / 0.7), flash: S.flash, fx: S.flashX, fy: S.flashY };
-    S.gl.render(gfx, items, S.light, mood);
+    settled.length = ns; live.length = nl;
+    computeLights(frame, gfx.dpr, brushOf(this));
+    const m = S.mood;
+    m.dark = clamp((t - S.enterT) / 0.7); m.flash = S.flash; m.fx = S.flashX; m.fy = S.flashY;
+    m.top = S.band.top; m.bottom = S.band.bottom;
+    S.gl.render(gfx, settled, `${cnt}:${sum}:${xor}:${S.ink.ver}`, cost, live, S.light, m);
   },
 
   draw2D(ctx, frame) {
@@ -524,11 +550,12 @@ export default {
     ctx.globalCompositeOperation = 'lighter';
     const fc = fingerCols(style, t);
     for (const h of frame.hands) {
-      if (!h.is('open') || h.overUI) continue;
+      const a = S.hands.get(h.id)?.openA || 0;
+      if (a <= 0.01) continue;
       const sc = scOf(h);
       for (let i = 0; i < 5; i++) {
         const p = h.lm[FINGER_TIPS[i]];
-        drawGlow(ctx, p.x, p.y, (9 + 2 * Math.sin(t * 5 + i)) * sc, fc[i % fc.length], 0.55);
+        drawGlow(ctx, p.x, p.y, (9 + 2 * Math.sin(t * 5 + i)) * sc, fc[i % fc.length], 0.55 * a);
       }
     }
     ctx.restore();

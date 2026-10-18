@@ -3,7 +3,7 @@
 // bloom halo are painted ONCE per palette to offscreen canvases; every frame
 // they are just drawImage'd with their own counter-rotation, additively.
 
-import { TAU, clamp, easeOutBack, rng, glow } from './strange-fx.js';
+import { TAU, clamp, easeOutBack, rng, bloomSprite } from './strange-fx.js';
 
 const SIZE = 640;   // layer canvas, px
 const RL = 296;     // sigil radius inside a layer, px
@@ -55,7 +55,7 @@ function rune(g, rnd, a, r, s) {
   }
 }
 
-// Painters. Each runs twice: a thick glowing pass (wm = 1) and a thin
+// Painters. Each runs twice: a thick glowing pass (wm > 1) and a thin
 // white-hot core pass (wm < 1).
 const PAINT = {
   runes(g, wm) {
@@ -199,12 +199,12 @@ function paintLayer(pal, paint) {
   const [c, g] = canvas();
   // shadowBlur is fine here: it runs once per palette, never per frame.
   g.shadowColor = pal.glow;
-  g.shadowBlur = 18;
+  g.shadowBlur = 22;
   g.strokeStyle = g.fillStyle = pal.mid;
-  paint(g, 1);
+  paint(g, 1.3);
   g.shadowBlur = 0;
   g.strokeStyle = g.fillStyle = pal.core;
-  paint(g, 0.42);
+  paint(g, 0.5);
   return c;
 }
 
@@ -229,7 +229,7 @@ function shade() {
   shadeC.width = shadeC.height = 128;
   const g = shadeC.getContext('2d');
   const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
-  for (const [o, a] of [[0, 0.45], [0.6, 0.35], [0.88, 0.22], [1, 0]]) grad.addColorStop(o, `rgba(24,8,0,${a})`);
+  for (const [o, a] of [[0, 0.55], [0.55, 0.5], [0.8, 0.42], [0.92, 0.3], [1, 0]]) grad.addColorStop(o, `rgba(28,9,0,${a})`);
   g.fillStyle = grad;
   g.fillRect(0, 0, 128, 128);
   return shadeC;
@@ -261,14 +261,15 @@ export function drawSigil(ctx, art, s, alpha = 1) {
   ctx.scale(sc, sc);
   ctx.globalCompositeOperation = 'lighter';
 
-  // a faint smoky backing so the strokes still pop over bright walls
+  // a smoky amber backing: darkens bright walls behind the strokes so they
+  // still glow (over dark video it is invisible)
   ctx.globalCompositeOperation = 'source-over';
-  ctx.globalAlpha = alpha * clamp(a * 1.5) * 0.5;
+  ctx.globalAlpha = alpha * clamp(a * 1.5) * 0.8;
   ctx.drawImage(shade(), -RL * 1.08, -RL * 1.08, RL * 2.16, RL * 2.16);
   ctx.globalCompositeOperation = 'lighter';
   // bloom: a broad glow, then the blurred rings
   ctx.globalAlpha = alpha * clamp(a * 1.3) * 0.16 * flick(t, 5.3);
-  ctx.drawImage(glow(art.pal.glow), -RL * 1.3, -RL * 1.3, RL * 2.6, RL * 2.6);
+  ctx.drawImage(bloomSprite(art.pal.glow), -RL * 1.3, -RL * 1.3, RL * 2.6, RL * 2.6);
   ctx.globalAlpha = alpha * clamp(a * 1.3) * (0.55 + 0.15 * flick(t, 9));
   ctx.drawImage(art.halo, -HALF, -HALF);
 
@@ -291,7 +292,7 @@ export function drawSigil(ctx, art, s, alpha = 1) {
   // comets of energy running round the rune band
   if (a > 0.6) {
     const k = clamp((a - 0.6) / 0.4) * alpha;
-    const gl = glow(art.pal.mid), hot = glow(art.pal.core);
+    const gl = bloomSprite(art.pal.mid), hot = bloomSprite(art.pal.core);
     const base = s.spins[0] * 3.2;
     for (let c = 0; c < 3; c++) {
       const ang = base + (c / 3) * TAU;

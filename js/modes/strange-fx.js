@@ -26,18 +26,11 @@ export function mixSparks(a, b, k) {
 }
 export function mixRGB(a, b, k) { return a.rgb.map((v, i) => v + (b.rgb[i] - v) * k); }
 
-// Height (CSS px) of the HUD bars (mode chips on top; hint + options below).
-export function hudBands(W, H) {
-  const top = W < 600 ? 112 : W < 1180 ? 104 : 74;
-  const bottom = W < 900 ? 150 : 124;
-  return { top: Math.max(top, H * 0.04), bottom: Math.max(bottom, H * 0.04) };
-}
-
-// Soft glow sprite that fades to the SAME hue at zero alpha. (A fade to
-// transparent black reads as a dark halo over a bright camera image once the
-// overlay canvas is composited.) Draw with 'lighter'.
+// Soft bloom sprite with a smooth, gaussian-like falloff (draw.js's
+// glowSprite is flat to 25 % and then linear, which reads as a disc). Every
+// glow in this mode is tuned to this profile. Draw with 'lighter'.
 const sprites = new Map();
-export function glow(color, size = 128) {
+export function bloomSprite(color, size = 128) {
   const key = color + size;
   let c = sprites.get(key);
   if (c) return c;
@@ -53,11 +46,11 @@ export function glow(color, size = 128) {
   sprites.set(key, c);
   return c;
 }
-export function drawGlow(ctx, x, y, radius, color, alpha = 1) {
+export function drawBloom(ctx, x, y, radius, color, alpha = 1) {
   if (alpha <= 0.003 || !(radius > 0.5)) return;
   const prev = ctx.globalAlpha;
   ctx.globalAlpha = prev * Math.min(1, alpha);
-  ctx.drawImage(glow(color), x - radius, y - radius, radius * 2, radius * 2);
+  ctx.drawImage(bloomSprite(color), x - radius, y - radius, radius * 2, radius * 2);
   ctx.globalAlpha = prev;
 }
 
@@ -77,7 +70,7 @@ export function rng(seed) {
 // buckets them by heat (3 colours) x width (2) into six Path2D strokes.
 const ALPHA = [1, 0.9, 0.55];
 const WIDTH = [1.2, 2.2];
-const F = ['x', 'y', 'vx', 'vy', 'age', 'life', 'grav', 'drag', 'w'];
+const F = ['x', 'y', 'vx', 'vy', 'age', 'life', 'grav', 'drag', 'w', 'tl'];
 
 export class SparkField {
   constructor(cap = 1500) {
@@ -88,16 +81,17 @@ export class SparkField {
   }
 
   // drag: fraction of speed kept per second. w > 1.6 = thick spark.
-  emit(x, y, vx, vy, life, grav = 0, drag = 0.4, w = 1.2) {
+  // tl: seconds of motion the streak shows (longer = more of a streak).
+  emit(x, y, vx, vy, life, grav = 0, drag = 0.4, w = 1.2, tl = 0.045) {
     let i;
     if (this.n < this.cap) i = this.n++;
     else { i = this.cursor; this.cursor = (this.cursor + 1) % this.cap; }   // full: recycle the oldest
     this.x[i] = x; this.y[i] = y; this.vx[i] = vx; this.vy[i] = vy;
-    this.age[i] = 0; this.life[i] = life; this.grav[i] = grav; this.drag[i] = drag; this.w[i] = w;
+    this.age[i] = 0; this.life[i] = life; this.grav[i] = grav; this.drag[i] = drag; this.w[i] = w; this.tl[i] = tl;
   }
 
   update(dt) {
-    const { x, y, vx, vy, age, life, grav, drag, w } = this;
+    const { x, y, vx, vy, age, life, grav, drag, w, tl } = this;
     let j = 0;
     for (let i = 0; i < this.n; i++) {
       const a = age[i] + dt;
@@ -106,23 +100,23 @@ export class SparkField {
       const nvx = vx[i] * k, nvy = vy[i] * k + grav[i] * dt;
       x[j] = x[i] + nvx * dt; y[j] = y[i] + nvy * dt;
       vx[j] = nvx; vy[j] = nvy; age[j] = a;
-      life[j] = life[i]; grav[j] = grav[i]; drag[j] = drag[i]; w[j] = w[i];
+      life[j] = life[i]; grav[j] = grav[i]; drag[j] = drag[i]; w[j] = w[i]; tl[j] = tl[i];
       j++;
     }
     this.n = j;
     if (this.cursor >= j) this.cursor = 0;
   }
 
-  // colors: [hot, warm, ember]. tail: seconds of motion each streak shows.
-  draw(ctx, colors, { tail = 0.045, maxTail = 42, alpha = 1 } = {}) {
+  // colors: [hot, warm, ember]. Streaks are capped at maxTail px.
+  draw(ctx, colors, { maxTail = 42, alpha = 1 } = {}) {
     if (!this.n) return;
     const paths = [new Path2D(), new Path2D(), new Path2D(), new Path2D(), new Path2D(), new Path2D()];
-    const { x, y, vx, vy, age, life, w } = this;
+    const { x, y, vx, vy, age, life, w, tl } = this;
     for (let i = 0; i < this.n; i++) {
       const f = age[i] / life[i];
       const b = (f < 0.38 ? 0 : f < 0.7 ? 2 : 4) + (w[i] > 1.6 ? 1 : 0);
       const sp = Math.hypot(vx[i], vy[i]);
-      const k = sp > 1e-3 ? Math.min(maxTail, sp * tail) / sp : 0;
+      const k = sp > 1e-3 ? Math.min(maxTail, sp * tl[i]) / sp : 0;
       const p = paths[b];
       p.moveTo(x[i], y[i]);
       p.lineTo(x[i] - vx[i] * k, y[i] - vy[i] * k + 0.01);

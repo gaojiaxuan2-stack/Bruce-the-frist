@@ -96,8 +96,8 @@ vec3 grade(vec3 c) {
 vec3 ghost(sampler2D tex, vec2 tuv, vec3 now, float w) {
   if (w <= 0.0) return vec3(0.0);
   vec3 h = texture(tex, tuv).rgb;
-  float d = smoothstep(0.06, 0.26, length(h - now));
-  return u_tint * luma(h) * d * w;
+  float d = smoothstep(0.05, 0.22, length(h - now));   // only where the room has moved
+  return u_tint * (0.15 + luma(h)) * d * w;
 }
 
 void main() {
@@ -133,7 +133,7 @@ void main() {
     vec2 tuv = vec2(px.x / u_res.x, 1.0 - px.y / u_res.y);
     vec3 g = ghost(u_h0, tuv, raw, u_hw.x) + ghost(u_h1, tuv, raw, u_hw.y)
            + ghost(u_h2, tuv, raw, u_hw.z) + ghost(u_h3, tuv, raw, u_hw.w);
-    col = col * (1.0 - 0.1 * u_echo) + g * u_echo * 0.9;
+    col = col * (1.0 - 0.1 * u_echo) + g * u_echo * 1.1;
     col = mix(col, col * vec3(0.92, 1.06, 0.96), u_echo * 0.5);
   }
 
@@ -312,8 +312,9 @@ void main() {
 }
 `;
 
-// The blazing ring itself: a thin white-hot core, a soft halo and three
-// bands of spark dashes racing round it.
+// The blazing ring itself: a thin white-hot core, a soft halo, a band of
+// glittering sparkle and three layers of spark streaks racing round it and
+// peeling off (bright head, fading tail, about 1 px thick).
 const RIM = `
 uniform vec2  u_c;
 uniform float u_r;
@@ -322,17 +323,19 @@ uniform float u_amp;
 uniform float u_seed;
 uniform vec3  u_col;
 
-// Dashes in N angular cells, each at its own radial offset and flicker.
-float dashes(float a, float x, float N, float speed, float seed, float spread, float thick) {
+// One streak per angular cell, each with its own length, offset, flicker.
+float streaks(float a, float x, float N, float speed, float seed, float spread, float thick) {
   float s = fract(a / 6.2831853 + 0.5 - u_time * speed) * N;
   float id = floor(s), f = fract(s);
+  if (u_spin < 0.0) f = 1.0 - f;                      // the head leads the spin
   float h1 = hash12(vec2(id, seed + u_seed)), h2 = hash12(vec2(id + 7.3, seed + 1.9));
-  float ro = (h1 - 0.5) * spread;
-  float len = 0.3 + 0.6 * h2;
-  float along = 1.0 - smoothstep(len * 0.5 - 0.12, len * 0.5, abs(f - 0.5));
+  float len = 0.4 + 0.55 * h2;
+  float k = clamp(f / len, 0.0, 1.0);
+  float body = k * k * (1.0 - smoothstep(len, len + 0.03, f));
+  float ro = (h1 - 0.5) * spread * 0.6 + k * k * spread * h1;   // heads peel outward
   float dx = (x - ro) / thick;
-  float flick = 0.45 + 0.55 * sin(u_time * (9.0 + h2 * 12.0) + h1 * 40.0);
-  return along * exp(-dx * dx) * flick * step(0.2, h2);
+  float flick = 0.55 + 0.45 * sin(u_time * (11.0 + h2 * 14.0) + h1 * 40.0);
+  return body * exp(-dx * dx) * flick * step(0.22, h2);
 }
 
 void main() {
@@ -344,16 +347,22 @@ void main() {
   float n1 = noise(cs * 3.2 + vec2(u_seed, u_time * 1.6));
   float n2 = noise(cs * 12.0 + vec2(u_seed * 1.7, u_time * 5.0));
   float x = r - 1.0;
-  float w = 0.008 + 0.01 * n1;
+  float onePx = u_dpr / u_r;                            // one CSS px in ring units
+  float w = 0.008 + 0.012 * n1;
   float core = exp(-(x * x) / (w * w));
-  float halo = exp(-abs(x) * 11.0) * (0.16 + 0.3 * n1);
-  float flame = smoothstep(0.55, 0.95, n2) * exp(-abs(x - 0.02) * 22.0);
-  float th = 1.4 * u_dpr / u_r;
-  float sp = dashes(a, x, 150.0, 0.42 * u_spin, 1.0, 0.05, th)
-           + dashes(a, x, 96.0, 0.62 * u_spin, 2.0, 0.11, th * 1.3)
-           + dashes(a, x, 64.0, 0.3 * u_spin, 3.0, 0.03, th * 1.8);
+  float halo = exp(-abs(x) * 10.0) * (0.18 + 0.32 * n1);
+  float flame = smoothstep(0.5, 0.95, n2) * exp(-abs(x - 0.025) * 20.0);
+  // glitter: sparse twinkling grains in a band around the ring
+  vec2 gc = floor(vec2(mod(a2, 6.2831853), r) * u_r / (2.5 * u_dpr));   // wrapped: keeps hash precision
+  float gh = hash12(gc + floor(u_time * 24.0) * 0.37 + u_seed);
+  float glit = step(0.86, gh) * exp(-x * x / (0.0016 + 0.002 * n1));
+  float th = 0.85 * onePx;
+  float sp = streaks(a, x, 46.0, 0.5 * u_spin, 1.0, 0.07, th)
+           + streaks(a, x, 30.0, 0.75 * u_spin, 2.0, 0.13, th * 1.2)
+           + streaks(a, x, 20.0, 0.36 * u_spin, 3.0, 0.04, th * 1.6);
   vec3 hot = vec3(1.0, 0.95, 0.82);
-  vec3 c = u_col * (halo + flame * 0.6) + mix(u_col, hot, 0.55) * core * (0.75 + 0.5 * n2) + mix(u_col, hot, 0.6) * sp * 1.6;
+  vec3 c = u_col * (halo + flame * 0.6) + mix(u_col, hot, 0.55) * core * (0.75 + 0.5 * n2)
+         + mix(u_col, hot, 0.65) * sp * 1.7 + mix(u_col, hot, 0.4) * glit * 0.9;
   outColor = vec4(c * u_amp, 1.0);
 }
 `;
@@ -361,7 +370,7 @@ void main() {
 // Ring buffer of low-res camera snapshots for the time echoes.
 export class TimeEcho {
   constructor() { this.rts = null; this.times = [-9, -9, -9, -9]; this.k = 0; this.last = -9; }
-  capture(gfx, t, every = 0.09) {
+  capture(gfx, t, every = 0.11) {
     if (!this.rts) this.rts = [0, 1, 2, 3].map(() => gfx.renderTarget(0.35));
     if (t - this.last < every) return;
     this.last = t;
@@ -376,7 +385,7 @@ export class TimeEcho {
   weights(t) {
     return this.times.map((ts) => {
       const age = t - ts;
-      return age > 0.6 || age < 0 ? 0 : 0.75 * (1 - age / 0.6) + 0.15;
+      return age > 0.7 || age < 0 ? 0 : 0.75 * (1 - age / 0.7) + 0.15;
     });
   }
   reset() { this.times = [-9, -9, -9, -9]; this.last = -9; }
