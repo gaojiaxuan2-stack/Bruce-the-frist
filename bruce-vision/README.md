@@ -25,7 +25,7 @@ Works in Chrome, Edge and Firefox on computers, Safari on iPhone/iPad
 
 | Gesture | What it does |
 | --- | --- |
-| ☝️ Point at a button and hold (≈0.6 s) | Press it: modes along the top, options along the bottom |
+| ☝️ Point at a button and hold (≈0.5 s) | Press it: modes along the top, options along the bottom |
 | 🤏 Pinch on a button | Press it right away |
 | 👍👍 Two thumbs up | Take a photo. Point at the photo to save it |
 
