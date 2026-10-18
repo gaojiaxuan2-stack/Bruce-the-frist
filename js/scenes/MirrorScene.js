@@ -130,6 +130,7 @@ export default class MirrorScene extends BaseScene {
     this.blastT = -1;
     this.blastCenter = new THREE.Vector3();
     this.depthF = 1;
+    this.depthRaw = this.params.depth;
     this.wave = 1;
     this.intro = 0;
     this.maskOn = 0;
@@ -587,10 +588,13 @@ export default class MirrorScene extends BaseScene {
 
     // ---- depth: GUI slider (also moved by the wheel / two-hand zoom) x hand distance (+ a bit more while tilting)
     if (input.zoom && !ui) {
-      const d = this.params.depth;
-      const next = clamp(d + Math.max(d, 0.3) * (Math.exp(input.zoom * 1.5) - 1), 0, 3);
-      if (next !== d) {
-        this.params.depth = next;
+      // exact value kept aside so tiny trackpad steps add up; the slider shows it rounded
+      if (Math.abs(this.depthRaw - this.params.depth) > 0.006) this.depthRaw = this.params.depth; // moved in the GUI
+      const d = this.depthRaw;
+      this.depthRaw = clamp(d + Math.max(d, 0.3) * (Math.exp(input.zoom * 1.5) - 1), 0, 3);
+      const shown = Math.round(this.depthRaw * 100) / 100;
+      if (shown !== this.params.depth) {
+        this.params.depth = shown;
         this.depthCtrl?.updateDisplay();
       }
     }

@@ -250,7 +250,7 @@ void main() {
   } else if (uStyle < 2.5) {
     // Matrix: mint glow + falling code streaks. Edges / highlights (detail vs. the
     // blurred surroundings) glow; big flat areas stay a calm, darker green.
-    float v = smoothstep(0.04, 0.9, lumE * 0.72 + detail * 1.6 + 0.08);
+    float v = smoothstep(0.04, 0.9, lumE * 0.62 + detail * 1.8 + 0.06 + 0.12 * person * uMaskOn);
     float colId = floor(g.x * uGrid.x / 2.0);
     float speed = 0.08 + hash11(colId) * 0.22;
     float head = 1.0 - fract(uTime * speed + hash11(colId + 31.7));

@@ -196,6 +196,9 @@ export default class BlackHoleScene extends BaseScene {
     // ---------------------------------------------------------- pure black shadow under the bloom
     this.shadowFx = new ShadowPasses(this.camera, this.u);
     this.passes = [this.shadowFx.copyPass];
+    // Passes for after the bloom. The App does not read this list yet, so update()
+    // also inserts the mask itself (attach() does nothing once it is in place).
+    this.postPasses = [this.shadowFx.maskPass];
 
     // ---------------------------------------------------------- state
     this.cam = {
@@ -215,7 +218,7 @@ export default class BlackHoleScene extends BaseScene {
       incl: IDLE_INCL,
       dist: BASE_DIST,
       paused: true, // not following the hand (absent, pinch-dragging, on the UI, changing shape)
-      keepIncl: false, // when following resumes, keep the current height (after a drag / the UI)
+      keepIncl: false, // when following resumes, keep the height a pinch-drag left
       settle: 0,
     };
     this.fit = 1;
@@ -420,12 +423,12 @@ export default class BlackHoleScene extends BaseScene {
       c.keepIncl = false;
     } else if (!following) {
       c.paused = true;
-      if (pinching || uiBusy) c.keepIncl = true;
+      if (pinching) c.keepIncl = true;
     }
     if (following && c.paused) {
       // (Re)starting to follow: re-anchor the azimuth so the view does not swing.
-      // The height is absolute (hand up = look from above), except after a
-      // pinch-drag or the UI, which keep the angle they left.
+      // The height is absolute (hand up = look from above; it eases there),
+      // except after a pinch-drag, which keeps the angle it set.
       c.spinAz += c.handAz - handAz;
       c.handAz = c.handAzTarget = handAz;
       if (c.keepIncl) {
