@@ -33,6 +33,8 @@ export class BaseScene {
     this.camera.position.set(0, 0, 10);
     /** Extra post-processing passes inserted after the render pass, before bloom. */
     this.passes = [];
+    /** Extra passes inserted after bloom, before the final output pass. */
+    this.postPasses = [];
   }
 
   get meta() {

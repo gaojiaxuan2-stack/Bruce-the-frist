@@ -168,6 +168,7 @@ export class App {
     this.bloomPass.threshold = b.threshold ?? 0.1;
     this.bloomPass.enabled = this.settings.bloom && this.bloomPass.strength > 0;
     this.composer.addPass(this.bloomPass);
+    for (const p of s.postPasses) this.composer.addPass(p);
     this.composer.addPass(this.outputPass);
     this.bloomController?.setValue(this.bloomPass.strength);
   }
