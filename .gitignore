@@ -2,3 +2,5 @@ node_modules/
 tools/.cache/
 out/
 .DS_Store
+__pycache__/
+*.pyc

@@ -36,16 +36,23 @@ export class Hud {
     $('#scene-title').textContent = meta.title;
     $('#scene-subtitle').textContent = meta.subtitle || '';
     const list = $('#hint-list');
-    list.replaceChildren(
-      ...(meta.hints || []).map((h) => {
-        const li = document.createElement('li');
-        li.innerHTML = `<span class="hint-icon" aria-hidden="true"></span><span class="hint-gesture"></span><span class="hint-text"></span>`;
-        li.children[0].textContent = h.icon || '';
-        li.children[1].textContent = h.gesture || '';
-        li.children[2].textContent = h.text || '';
-        return li;
-      }),
-    );
+    if (!meta.hints) {
+      // Still loading: keep the previous hints, dimmed, so the card doesn't jump.
+      list.classList.add('loading');
+      return;
+    }
+    list.classList.remove('loading');
+    list.replaceChildren(...meta.hints.map((h) => hintItem(h.icon, h.gesture, h.text)));
+    // Without hand control, say how the mouse / touch stands in for the gestures.
+    if (!this.app.input.handsRunning) {
+      const touch = matchMedia('(pointer: coarse)').matches;
+      const base = touch
+        ? 'drag = point · two fingers = turn + zoom · hold = fist'
+        : 'drag = pinch · right-drag = fist · wheel = zoom';
+      const li = hintItem(touch ? '👆' : '🖱️', touch ? 'Touch' : 'Mouse', meta.mouseHint ? `${base} · ${meta.mouseHint}` : base);
+      li.className = 'hint-mouse';
+      list.appendChild(li);
+    }
   }
 
   setCameraState(on, loading = false) {
@@ -74,4 +81,13 @@ export class Hud {
       setTimeout(() => t.remove(), 320);
     }, ms);
   }
+}
+
+function hintItem(icon, gesture, text) {
+  const li = document.createElement('li');
+  li.innerHTML = '<span class="hint-icon" aria-hidden="true"></span><span class="hint-gesture"></span><span class="hint-text"></span>';
+  li.children[0].textContent = icon || '';
+  li.children[1].textContent = gesture || '';
+  li.children[2].textContent = text || '';
+  return li;
 }

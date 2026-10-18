@@ -57,7 +57,7 @@ button { font: inherit; color: inherit; }
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: max(12px, env(safe-area-inset-top)) 16px 12px;
+  padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left));
   z-index: 10;
   pointer-events: none;
 }
@@ -127,7 +127,7 @@ button.chip:hover, button.chip.hand-hover { border-color: rgba(255, 255, 255, 0.
 /* ---------- hints ---------- */
 #hints {
   position: fixed;
-  left: 16px;
+  left: max(16px, env(safe-area-inset-left));
   bottom: max(16px, env(safe-area-inset-bottom));
   max-width: min(360px, calc(100vw - 32px));
   padding: 14px 16px;
@@ -146,6 +146,8 @@ button.chip:hover, button.chip.hand-hover { border-color: rgba(255, 255, 255, 0.
 #hint-list .hint-icon { width: 22px; text-align: center; flex: none; }
 #hint-list .hint-gesture { font-weight: 600; white-space: nowrap; }
 #hint-list .hint-text { color: var(--muted); }
+#hint-list.loading { opacity: 0.35; transition: opacity 200ms; }
+#hint-list .hint-mouse { margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; }
 
 #status {
   position: fixed;
@@ -162,7 +164,7 @@ button.chip:hover, button.chip.hand-hover { border-color: rgba(255, 255, 255, 0.
 /* ---------- camera preview ---------- */
 #cam-preview {
   position: fixed;
-  right: 16px;
+  right: max(16px, env(safe-area-inset-right));
   bottom: max(16px, env(safe-area-inset-bottom));
   margin: 0;
   width: 200px;
@@ -221,6 +223,10 @@ button.chip:hover, button.chip.hand-hover { border-color: rgba(255, 255, 255, 0.
   inset: 0;
   display: grid;
   place-items: center;
+  place-items: safe center;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   padding: 16px;
   background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0.8));
   backdrop-filter: blur(3px);
@@ -262,7 +268,8 @@ button.chip:hover, button.chip.hand-hover { border-color: rgba(255, 255, 255, 0.
   font-size: 14px;
   color: var(--muted);
 }
-.start-gestures b { color: var(--fg); display: inline-block; min-width: 128px; }
+.start-gestures li { display: grid; grid-template-columns: 150px 1fr; column-gap: 10px; }
+.start-gestures b { color: var(--fg); }
 .fine { font-size: 12px; color: var(--muted); margin: 18px 0 0; }
 .error { color: var(--danger); font-size: 14px; margin: 14px 0 0; }
 .noscript { position: fixed; inset: 0; display: grid; place-items: center; }
@@ -271,7 +278,7 @@ button.chip:hover, button.chip.hand-hover { border-color: rgba(255, 255, 255, 0.
 body > .lil-gui.lil-root {
   position: fixed;
   top: 64px;
-  right: 16px;
+  right: max(16px, env(safe-area-inset-right));
   z-index: 20;
   --background-color: rgba(18, 20, 28, 0.82);
   --widget-color: rgba(255, 255, 255, 0.1);
@@ -296,6 +303,7 @@ body > .lil-gui.lil-root {
 @media (min-width: 721px) and (max-width: 1000px) {
   #hints { max-width: 320px; }
   #status { left: 352px; transform: none; }
+  #toasts { top: 104px; }
 }
 
 /* ---------- small screens ---------- */
@@ -311,11 +319,33 @@ body > .lil-gui.lil-root {
   #hint-list { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; font-size: 12px; }
   #hint-list .hint-text { display: none; }
   #hint-list .hint-icon { width: auto; }
+  #hint-list .hint-mouse { width: 100%; }
+  #hint-list .hint-mouse .hint-text { display: inline; }
   #cam-preview { width: 120px; bottom: auto; top: 112px; left: 16px; right: auto; }
-  body > .lil-gui.lil-root { top: 112px; }
-  #status { bottom: 132px; }
-  #toasts { top: auto; bottom: 180px; width: calc(100vw - 32px); }
+  body > .lil-gui.lil-root { top: 112px; --width: min(245px, calc(100vw - 32px - 128px)); }
+  #status { bottom: 150px; }
+  #toasts { top: 212px; width: calc(100vw - 32px); }
   .toast { text-align: center; }
+  .start-card { padding: 22px 18px; }
+  .start-gestures li { grid-template-columns: 118px 1fr; }
+}
+
+/* ---------- short screens (landscape phones) ---------- */
+@media (max-height: 520px) {
+  #hints { padding: 8px 12px; max-width: 320px; }
+  #scene-subtitle { display: none; }
+  #hint-list { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; font-size: 12px; }
+  #hint-list .hint-text { display: none; }
+  #hint-list .hint-icon { width: auto; }
+  #hint-list .hint-mouse { width: 100%; }
+  #hint-list .hint-mouse .hint-text { display: inline; }
+  body > .lil-gui.lil-root { max-height: calc(100vh - 90px); }
+  .start-card { padding: 16px 18px; }
+  .start-card h1 { font-size: 26px; }
+  .lead { margin-bottom: 12px; }
+  .start-gestures { grid-template-columns: 1fr 1fr; column-gap: 16px; margin-top: 12px; font-size: 13px; }
+  .start-gestures li { grid-template-columns: auto 1fr; column-gap: 6px; }
+  .fine { margin-top: 10px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -14,6 +14,7 @@ const QUALITY = {
   high: { particles: 1, pixelRatio: 2 },
 };
 const FADE_MS = 260;
+const MAX_PIXELS = 3.5e6;
 
 export class App {
   constructor(container) {
@@ -75,7 +76,9 @@ export class App {
   }
 
   get pixelRatio() {
-    return Math.min(window.devicePixelRatio || 1, QUALITY[this.quality].pixelRatio);
+    const pr = Math.min(window.devicePixelRatio || 1, QUALITY[this.quality].pixelRatio);
+    // Big HiDPI screens: keep the drawing buffer around 3.5 megapixels at most.
+    return Math.max(1, Math.min(pr, Math.sqrt(MAX_PIXELS / (this.width * this.height))));
   }
 
   // ---------------------------------------------------------------- scenes
@@ -111,6 +114,7 @@ export class App {
           return this.loadScene(id);
         }
         instance.resize(this.width, this.height);
+        await this.precompile(instance);
         const folder = this.gui.addFolder(SceneClass.meta.title);
         instance.buildGui(folder);
         folder.hide();
@@ -123,6 +127,25 @@ export class App {
       this.loading.set(id, p);
     }
     return this.loading.get(id);
+  }
+
+  /**
+   * Compile every shader of a scene (hidden objects too) during the fade, so the first frame
+   * and the first gesture don't stall. The composer's target must be bound, or three.js
+   * builds a different shader variant than the one it renders with.
+   */
+  async precompile(instance) {
+    const r = this.renderer;
+    const prev = r.getRenderTarget();
+    try {
+      r.setRenderTarget(this.composer.renderTarget1);
+      const done = r.compileAsync(instance.scene, instance.camera);
+      r.setRenderTarget(prev);
+      await done;
+    } catch (err) {
+      r.setRenderTarget(prev);
+      console.warn('Shader precompile skipped', err);
+    }
   }
 
   /** Switch to a scene by id (fades out, lazy-loads, fades in). Latest call wins. */
@@ -142,7 +165,8 @@ export class App {
     this.pendingId = id;
     const first = !this.active;
     if (!first) fade.classList.add('on');
-    this.hud.setActive(id, SCENES.find((s) => s.id === id));
+    const entry = SCENES.find((s) => s.id === id);
+    this.hud.setActive(id, this.scenes.get(id)?.instance.meta ?? { ...entry, subtitle: 'Loading…' });
 
     let rec;
     try {
@@ -174,7 +198,7 @@ export class App {
     const url = new URL(location.href);
     url.searchParams.set('scene', id);
     history.replaceState(null, '', url);
-    fade.classList.remove('on');
+    this.revealPending = true; // lift the fade after this scene's first frame is drawn
     this.fpsSamples.length = 0;
     this.lowFpsTime = 0;
   }
@@ -221,6 +245,7 @@ export class App {
     try {
       await this.input.startHands();
       this.hud.setCameraState(true);
+      if (this.active) this.hud.setActive(this.activeId, this.active.meta);
       this.hud.toast('✋ Hand control on — hold your hand up to the camera');
       return true;
     } catch (err) {
@@ -238,6 +263,7 @@ export class App {
       this.input.stopHands();
       this.hud.setCameraState(false);
       this.hud.setStatus('');
+      if (this.active) this.hud.setActive(this.activeId, this.active.meta);
       return Promise.resolve(false);
     }
     return this.startHands().catch(() => false);
@@ -261,6 +287,10 @@ export class App {
     if (this.active) {
       this.active.update(dt, this.elapsed, input);
       this.composer.render(dt);
+      if (this.revealPending) {
+        this.revealPending = false;
+        document.getElementById('fade').classList.remove('on');
+      }
       this.watchFps(dt);
     }
   }
@@ -289,7 +319,8 @@ export class App {
     if (this.fpsSamples.length < 90) return;
     const avg = this.fpsSamples.reduce((a, b) => a + b, 0) / this.fpsSamples.length;
     this.fpsSamples.length = 0;
-    this.lowFpsTime = 1 / avg < 28 ? this.lowFpsTime + 1 : 0;
+    const minFps = this.quality === 'high' ? 40 : 28;
+    this.lowFpsTime = 1 / avg < minFps ? this.lowFpsTime + 1 : 0;
     if (this.lowFpsTime >= 3) {
       this.lowFpsTime = 0;
       this.setQuality(this.quality === 'high' ? 'medium' : 'low');
@@ -309,7 +340,7 @@ export class App {
 
   buildGui() {
     this.gui = new GUI({ title: 'Controls' });
-    if (this.isMobile || this.width < 720) this.gui.close();
+    if (this.isMobile || this.width < 1000) this.gui.close();
     const g = this.gui.addFolder('Global');
     this.qualityController = g
       .add(this, 'quality', Object.keys(QUALITY))
@@ -338,7 +369,7 @@ export class App {
   }
 
   onResize() {
-    if (window.innerWidth < 720 && this.width >= 720) this.gui.close();
+    if (window.innerWidth < 1000 && this.width >= 1000) this.gui.close();
     this.width = window.innerWidth;
     this.height = window.innerHeight;
     this.applySize();
@@ -351,13 +382,13 @@ export class App {
     if (e.key === 'ArrowRight') this.next();
     else if (e.key === 'ArrowLeft') this.prev();
     else if (/^[1-9]$/.test(e.key) && VISIBLE_SCENES[+e.key - 1]) this.goTo(VISIBLE_SCENES[+e.key - 1].id);
-    else if (e.key === 'h') this.toggleHands();
-    else if (e.key === 'g') this.gui.open(this.gui._closed);
+    else if (e.key.toLowerCase() === 'h') this.toggleHands();
+    else if (e.key.toLowerCase() === 'g') this.gui.open(this.gui._closed);
   }
 }
 
 const GESTURE_LABEL = {
-  open: 'open palm',
+  open: 'open hand',
   fist: 'fist',
   point: 'pointing',
   pinch: 'pinch',

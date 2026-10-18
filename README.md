@@ -19,15 +19,19 @@ swipe.
 | ☝️ Point | moves the cursor, pushes particles |
 | 🤏 Pinch + move | grab and rotate; pinch on a button or slider to click / drag it |
 | ✊ Fist | pulls the particles in |
-| ✋ Open palm (after a fist) | explodes them back out |
+| ✋ Open hand (after a fist) | explodes them back out |
 | ✌️ Peace | changes colours / style (depends on the scene) |
 | 👋 Fast swipe left / right | next / previous scene |
 | ☝️ Point at a tab ~1 s | opens that scene |
-| Hand closer / farther, or two hands apart | zoom |
+| ↕️ Hand closer / farther | zoom (on a computer, two hands moving apart also zooms) |
 
-Each scene shows its own gestures in the bottom-left corner. Without a camera, the
-mouse works too: move = point, left-drag = pinch, right-drag (or Shift-drag) = fist,
-wheel = zoom, ← → or 1–5 = change scene, `H` = hand control on/off, `G` = controls panel.
+Each scene shows its own gestures in the bottom-left corner. Without a camera:
+
+- **Mouse:** move = point, left-drag = pinch, right-drag (or Shift-drag) = fist (let go
+  to explode), wheel = zoom. Galaxy: double-click = new galaxy. Shapes: click = next shape.
+- **Touch:** one finger = point, two fingers = turn + zoom, hold still = fist (lift to
+  explode), tap = click.
+- **Keys:** ← → or 1–5 = change scene, `H` = hand control on/off, `G` = controls panel.
 
 ## Run it
 
@@ -57,7 +61,7 @@ The face scene reads `assets/face/color.jpg` + `assets/face/data.png` (depth and
 To make them from another photo:
 
 ```bash
-pip install mediapipe opencv-python-headless numpy scipy pillow
+pip install mediapipe numpy scipy pillow
 python tools/prepare_face.py path/to/selfie.jpg
 ```
 
@@ -68,24 +72,27 @@ index.html            page + import map
 css/style.css         HUD styling
 js/main.js            start screen
 js/core/              App (renderer, bloom, scene switching, quality), BaseScene, shared GLSL
-js/input/             InputState contract, mouse input, MediaPipe hand tracking, gestures, hand cursor
-js/scenes/            one file per scene
+js/ui/                HUD: tabs, gesture hints, status, toasts
+js/input/             InputState contract, mouse/touch input, MediaPipe hand tracking, gestures, hand cursor
+js/scenes/            one file + one helper folder per scene
 assets/face/          the face scene's photo, depth and mask
 vendor/               three.js, lil-gui, MediaPipe tasks-vision + models (see vendor/README.md)
 tools/                local server, face preprocessing, headless smoke test, test-video builder
-tests/                unit tests for the gesture logic (node --test tests/)
+tests/                unit tests for gestures, hand input and the hand cursor (npm test)
 ```
 
 ## Development checks
 
 ```bash
 npm install                      # Playwright for the headless checks
-npm test                         # gesture unit tests (node --test "tests/*.test.mjs")
+npx playwright install chromium  # the browser it drives
+npm test                         # unit tests (node --test "tests/*.test.mjs")
 node tools/smoke.mjs --scene galaxy --shot out/galaxy.png
 bash tools/make_fixtures.sh      # fake-webcam videos of real hands
 node tools/smoke.mjs --scene test --input hand --video out/fixtures/fist.y4m --wait 9000 \
   --steps '[{"eval":"__app.input.state.gesture"}]'
 ```
 
-Performance: quality is `high` on desktop and `low` on phones, and drops automatically
-if the frame rate stays under ~28 fps. Force it with `?quality=low|medium|high`.
+Performance: quality is `high` on desktop and `low` on phones. It steps down by itself
+if the frame rate stays low (unless you picked a quality in the Controls panel), and huge
+HiDPI screens are drawn at about 3.5 megapixels. Force it with `?quality=low|medium|high`.
