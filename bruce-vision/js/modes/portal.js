@@ -1,17 +1,21 @@
 // PORTAL — raise both hands: the window spanned by your thumb and index
 // fingertips becomes a live filter lens over the camera (the viral blue
-// dot-matrix clip, plus nine more looks). Pinch to flip filters, swipe with
-// one hand, or point at a chip.
+// dot-matrix clip, plus ten more looks). Pinch to flip filters, swipe with
+// one hand, or point at a chip. SPIDER-MAN turns whoever is inside the window
+// into Spider-Man (suit shader + face-tracked mask and chest emblem).
 
-import { drawGlow, glowSprite, clamp, lerp, easeOutCubic, easeOutBack } from '../draw.js';
+import { drawHand, drawGlow, glowSprite, comicText, clamp, lerp, easeOutCubic, easeOutBack } from '../draw.js';
 import { Particles } from '../particles.js';
 import { FILTERS, filterColor, filterProgram, bgProgram, buildAtlases } from './portal-filters.js';
+import { SpiderMask } from './spider-mask.js';
+import { cityTexture } from './spider-gl.js';
 
 const BY_ID = Object.fromEntries(FILTERS.map((f) => [f.id, f]));
 const HANDLE = '#2bff88';
 const OPEN_S = 0.3;      // open animation
 const CLOSE_S = 0.34;    // CRT-style collapse
 const WIPE_S = 0.3;      // filter change wipe
+const SPIDER = 'spider'; // the filter that needs face + segmentation
 const SCRAMBLE = '#%&@$*!?<>/=01ｱｶｻﾀﾅ';
 const HINTS = {
   none: 'Raise <b>both hands</b> 🙌 to frame a window',
@@ -35,6 +39,10 @@ const S = {
   uiScale: 1, hintKey: null, hintWant: null, hintSince: 0, humOn: false, sfxOpenAt: -9, sfxCloseAt: -9,
   safeTop: 120, safeBot: 9999, W: 1, H: 1, lab: { l: 0 }, pagerIn: false,
   particles: new Particles(320), atlas: null, warm: [], warmAt: 0,
+  // SPIDER-MAN: own mask instance, person-mask fade, skyline parallax, and
+  // the suit geometry from the face (CSS px; fw = 0 until a face was seen).
+  smask: null, seg: 0, head: { x: 0, y: 0 }, cityRT: null, thwipAt: -9,
+  geo: { on: 0, x: 0, sy: 0, fw: 0, fh: 0, cx: 0, cy: 0, rot: 0 },
 };
 
 // Uniform objects reused every frame (no per-frame allocation storms).
@@ -43,6 +51,7 @@ const U = {
   f: {
     u_quad: new Float32Array(8), u_center: [0, 0], u_span: 1, u_alpha: 1, u_reveal: 1, u_cell: 10, u_band: [0, 1e5],
     u_wipe: 9, u_wipeDir: 1, u_wipeInv: 0, u_flash: 0, u_tint: [1, 1, 1], u_fade: [0, 0], u_glyphs: null, u_ascii: null,
+    u_city: null, u_seg: 0, u_body: [0, 0, 1, 1], u_bodyOn: 0, u_web: [0, 0, 1, 0],
   },
 };
 
@@ -171,6 +180,7 @@ function switchTo(mode, app, id, dir, how) {
   // The HUD already beeps for its own chips.
   if (how !== 'chip') app.sfx.play('select');
   if (how === 'swipe') app.sfx.play('whoosh');
+  if (id === SPIDER) { app.sfx.play('thwip'); S.thwipAt = t; }
   // Sparks along the edge the wipe starts from.
   const q = S.open > 0.05 ? S.dq : S.gq;
   const a = dir > 0 ? q[0] : q[3], b = dir > 0 ? q[1] : q[2];
@@ -558,6 +568,161 @@ function drawSwipeFx(ctx, t) {
   ctx.restore();
 }
 
+// --- SPIDER-MAN filter ----------------------------------------------------------
+
+// The spider filter is on screen: current, or the old side of a wipe.
+const spiderLive = () => S.cur === SPIDER || (S.prev === SPIDER && S.wipe < 1);
+
+// Suit geometry from the face: body centre line, shoulder height, and the
+// chest (web centre + emblem) one face-height below the chin.
+function suitGeo(f, dt) {
+  const G = S.geo;
+  if (f) {
+    const top = f.lm[10], chin = f.lm[152];
+    let ux = top.x - chin.x, uy = top.y - chin.y;
+    const fh = Math.hypot(ux, uy);
+    if (fh > 8 && Number.isFinite(fh)) {
+      ux /= fh; uy /= fh;
+      // the body stays more upright than a tilted head
+      const dx = -ux * 0.5, dy = 0.5 - uy * 0.5, dl = Math.hypot(dx, dy) || 1;
+      G.x = f.center.x; G.fw = f.width > 4 ? f.width : fh * 0.8; G.fh = fh;
+      G.sy = chin.y + fh * 0.4;
+      G.cx = chin.x + (dx / dl) * fh; G.cy = chin.y + (dy / dl) * fh;
+      G.rot = Math.atan2(ux, -uy) * 0.6;
+      G.on = Math.min(1, G.on + dt * 4);
+      return;
+    }
+  }
+  G.on = Math.max(0, G.on - dt * 1.5);
+}
+
+// Shader inputs for one window (device px). Without a face yet, the web
+// is centred in the window.
+function spiderUniforms(gfx, q) {
+  const u = U.f, d = gfx.dpr, G = S.geo;
+  let cx = 0, cy = 0;
+  for (let i = 0; i < 4; i++) { cx += q[i].x / 4; cy += q[i].y / 4; }
+  const seen = G.fw > 0;
+  const fw = seen ? G.fw : Math.max(1, Math.sqrt(Math.abs(area(q)))) * 0.3;
+  u.u_city = S.cityRT || gfx.videoTex;
+  u.u_seg = S.seg;
+  u.u_body[0] = (seen ? G.x : cx) * d; u.u_body[1] = (seen ? G.sy : cy) * d;
+  u.u_body[2] = fw * d; u.u_body[3] = (seen ? G.fh : fw * 1.25) * d;
+  u.u_bodyOn = G.on;
+  u.u_web[0] = (seen ? G.cx : cx) * d; u.u_web[1] = (seen ? G.cy : cy) * d;
+  u.u_web[2] = fw * 0.36 * d; u.u_web[3] = seen ? G.rot : 0;
+}
+
+// Bilinear point (u, v) of a window quad (its iso-lines are straight).
+function qp(q, u, v) {
+  return {
+    x: (q[0].x * (1 - u) + q[1].x * u) * (1 - v) + (q[3].x * (1 - u) + q[2].x * u) * v,
+    y: (q[0].y * (1 - u) + q[1].y * u) * (1 - v) + (q[3].y * (1 - u) + q[2].y * u) * v,
+  };
+}
+
+// Clip to the part of a window that shows the spider filter: inside the open
+// reveal and on the spider side of a wipe (same maths as MAIN in the shader).
+function clipSpider(ctx, q, reveal) {
+  let v0 = 0, v1 = 1;
+  if (S.wipe < 1 && S.prev) {
+    const f = clamp(-0.08 + easeOutCubic(S.wipe) * 1.25);
+    const newTop = S.wipeDir > 0;
+    if (S.cur === SPIDER) { if (newTop) v1 = f; else v0 = 1 - f; }
+    else if (S.prev === SPIDER) { if (newTop) v0 = f; else v1 = 1 - f; }
+    else return false;
+  } else if (S.cur !== SPIDER) return false;
+  const h = Math.min(0.5, reveal * 0.625);
+  v0 = Math.max(v0, 0.5 - h); v1 = Math.min(v1, 0.5 + h);
+  if (h < 0.005 || v1 - v0 < 0.005) return false;
+  const a = qp(q, 0.5 - h, v0), b = qp(q, 0.5 + h, v0), c = qp(q, 0.5 + h, v1), e = qp(q, 0.5 - h, v1);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.lineTo(e.x, e.y);
+  ctx.closePath();
+  ctx.clip();
+  return true;
+}
+
+// Chest emblem in unit size (legs span about ±0.46), head up.
+let emblem = null;
+function emblemPaths() {
+  if (emblem) return emblem;
+  const body = new Path2D();
+  for (const [x, y, rx, ry] of [[0, -0.3, 0.06, 0.07], [0, -0.14, 0.09, 0.115], [0, 0.11, 0.105, 0.18]]) {
+    body.moveTo(x + rx, y);
+    body.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+  }
+  const legs = new Path2D();
+  const L = [
+    [0.04, -0.2, 0.22, -0.38, 0.26, -0.62],
+    [0.07, -0.15, 0.36, -0.22, 0.46, -0.46],
+    [0.07, -0.08, 0.36, 0.02, 0.46, 0.3],
+    [0.05, 0.0, 0.22, 0.24, 0.26, 0.56],
+  ];
+  for (const [ax, ay, bx, by, cx, cy] of L) {
+    for (const k of [1, -1]) { legs.moveTo(ax * k, ay); legs.lineTo(bx * k, by); legs.lineTo(cx * k, cy); }
+  }
+  emblem = { body, legs };
+  return emblem;
+}
+
+function drawEmblem(ctx, G, A) {
+  const { body, legs } = emblemPaths();
+  ctx.save();
+  ctx.translate(G.cx, G.cy);
+  ctx.rotate(G.rot);
+  const s = G.fw * 0.75;
+  ctx.scale(s, s);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.lineWidth = 0.05;
+  ctx.globalAlpha = A;
+  ctx.fillStyle = ctx.strokeStyle = '#0b0206';
+  ctx.stroke(legs);
+  ctx.fill(body);
+  ctx.restore();
+}
+
+// Mask + emblem in every window that shows the spider filter, clipped to it
+// and, like the shader, dimmed where the window reaches under the HUD bars.
+function drawSpider(ctx, frame) {
+  if (!S.smask || !spiderLive()) return;
+  const wins = [];
+  if (S.open > 0.001) wins.push([S.dq, S.present ? easeOutCubic(S.open) : 1, S.present ? 1 : smooth(0.35, 0.8, S.open)]);
+  if (S.ghostA > 0.01) wins.push([S.gq, 1, S.ghostA * 0.5]);
+  const top = S.safeTop - 9, bot = S.safeBot + 9;
+  const bands = [[top, bot, 1], [-1e4, top, 0.3], [bot, 1e5, 0.3]];
+  for (const [q, reveal, A] of wins) {
+    if (A < 0.01) continue;
+    const y0 = Math.min(q[0].y, q[1].y, q[2].y, q[3].y), y1 = Math.max(q[0].y, q[1].y, q[2].y, q[3].y);
+    for (const [b0, b1, k] of bands) {
+      if (y1 <= b0 || y0 >= b1 || b1 <= b0) continue;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(-1e4, b0, 2e4 + S.W, b1 - b0);
+      ctx.clip();
+      if (clipSpider(ctx, q, reveal)) {
+        if (S.geo.on > 0.01 && S.geo.fw > 0) drawEmblem(ctx, S.geo, A * k * S.geo.on);
+        S.smask.draw(ctx, frame, { amt: A * k, miles: 0, comic: 1 });
+      }
+      ctx.restore();
+    }
+  }
+}
+
+// Comic "THWIP!" popping in the window's top-right corner on the switch.
+function drawThwip(ctx, t) {
+  const age = t - S.thwipAt;
+  if (age > 0.8 || S.cur !== SPIDER || (S.open < 0.05 && S.ghostA < 0.05)) return;
+  const q = S.open > 0.05 ? S.dq : S.gq, sc = S.uiScale;
+  const x = lerp(q[1].x, q[3].x, 0.16), y = Math.max(lerp(q[1].y, q[3].y, 0.14), S.safeTop + 22 * sc);
+  ctx.save();
+  comicText(ctx, 'THWIP!', x, y, {
+    size: 30 * sc, rot: -0.14, fill: '#ffffff', shadow: '#e62429',
+    scale: easeOutBack(clamp(age / 0.14)), alpha: 1 - smooth(0.55, 0.8, age),
+  });
+  ctx.restore();
+}
+
 // --- sim scenarios -----------------------------------------------------------
 
 const portrait = () => typeof innerWidth !== 'undefined' && innerHeight > innerWidth;
@@ -601,6 +766,13 @@ export default {
   hint: HINTS.none,
   guide: [['🙌', 'Frame a window'], ['🤏', 'Pinch: next filter'], ['👋↔', 'One hand: swipe filters']],
   options: FILTERS.map((f) => ({ id: f.id, label: f.label, short: f.short })),
+  // Drawn in draw2D instead, so the spider mask can sit under the skeletons.
+  skeleton: false,
+
+  // Face + person segmentation only for the SPIDER-MAN filter.
+  needs() {
+    return this.option === SPIDER || spiderLive() ? { face: true, segment: true } : {};
+  },
 
   simScenarios: {
     frame: (t) => frameHands(t),
@@ -627,6 +799,7 @@ export default {
 
   init(app) {
     try { S.atlas = buildAtlases(app.gfx); } catch (e) { console.warn('[portal] atlas failed', e); }
+    S.smask = new SpiderMask();
     const want = app.params?.get('filter');
     if (want && BY_ID[want]) this.option = want;
   },
@@ -640,6 +813,8 @@ export default {
     });
     S.memo.clear(); S.uiUntil.clear(); S.particles.clear();
     S.warm = FILTERS.map((f) => f.id).filter((id) => id !== S.cur);
+    S.seg = 0; S.geo.on = 0; S.geo.fw = 0;
+    S.smask?.reset();
   },
 
   exit(app) {
@@ -753,6 +928,18 @@ export default {
 
     if (S.wipe < 1) S.wipe = Math.min(1, S.wipe + dt / WIPE_S);
     S.flash = Math.max(0, S.flash - dt * 3.5);
+
+    // SPIDER-MAN: suit geometry, mask fade, person-mask fade, parallax.
+    const spidey = spiderLive();
+    const face = spidey && frame.face && frame.face.lm && frame.face.lm.length >= 468 ? frame.face : null;
+    S.smask?.update(face, dt);
+    suitGeo(face, dt);
+    S.seg = clamp(S.seg + (spidey && frame.hasMask ? dt * 2.5 : -dt * 4));
+    if (face) {
+      const k = Math.min(1, dt * 3);
+      S.head.x += (clamp((face.center.x / W - 0.5) * 2, -1, 1) - S.head.x) * k;
+      S.head.y += (clamp((face.center.y / H - 0.45) * 2, -1, 1) - S.head.y) * k;
+    }
     S.particles.update(dt);
 
     // Hint follows the state once it has settled (no flapping on tracking blips).
@@ -774,6 +961,8 @@ export default {
     const showPortal = S.open > 0.001;
     const showGhost = S.ghostA > 0.01;
     if (!showPortal && !showGhost) { gfx.drawVideo(); return; }
+    // The skyline target is drawn before any pass that lands on screen.
+    if (spiderLive()) S.cityRT = cityTexture(gfx, { pal: 0, head: S.head });
     const t = frame.t, d = gfx.dpr;
     const col = filterColor(BY_ID[S.cur], t);
     const bq = showPortal ? S.dq : S.gq;
@@ -796,8 +985,11 @@ export default {
 
   draw2D(ctx, frame) {
     const t = frame.t;
+    drawSpider(ctx, frame);
+    for (const h of frame.hands) drawHand(ctx, h);
     if (S.ghostA > 0.01) drawPhantom(ctx, t);
     if (S.open > 0.001) drawPortal(ctx, t);
+    drawThwip(ctx, t);
     drawPinchCharge(ctx, frame);
     drawSwipeFx(ctx, t);
     S.particles.draw(ctx);
@@ -820,6 +1012,7 @@ function drawFilter(gfx, q, alpha, reveal, flash, col) {
   u.u_band[0] = S.safeTop * d; u.u_band[1] = S.safeBot * d;
   u.u_wipeDir = S.wipeDir;
   if (S.atlas) { u.u_glyphs = S.atlas.glyphs; u.u_ascii = S.atlas.ascii; }
+  if (spiderLive()) spiderUniforms(gfx, q);
   const wiping = S.wipe < 1 && S.prev && BY_ID[S.prev];
   const front = -0.08 + easeOutCubic(S.wipe) * 1.25;
   if (wiping) {

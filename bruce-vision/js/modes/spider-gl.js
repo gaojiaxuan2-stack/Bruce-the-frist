@@ -239,24 +239,28 @@ void main() {
 
 const cache = { rt: null, w: 0, h: 0, hx: 9, hy: 9, pal: -1, t: -9 };
 
+// The skyline in a screen-sized target (sample it at (x / W, 1 - y / H)).
+// It only changes with parallax, palette and slow window flicker, so it is
+// redrawn now and then, not every frame. look: { pal, head: {x, y} }
+export function cityTexture(gfx, look) {
+  if (!cache.rt) cache.rt = gfx.renderTarget(1);
+  const rt = cache.rt, t = gfx.time;
+  // (0.015 head ≈ 1 device px of parallax on the nearest row)
+  const stale = rt.w !== cache.w || rt.h !== cache.h || Math.abs(look.pal - cache.pal) > 0.002
+    || Math.abs(look.head.x - cache.hx) > 0.015 || Math.abs(look.head.y - cache.hy) > 0.015 || t - cache.t > 0.25;
+  if (stale) {
+    Object.assign(cache, { w: rt.w, h: rt.h, hx: look.head.x, hy: look.head.y, pal: look.pal, t });
+    gfx.bindTarget(rt);
+    gfx.fullscreen(gfx.program('spider-city', CITY_FRAG), { u_pal: look.pal, u_head: [look.head.x, look.head.y] });
+    gfx.bindTarget(null);
+  }
+  return rt;
+}
+
 // look: { grade, bg, pal, glitch, head: {x, y} }
 export function renderComic(gfx, look) {
   const comic = gfx.program('spider-comic', COMIC_FRAG);
-  if (look.bg > 0.001) {
-    // The skyline only changes with parallax, palette and slow window
-    // flicker, so it is redrawn into a target now and then, not every frame.
-    if (!cache.rt) cache.rt = gfx.renderTarget(1);
-    const rt = cache.rt, t = gfx.time;
-    // (0.015 head ≈ 1 device px of parallax on the nearest row)
-    const stale = rt.w !== cache.w || rt.h !== cache.h || Math.abs(look.pal - cache.pal) > 0.002
-      || Math.abs(look.head.x - cache.hx) > 0.015 || Math.abs(look.head.y - cache.hy) > 0.015 || t - cache.t > 0.25;
-    if (stale) {
-      Object.assign(cache, { w: rt.w, h: rt.h, hx: look.head.x, hy: look.head.y, pal: look.pal, t });
-      gfx.bindTarget(rt);
-      gfx.fullscreen(gfx.program('spider-city', CITY_FRAG), { u_pal: look.pal, u_head: [look.head.x, look.head.y] });
-      gfx.bindTarget(null);
-    }
-  }
+  if (look.bg > 0.001) cityTexture(gfx, look);
   gfx.fullscreen(comic, {
     u_grade: look.grade,
     u_bg: look.bg,
