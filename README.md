@@ -33,6 +33,17 @@ Each scene shows its own gestures in the bottom-left corner. Without a camera:
   explode), tap = click.
 - **Keys:** ← → or 1–5 = change scene, `H` = hand control on/off, `G` = controls panel.
 
+## Sound
+
+Every scene has its own background music, made live in the browser (nothing to download),
+and the particles move with the beat. Gestures make sounds too: a whoosh when you change
+scene, a rising hum while you hold a fist, a boom when it explodes, a chime for ✌️.
+
+- 🔊 in the top bar turns sound on / off (browsers start it after your first click or tap).
+- **Controls → Sound**: volume, music, effects, and *Particles follow music*.
+- **🎵 Play your own song…** lets the particles dance to any song file on your device.
+- **🎤 Listen to the room** uses the microphone, so they dance to music playing nearby.
+
 ## Run it
 
 The camera only works on `https://` or `http://localhost`, and the browser needs to
