@@ -6,6 +6,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import GUI from 'lil-gui';
 import { SCENES, VISIBLE_SCENES } from './registry.js';
 import { InputManager } from '../input/InputManager.js';
+import { AudioEngine } from '../audio/AudioEngine.js';
 import { Hud } from '../ui/Hud.js';
 
 const QUALITY = {
@@ -36,6 +37,10 @@ export class App {
       uTime: { value: 0 },
       uPixelRatio: { value: 1 },
       uViewportHeight: { value: this.height },
+      /** Music analysis for shaders: x = level, y = bass, z = mid, w = treble (0..1, 0 when silent). */
+      uAudio: { value: new THREE.Vector4() },
+      /** 1 on a beat, decays to 0 in ~0.25 s. */
+      uBeat: { value: 0 },
     };
 
     this.composer = new EffectComposer(this.renderer);
@@ -45,6 +50,7 @@ export class App {
     this.applySize();
 
     this.input = new InputManager(this);
+    this.audio = new AudioEngine(this);
     this.hud = new Hud(this, VISIBLE_SCENES);
     this.buildGui();
 
@@ -65,6 +71,16 @@ export class App {
     this.fpsSamples = [];
     this.lowFpsTime = 0;
     this.noHandTime = 0;
+
+    // Browsers only allow sound after the user does something: unlock on the first gesture.
+    const unlock = () => this.audio.unlock();
+    for (const type of ['pointerdown', 'keydown', 'touchend']) {
+      window.addEventListener(type, unlock, { capture: true, passive: true });
+    }
+    // A click on any button, tab or panel control gets a soft click sound (hand pinch-clicks too).
+    document.addEventListener('click', (e) => {
+      if (e.target.closest?.('button, .lil-gui .lil-controller, .lil-gui .controller')) this.audio.sfx('click', { intensity: 0.5 });
+    }, true);
 
     window.addEventListener('resize', () => this.onResize());
     window.addEventListener('keydown', (e) => this.onKey(e));
@@ -195,6 +211,8 @@ export class App {
     this.active.enter();
     this.configurePasses();
     this.hud.setActive(id, this.active.meta);
+    this.audio.setScene(id);
+    if (!first) this.audio.sfx('whoosh');
     try {
       const url = new URL(location.href);
       url.searchParams.set('scene', id);
@@ -286,7 +304,9 @@ export class App {
       if (input.events.has('swipeleft')) this.next();
       else if (input.events.has('swiperight')) this.prev();
     }
+    if (input.events.has('victorystart')) this.audio.sfx('chime');
     this.updateStatus(dt, input);
+    this.updateAudio(dt);
 
     if (this.active) {
       this.active.update(dt, this.elapsed, input);
@@ -297,6 +317,26 @@ export class App {
       }
       this.watchFps(dt);
     }
+  }
+
+  /** Feed the music analysis to every shader (zeros when sound is off or "follow the music" is off). */
+  updateAudio(dt) {
+    const lv = this.audio.update(dt);
+    const on = this.audio.settings.react && (!this.audio.settings.muted || this.audio.source === 'mic');
+    const k = on ? 1 : 0;
+    this.sharedUniforms.uAudio.value.set(lv.level * k, lv.bass * k, lv.mid * k, lv.treble * k);
+    this.sharedUniforms.uBeat.value = lv.beat * k;
+    this.hud.setSoundState(this.audio);
+  }
+
+  toggleSound() {
+    const a = this.audio;
+    a.unlock();
+    // The first tap only wakes sound up; after that it mutes / unmutes.
+    if (!a.running && !a.settings.muted) return;
+    a.toggleMuted();
+    this.muteController?.updateDisplay();
+    this.hud.toast(a.settings.muted ? '🔇 Sound off' : '🔊 Sound on');
   }
 
   updateStatus(dt, input) {
@@ -360,6 +400,60 @@ export class App {
     g.add(this.settings, 'swipe').name('Swipe to switch');
     g.add(this.settings, 'showPreview').name('Camera preview');
     g.close();
+    this.buildSoundGui();
+  }
+
+  buildSoundGui() {
+    const a = this.audio;
+    const s = a.settings;
+    const f = this.gui.addFolder('Sound');
+    const save = () => a.save();
+    this.muteController = f.add(s, 'muted').name('Mute').onChange(save);
+    f.add(s, 'volume', 0, 1, 0.01).name('Volume').onChange((v) => a.setVolume(v));
+    f.add(s, 'music').name('Music').onChange(save);
+    f.add(s, 'effects').name('Sound effects').onChange(save);
+    f.add(s, 'react').name('Particles follow music').onChange(save);
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'audio/*';
+    fileInput.hidden = true;
+    document.body.appendChild(fileInput);
+    fileInput.addEventListener('change', async () => {
+      const file = fileInput.files?.[0];
+      fileInput.value = '';
+      if (!file) return;
+      try {
+        a.unlock();
+        await a.playFile(file);
+        if (s.muted) a.setMuted(false);
+        this.muteController.updateDisplay();
+        this.hud.toast(`🎵 Playing “${file.name.replace(/\.[^.]+$/, '')}”`);
+      } catch (err) {
+        console.warn('Song failed to play', err);
+        this.hud.toast("This file can't be played. Try an MP3 or M4A song.", 4000);
+      }
+    });
+    const actions = {
+      song: () => fileInput.click(),
+      mic: async () => {
+        try {
+          a.unlock();
+          await a.useMic();
+          this.hud.toast('🎤 Listening — play music near your device');
+        } catch (err) {
+          console.warn('Microphone failed', err);
+          this.hud.toast('The microphone is blocked. Allow it in the address bar to use it.', 4000);
+        }
+      },
+      builtIn: () => {
+        a.useGenerated();
+        this.hud.toast('🎶 Built-in music');
+      },
+    };
+    f.add(actions, 'song').name('🎵 Play your own song…');
+    f.add(actions, 'mic').name('🎤 Listen to the room');
+    f.add(actions, 'builtIn').name('🎶 Built-in music');
+    f.close();
   }
 
   applySize() {

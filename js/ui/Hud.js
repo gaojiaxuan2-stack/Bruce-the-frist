@@ -22,6 +22,9 @@ export class Hud {
     }
     this.cameraButton = $('#btn-camera');
     this.cameraButton.addEventListener('click', () => app.toggleHands());
+    this.soundButton = $('#btn-sound');
+    this.soundButton.addEventListener('click', () => app.toggleSound());
+    this.soundKey = '';
     this.statusEl = $('#status');
     this.toastsEl = $('#toasts');
     this.statusKey = '';
@@ -54,6 +57,17 @@ export class Hud {
       li.className = 'hint-mouse';
       list.appendChild(li);
     }
+  }
+
+  /** 🔊 playing · 🔇 muted · 🔈 waiting for the first tap (browsers block sound until then). */
+  setSoundState(audio) {
+    const state = audio.settings.muted ? 'muted' : audio.running ? 'on' : 'waiting';
+    if (state === this.soundKey) return;
+    this.soundKey = state;
+    const b = this.soundButton;
+    b.textContent = state === 'muted' ? '🔇' : state === 'on' ? '🔊' : '🔈 Tap for sound';
+    b.classList.toggle('on', state === 'on');
+    b.setAttribute('aria-label', state === 'muted' ? 'Sound off. Turn sound on' : state === 'on' ? 'Sound on. Turn sound off' : 'Turn sound on');
   }
 
   setCameraState(on, loading = false) {

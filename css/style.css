@@ -121,6 +121,7 @@ button { font: inherit; color: inherit; }
   white-space: nowrap;
 }
 button.chip { cursor: pointer; }
+.topbar-actions { display: flex; gap: 8px; }
 button.chip:hover, button.chip.hand-hover { border-color: rgba(255, 255, 255, 0.35); }
 .chip.on { border-color: var(--accent); color: var(--accent); }
 
@@ -311,6 +312,7 @@ body > .lil-gui.lil-root {
   #topbar { flex-wrap: wrap; gap: 8px; }
   .brand { order: 1; }
   .topbar-actions { order: 2; margin-left: auto; }
+  #btn-sound { padding: 8px 10px; }
   #tabs { order: 3; width: 100%; margin: 0; justify-content: space-between; }
   .tab { padding: 8px 12px; font-size: 14px; }
   #hints { max-width: calc(100vw - 32px); padding: 10px 12px; }
