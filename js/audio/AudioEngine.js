@@ -12,8 +12,12 @@
 //   scheduler.js    the look-ahead step clock
 //   sfx.js          sound effects and the charging hum
 //   analysis.js     band levels, normaliser, beat detector (pure)
+//
+// Power: when nothing can be heard for a few seconds (muted, Music and Effects off, or a
+// background tab with no song playing), the AudioContext is suspended, so a muted page
+// costs no audio CPU. It wakes up as soon as something could sound again.
 
-import { BANDS, BEAT_BAND, BeatDetector, LevelNormalizer, bandDb, beatPulse, binRange, makePowerTable, spectralFlux } from './analysis.js';
+import { BANDS, BEAT_BAND, BeatDetector, bandDb, bandPresence, beatPulse, binRange, makeBandNormalizers, makePowerTable, spectralFlux } from './analysis.js';
 import { clamp } from './dsp.js';
 import { AudioGraph } from './graph.js';
 import { MusicEngine } from './music.js';
@@ -22,8 +26,12 @@ import { LookaheadScheduler } from './scheduler.js';
 import { ChargeHum, SfxPlayer } from './sfx.js';
 
 const STORAGE_KEY = 'particle3d.sound';
-/** How far ahead the music is booked on the audio clock (s), and how often (ms). */
-const LOOKAHEAD = 0.15;
+/**
+ * How far ahead the music is booked on the audio clock (s), and how often (ms). A long
+ * horizon rides out main-thread stalls (scene loads, shader compiles) without gaps;
+ * mute / music off / hidden use gain gates, so they still act at once.
+ */
+export const LOOKAHEAD = 0.45;
 const TICK_MS = 25;
 /** First start of the music: a slower, gentle fade-in. */
 const FIRST_FADE = 2.5;
@@ -32,9 +40,50 @@ const FILE_LEVEL = 0.55;
 const BEAT_LENGTH = 0.25;
 /** A scene that stops calling charge() lets the hum fade after this long (s). */
 const CHARGE_TIMEOUT = 0.3;
+/** Nothing audible for this long (s; gates and reverb tails have died away) → suspend the context. */
+export const PARK_AFTER = 3;
+/** After a scene change, re-learn the level range once the new mood dominates (s). */
+const RESEED_AFTER = 0.8;
+/** setScene() applies the new mood on the 2nd update() after it (after the scene's first, slow frame)… */
+const MOOD_FRAMES = 2;
+/** …or after this long at the latest (s). */
+const MOOD_MAX_WAIT = 0.5;
 
-const nowSec = () => (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+const NOW = () => (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
 const pageHidden = () => typeof document !== 'undefined' && !!document.hidden;
+
+/** iPhone / iPad without navigator.audioSession (iOS < 17): the ring / silent switch mutes Web Audio. */
+const IOS_LEGACY = (() => {
+  try {
+    if (typeof navigator === 'undefined' || navigator.audioSession) return false;
+    return /iP(hone|ad|od)/.test(navigator.userAgent || '') || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  } catch {
+    return false;
+  }
+})();
+
+/** A short silent WAV (8 kHz, 16-bit mono) as an object URL. */
+function silentWavUrl(seconds = 0.5, rate = 8000) {
+  const n = Math.round(seconds * rate);
+  const v = new DataView(new ArrayBuffer(44 + n * 2));
+  const str = (o, s) => {
+    for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i));
+  };
+  str(0, 'RIFF');
+  v.setUint32(4, 36 + n * 2, true);
+  str(8, 'WAVE');
+  str(12, 'fmt ');
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); // PCM
+  v.setUint16(22, 1, true); // mono
+  v.setUint32(24, rate, true);
+  v.setUint32(28, rate * 2, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  str(36, 'data');
+  v.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([v.buffer], { type: 'audio/wav' }));
+}
 
 export class AudioEngine {
   constructor(app) {
@@ -62,23 +111,30 @@ export class AudioEngine {
     this.effects = null;
     this.hum = null;
     this.scheduler = new LookaheadScheduler(() => this._tick(), { interval: TICK_MS });
-    this.norm = {
-      level: new LevelNormalizer(),
-      bass: new LevelNormalizer({ attack: 0.012, release: 0.16 }),
-      mid: new LevelNormalizer(),
-      treble: new LevelNormalizer({ attack: 0.012, release: 0.14 }),
-    };
+    this.norm = makeBandNormalizers();
     this.detector = new BeatDetector();
     /** Last beat: { clock: 'audio' | 'page', t } */
     this._lastBeat = null;
     /** Recent beat times (audio clock for the built-in music, page clock otherwise). */
     this.beatLog = [];
+    /** Song-file beats waiting for the speakers to catch up (page clock). */
+    this._fileBeats = [];
     this._targets = {};
     this._file = null;
     this._mic = null;
     this._chargeAt = -Infinity;
+    /** Scene whose mood starts after the scene's first frame: { id, frames, at } */
+    this._pendingMood = null;
+    this._reseedAt = 0;
+    /** The context is suspended on purpose (nothing can be heard). */
+    this._parked = false;
+    this._parkSince = null;
+    this._parkTimer = null;
+    this._silentEl = null;
     this._onVisibility = () => {
       if (pageHidden()) this._sleep();
+      this._iosUnmute();
+      this._syncPark();
     };
   }
 
@@ -98,24 +154,22 @@ export class AudioEngine {
       }
       this._init();
     }
-    // 'interrupted' is iOS Safari after a call / Siri / another app took the audio.
     const st = this.ctx.state;
-    if (st === 'suspended' || st === 'interrupted') this.ctx.resume().catch(() => {});
+    // 'interrupted' is iOS Safari after a call / Siri / another app took the audio.
+    // A context we suspended ourselves (nothing to hear) stays asleep.
+    if (st !== 'running' && st !== 'closed' && !(this._parked && this._parkWanted())) {
+      this._parked = false;
+      this._parkSince = null;
+      this.ctx.resume().catch(() => {});
+      // Older iOS only unlocks after a sound starts inside the gesture: play one silent sample.
+      this._blip();
+    }
+    this._iosUnmute();
   }
 
   _init() {
     const ctx = this.ctx;
     this._audioSession(this.settings.muted ? 'ambient' : 'playback');
-    // Older iOS only unlocks after a sound starts inside the gesture: play one silent sample.
-    try {
-      const s = ctx.createBufferSource();
-      s.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
-      s.connect(ctx.destination);
-      s.start(0);
-      s.stop(ctx.currentTime + 0.01);
-    } catch {
-      /* not needed */
-    }
     // Phones: a shorter reverb tail is cheaper to convolve.
     this.graph = new AudioGraph(ctx, { reverbSeconds: this.app?.isMobile ? 1.8 : 2.6 });
     this.music = new MusicEngine(this.graph);
@@ -128,14 +182,20 @@ export class AudioEngine {
     this._ranges = {};
     for (const [name, [lo, hi]] of Object.entries(BANDS)) this._ranges[name] = binRange(ctx.sampleRate, a.fftSize, lo, hi);
     this._beatRange = binRange(ctx.sampleRate, a.fftSize, BEAT_BAND[0], BEAT_BAND[1]);
+    this._db = { level: 0, bass: 0, mid: 0, treble: 0 };
+    this._pendingMood = null;
     this.music.setMood(this.sceneId, FIRST_FADE);
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this._onVisibility);
     this._applyGains();
   }
 
-  /** true once sound can actually play. */
+  /**
+   * true once sound is unlocked and can play. (Also while the engine has put the context
+   * to sleep because nothing can be heard: it wakes up by itself.)
+   */
   get running() {
-    return this.ctx?.state === 'running';
+    const st = this.ctx?.state;
+    return st === 'running' || (this._parked && st === 'suspended');
   }
 
   /** 'generated' | 'file' | 'mic' */
@@ -146,11 +206,14 @@ export class AudioEngine {
   /** Debug / test numbers: scheduler cost, current mood, notes played. */
   get stats() {
     const s = this.scheduler.stats;
+    const players = this.music?.players ?? [];
     return {
       mood: this.music?.moodId ?? null,
       bpm: this.music?.bpm ?? 0,
-      players: this.music?.players.length ?? 0,
-      notes: this.music?.players.reduce((n, p) => n + p.notes, 0) ?? 0,
+      players: players.length,
+      buses: this.music ? Object.values(this.music.buses).filter((b) => b.attached).length : 0,
+      notes: players.reduce((n, p) => n + p.notes, 0),
+      resyncs: players.reduce((n, p) => n + p.clock.resyncs, 0),
       ticks: s.calls,
       tickAvgMs: s.avgMs,
       tickMaxMs: s.maxMs,
@@ -158,6 +221,7 @@ export class AudioEngine {
       sfxDropped: this.effects?.dropped ?? 0,
       charging: !!this.hum?.voice,
       state: this.ctx?.state ?? 'none',
+      parked: this._parked,
     };
   }
 
@@ -172,7 +236,10 @@ export class AudioEngine {
   setMuted(muted) {
     this.settings.muted = !!muted;
     this.save();
-    if (this.graph) this._applyGains();
+    if (this.graph) {
+      this._applyGains();
+      this._syncPark();
+    }
   }
 
   toggleMuted() {
@@ -186,15 +253,22 @@ export class AudioEngine {
     if (this.graph) this._applyGains();
   }
 
-  /** Switch the generated music to this scene's mood (crossfade). */
+  /**
+   * Switch the generated music to this scene's mood (crossfade). The App calls this just
+   * before the new scene's first frame, which can block the page for a while (shaders
+   * compile), so the new mood starts on the second update() after it: its first bar is
+   * booked after that stall instead of being cut by it.
+   */
   setScene(id) {
     this.sceneId = id;
-    if (this.music) this.music.setMood(id);
+    if (!this.music) return;
+    this._pendingMood = { id, frames: 0, at: this._now() };
   }
 
   /** The current mood (key for effects, tempo). */
   get mood() {
-    return MOODS[this.music?.moodId ?? moodFor(this.sceneId)];
+    const id = this._pendingMood ? this._pendingMood.id : this.music?.moodId ?? this.sceneId;
+    return MOODS[moodFor(id)];
   }
 
   /**
@@ -203,7 +277,7 @@ export class AudioEngine {
    * @param {{intensity?: number, pan?: number}} [opts] intensity 0..1, pan -1 (left) .. 1 (right)
    */
   sfx(name, opts = {}) {
-    if (!this.effects || !this.running) return;
+    if (!this.effects || !this._live()) return;
     const s = this.settings;
     if (!s.effects || s.muted || pageHidden()) return;
     const mood = this.mood;
@@ -212,8 +286,8 @@ export class AudioEngine {
 
   /** Continuous "charging" hum while a fist gathers particles: call every frame with 0..1, 0 to stop. */
   charge(level) {
-    this._chargeAt = nowSec();
-    if (!this.hum || !this.running) return;
+    this._chargeAt = this._now();
+    if (!this.hum || !this._live()) return;
     const s = this.settings;
     const lv = s.effects && !s.muted ? clamp(Number(level) || 0) : 0;
     this.hum.set(lv, this.mood.root);
@@ -259,7 +333,7 @@ export class AudioEngine {
     this._stopMic();
     this._file = { el, url, node, gain, want: true, pauseTimer: null };
     this._source = 'file';
-    this.detector.reset();
+    this._newSource();
     if (!this.settings.music) {
       // Choosing a song means "play music".
       this.settings.music = true;
@@ -267,6 +341,7 @@ export class AudioEngine {
       this._refreshGui();
     }
     this._applyGains();
+    this._syncPark();
   }
 
   /** Listen to the microphone (music playing in the room); nothing is played back. */
@@ -290,8 +365,9 @@ export class AudioEngine {
     this._stopMic();
     this._mic = { stream, node };
     this._source = 'mic';
-    this.detector.reset();
+    this._newSource();
     this._applyGains();
+    this._syncPark();
   }
 
   /** Back to the built-in music. */
@@ -300,15 +376,24 @@ export class AudioEngine {
     if (this._mic) this._audioSession(this.settings.muted ? 'ambient' : 'playback');
     this._stopMic();
     this._source = 'generated';
-    this.detector.reset();
-    if (this.graph) this._applyGains();
+    this._newSource();
+    if (this.graph) {
+      this._applyGains();
+      this._syncPark();
+    }
   }
 
   /** Per frame: update `levels`. */
   update(dt) {
     dt = Math.min(Math.max(Number(dt) || 0, 0), 0.1);
-    const now = nowSec();
+    const now = this._now();
     if (this.graph) {
+      this._syncPark();
+      this._applyPendingMood(now);
+      if (this._reseedAt && now >= this._reseedAt) {
+        this._reseedAt = 0;
+        this._reseed();
+      }
       this._applyGains();
       this._syncGenerated();
       this._syncFile();
@@ -326,12 +411,23 @@ export class AudioEngine {
 
   dispose() {
     this.scheduler.stop();
+    clearTimeout(this._parkTimer);
+    this._parkTimer = null;
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this._onVisibility);
     this._stopFile(true);
     this._stopMic();
     this.hum?.stop();
     this.music?.dispose();
     this.graph?.dispose();
+    if (this._silentEl) {
+      try {
+        this._silentEl.pause();
+        URL.revokeObjectURL(this._silentEl.src);
+      } catch {
+        /* ignore */
+      }
+      this._silentEl = null;
+    }
     const ctx = this.ctx;
     this.ctx = null;
     this.graph = null;
@@ -339,15 +435,123 @@ export class AudioEngine {
     this.effects = null;
     this.hum = null;
     this._targets = {};
+    this._parked = false;
+    this._pendingMood = null;
     if (ctx && ctx.state !== 'closed') ctx.close().catch(() => {});
   }
 
   // ------------------------------------------------------------------ internals
 
+  /** Page clock in seconds (tests replace it). */
+  _now() {
+    return NOW();
+  }
+
+  /** The audio clock is actually running (not suspended by the browser or by us). */
+  _live() {
+    return this.ctx?.state === 'running';
+  }
+
   /** Built-in music should be playing right now. */
   _generatedWanted() {
     const s = this.settings;
-    return this.running && s.music && !s.muted && this._source === 'generated' && !pageHidden();
+    return this._live() && s.music && !s.muted && this._source === 'generated' && !pageHidden();
+  }
+
+  /**
+   * Nothing can be heard and nothing needs analysing: muted (the microphone keeps
+   * listening), or neither music nor effects can sound (both off, or a background tab
+   * without a song playing).
+   */
+  _parkWanted() {
+    const s = this.settings;
+    if (this._source === 'mic') return false;
+    if (s.muted) return true;
+    const hidden = pageHidden();
+    const music = s.music && (this._source === 'file' ? !!this._file : !hidden);
+    const effects = s.effects && !hidden;
+    return !music && !effects;
+  }
+
+  /**
+   * Suspend the context after PARK_AFTER seconds with nothing to hear (by then the gates
+   * have closed and the reverb has died away, so stopping the clock can't click); resume
+   * it as soon as something could sound. update() stops in a background tab, so a timer
+   * finishes the countdown.
+   */
+  _syncPark() {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state === 'closed') return;
+    if (!this._parkWanted()) {
+      this._parkSince = null;
+      if (this._parkTimer !== null) {
+        clearTimeout(this._parkTimer);
+        this._parkTimer = null;
+      }
+      if (this._parked) {
+        this._parked = false;
+        ctx.resume().catch(() => {});
+      }
+      return;
+    }
+    if (this._parked || ctx.state !== 'running') return;
+    const now = this._now();
+    if (this._parkSince === null) {
+      this._parkSince = now;
+      clearTimeout(this._parkTimer);
+      this._parkTimer = setTimeout(() => {
+        this._parkTimer = null;
+        this._syncPark();
+      }, PARK_AFTER * 1000 + 50);
+    }
+    if (now - this._parkSince >= PARK_AFTER) {
+      this._parked = true;
+      this.hum?.stop();
+      const p = ctx.suspend?.();
+      if (p?.catch) p.catch(() => (this._parked = false));
+    }
+  }
+
+  /** One silent sample, started inside a user gesture (unlocks older iOS). */
+  _blip() {
+    try {
+      const ctx = this.ctx;
+      const s = ctx.createBufferSource();
+      s.buffer = this._blank || (this._blank = ctx.createBuffer(1, 1, ctx.sampleRate));
+      s.connect(ctx.destination);
+      s.start(0);
+    } catch {
+      /* not needed */
+    }
+  }
+
+  /**
+   * iOS < 17 plays Web Audio in the "ambient" category, which the ring / silent switch
+   * mutes while the 🔊 button says sound is on. A silent looping <audio> element, started
+   * from a tap, moves the page to the "playback" category like a music app. It is paused
+   * while muted or hidden (so other apps' audio and the lock screen are left alone).
+   */
+  _iosUnmute() {
+    if (!IOS_LEGACY || typeof document === 'undefined') return;
+    const want = !this.settings.muted && !pageHidden() && !!this.ctx;
+    let el = this._silentEl;
+    if (want && !el) {
+      try {
+        el = this._silentEl = document.createElement('audio');
+        el.setAttribute('playsinline', '');
+        el.setAttribute('x-webkit-airplay', 'deny');
+        el.disableRemotePlayback = true;
+        el.loop = true;
+        el.preload = 'auto';
+        el.src = silentWavUrl();
+      } catch {
+        this._silentEl = null;
+        return;
+      }
+    }
+    if (!el) return;
+    if (want && el.paused) el.play().catch(() => {});
+    else if (!want && !el.paused) el.pause();
   }
 
   /** Move a gate only when its target changes (cheap: no node churn, no automation spam). */
@@ -366,6 +570,7 @@ export class AudioEngine {
       // Muted: don't take the audio from other apps (iOS); playing: be a music app.
       this._targets.muted = s.muted;
       if (this._source !== 'mic') this._audioSession(s.muted ? 'ambient' : 'playback');
+      this._iosUnmute();
     }
     this._ramp('master', g.master.gain, s.muted ? 0 : vol * vol, 0.06);
     this._ramp('music', [g.musicBus.gain, g.musicWet.gain], s.music ? 1 : 0, 0.1);
@@ -373,6 +578,15 @@ export class AudioEngine {
     const gen = this._generatedWanted();
     this._ramp('gen', [g.genBus.gain, g.genWet.gain], gen ? 1 : 0, gen ? 0.12 : 0.2);
     this._ramp('file', g.fileBus.gain, this._source === 'file' ? FILE_LEVEL : 0, 0.1);
+  }
+
+  _applyPendingMood(now) {
+    const pm = this._pendingMood;
+    if (!pm || (++pm.frames < MOOD_FRAMES && now - pm.at < MOOD_MAX_WAIT)) return;
+    this._pendingMood = null;
+    const before = this.music.moodId;
+    this.music.setMood(pm.id);
+    if (this.music.moodId !== before) this._reseedAt = now + RESEED_AFTER;
   }
 
   _syncGenerated() {
@@ -455,6 +669,17 @@ export class AudioEngine {
     }
   }
 
+  /** The music source changed: forget its beats, re-learn the level range quickly. */
+  _newSource() {
+    this.detector.reset();
+    this._fileBeats.length = 0;
+    this._reseed();
+  }
+
+  _reseed() {
+    for (const n of Object.values(this.norm)) n.reseed();
+  }
+
   /**
    * iOS 17+ audio session: 'playback' plays through the silent switch like a music app,
    * 'ambient' (muted) leaves other apps' audio alone, 'play-and-record' for the microphone.
@@ -477,7 +702,7 @@ export class AudioEngine {
 
   /** Is anything playing that the particles should follow? */
   _analysing() {
-    if (!this.running) return false;
+    if (!this._live()) return false;
     const s = this.settings;
     if (this._source === 'mic') return !!this._mic;
     if (this._source === 'file') return !!this._file && s.music && !s.muted && !this._file.el.paused;
@@ -499,6 +724,15 @@ export class AudioEngine {
       }
     }
     return t - (ctx.outputLatency || 0) - (ctx.baseLatency || 0);
+  }
+
+  /**
+   * How long after the analyser sees a sound it comes out of the speakers (s), minus a
+   * frame for the screen. Large on Bluetooth (0.15–0.25 s).
+   */
+  _outputDelay() {
+    const ctx = this.ctx;
+    return Math.max(0, (ctx.outputLatency || 0) + (ctx.baseLatency || 0) - 0.02);
   }
 
   _beat(clock, t) {
@@ -536,17 +770,28 @@ export class AudioEngine {
     const bytes = this._bytes;
     a.getByteFrequencyData(bytes);
     const lv = this.levels;
+    const db = this._db;
     for (const name of ['level', 'bass', 'mid', 'treble']) {
       const [from, to] = this._ranges[name];
-      lv[name] = this.norm[name].update(bandDb(bytes, from, to, this._power), dt);
+      db[name] = bandDb(bytes, from, to, this._power);
+    }
+    for (const name of ['level', 'bass', 'mid', 'treble']) {
+      lv[name] = this.norm[name].update(db[name], dt, bandPresence(name, db, this._ranges));
     }
     if (this._source === 'generated') {
       this._scheduledBeats(true);
     } else {
       const [from, to] = this._beatRange;
-      if (this.detector.push(spectralFlux(bytes, this._prev, from, to), now)) this._beat('page', now);
+      if (this.detector.push(spectralFlux(bytes, this._prev, from, to), now)) {
+        // A song is heard `outputDelay` after the analyser sees it: pulse when it is heard.
+        // (The microphone hears the room, which is already in time.)
+        if (this._source === 'file') this._fileBeats.push(now + this._outputDelay());
+        else this._beat('page', now);
+      }
       this._scheduledBeats(false);
     }
+    const fb = this._fileBeats;
+    while (fb.length && fb[0] <= now) this._beat('page', fb.shift());
     this._prev.set(bytes);
     lv.beat = this._beatValue(now);
   }
@@ -555,6 +800,7 @@ export class AudioEngine {
     const lv = this.levels;
     for (const name of ['level', 'bass', 'mid', 'treble']) lv[name] = this.norm[name].silence(dt);
     if (this.music && this.ctx) this._scheduledBeats(false);
+    this._fileBeats.length = 0;
     lv.beat = this._beatValue(now);
   }
 }

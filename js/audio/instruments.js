@@ -1,7 +1,9 @@
 // Synthesised instruments for the generated music. Each instrument is a function
-//   (kit, out, time, event, stepDur) => void
+//   (kit, out, time, event, stepDur) => endTime
 // that builds a few short-lived Web Audio nodes for one note and lets them go: the
-// oscillators stop themselves after the release, then the browser frees them.
+// oscillators stop themselves after the release, then the browser frees them. It
+// returns the audio time when the note is fully silent (the mood bus uses it to know
+// when it can be disconnected).
 // Every envelope starts at 0 and ends at 0 with ramps, so nothing clicks.
 //
 // kit = { ctx, noise: AudioBuffer, vinyl: AudioBuffer }
@@ -102,9 +104,10 @@ function kick(kit, out, t, e) {
   const house = e.house ? 1 : 0;
   const soft = e.soft ? 1 : 0;
   const f0 = soft ? 92 : house ? 150 : 118;
-  const f1 = soft ? 44 : house ? 49 : 52;
+  // The house kick ends at 56 Hz with a shorter tail: punch, not sub-bass rumble.
+  const f1 = soft ? 44 : house ? 56 : 52;
   const g = gainNode(ctx);
-  const end = perc(g.gain, t, (soft ? 0.7 : 0.9) * v, 0.003, soft ? 0.5 : house ? 0.42 : 0.36);
+  const end = perc(g.gain, t, (soft ? 0.7 : 0.9) * v, 0.003, soft ? 0.5 : house ? 0.32 : 0.36);
   const o = osc(ctx, 'sine', f0, t, end);
   o.frequency.setValueAtTime(f0, t);
   o.frequency.exponentialRampToValueAtTime(f1, t + (house ? 0.07 : 0.09));
@@ -121,9 +124,10 @@ function kick(kit, out, t, e) {
     h.frequency.setValueAtTime(f0 * 2, t);
     h.frequency.exponentialRampToValueAtTime(f1 * 2, t + 0.06);
     const hg = gainNode(ctx);
-    perc(hg.gain, t, 0.12 * v * (e.muffle ? 0.3 : 1), 0.002, 0.14);
+    perc(hg.gain, t, (house ? 0.16 : 0.12) * v * (e.muffle ? 0.3 : 1), 0.002, 0.14);
     h.connect(hg).connect(out.in);
   }
+  return Math.max(end, t + 0.16);
 }
 
 function hat(kit, out, t, e) {
@@ -134,6 +138,7 @@ function hat(kit, out, t, e) {
   const g = gainNode(ctx);
   perc(g.gain, t, (open ? 0.8 : e.closed ? 0.8 : 1.6) * e.vel, open ? 0.004 : 0.0015, open ? 0.2 : e.closed ? 0.035 : 0.05);
   n.connect(f).connect(g).connect(out.inR);
+  return t + (open ? 0.3 : 0.12);
 }
 
 function brush(kit, out, t, e) {
@@ -155,6 +160,7 @@ function brush(kit, out, t, e) {
   const bg = gainNode(ctx);
   perc(bg.gain, t, 0.3 * v, 0.002, 0.09);
   body.connect(bg).connect(out.in);
+  return t + 0.35;
 }
 
 function clap(kit, out, t, e) {
@@ -175,6 +181,7 @@ function clap(kit, out, t, e) {
   gp.exponentialRampToValueAtTime(EPS, t + 0.24);
   gp.linearRampToValueAtTime(0, t + 0.245);
   n.connect(bp).connect(g).connect(out.in);
+  return t + 0.3;
 }
 
 function shaker(kit, out, t, e) {
@@ -184,6 +191,7 @@ function shaker(kit, out, t, e) {
   const g = gainNode(ctx);
   perc(g.gain, t, 1.2 * e.vel, 0.008, 0.05);
   n.connect(bp).connect(g).connect(out.inR);
+  return t + 0.1;
 }
 
 /** Soft clock tick (tone 1) / tock (tone 0): a resonant click plus a tiny wooden ping. */
@@ -199,6 +207,7 @@ function tick(kit, out, t, e) {
   const og = gainNode(ctx);
   perc(og.gain, t, 0.1 * e.vel, 0.001, 0.05);
   o.connect(og).connect(out.in);
+  return t + 0.07;
 }
 
 function vinyl(kit, out, t, e, sd) {
@@ -216,6 +225,7 @@ function vinyl(kit, out, t, e, sd) {
   s.stop(t + hold + 0.3);
   const hp = filter(ctx, 'highpass', 250, 0.5);
   s.connect(hp).connect(g).connect(out.in);
+  return t + hold + 0.3;
 }
 
 // ------------------------------------------------------------------ keyboards
@@ -226,6 +236,7 @@ function keys(kit, out, t, e, sd) {
   const n = e.notes.length;
   const hold = e.len * sd;
   const per = 1 / Math.sqrt(n);
+  let last = t;
   e.notes.forEach((m, j) => {
     const tt = t + j * (e.strum || 0);
     const f = mtof(m);
@@ -240,7 +251,9 @@ function keys(kit, out, t, e, sd) {
     mg.gain.exponentialRampToValueAtTime(f * index * 0.1, tt + 0.8);
     mod.connect(mg).connect(car.frequency);
     car.connect(g).connect(j % 2 ? out.inR : out.inL);
+    last = Math.max(last, end);
   });
+  return last;
 }
 
 /** Round lo-fi bass: sine + a little triangle, low-passed. */
@@ -256,6 +269,7 @@ function bass(kit, out, t, e, sd) {
   s.connect(lp);
   tri.connect(tg).connect(lp);
   lp.connect(g).connect(out.in);
+  return end;
 }
 
 /** Pipe organ swell: stacked detuned saw / square (+ a 4' flute), slow low-pass bloom. */
@@ -293,6 +307,7 @@ function organ(kit, out, t, e, sd) {
     sq.connect(g2).connect(sides[(j + 1) % 2]);
     fl.connect(g3).connect(sides[j % 2]);
   });
+  return end;
 }
 
 /** Deep drone: sine + octave triangle + a dark saw, very slow filter breathing. */
@@ -321,6 +336,7 @@ function drone(kit, out, t, e, sd) {
     sw.connect(gw).connect(lp);
   }
   lp.connect(g).connect(out.in);
+  return end;
 }
 
 /** Soft organ-flute note for the repeating figure. */
@@ -336,6 +352,7 @@ function oarp(kit, out, t, e, sd) {
   tri.connect(lp);
   s2.connect(g2).connect(lp);
   lp.connect(g).connect(e.notes[0] % 2 ? out.inR : out.inL);
+  return end;
 }
 
 /** Airy pad: two detuned saws per note spread left / right through a soft low-pass. */
@@ -366,6 +383,7 @@ function pad(kit, out, t, e, sd) {
       o.connect(g).connect(sides[k]);
     }
   }
+  return end;
 }
 
 /** Sustained sine sub bass. */
@@ -380,6 +398,7 @@ function sub(kit, out, t, e, sd) {
   s.connect(g);
   tri.connect(tg).connect(g);
   g.connect(out.in);
+  return end;
 }
 
 /** Shimmering air: band-passed noise sweeping slowly, decorrelated left / right. */
@@ -399,6 +418,7 @@ function air(kit, out, t, e, sd) {
     (param) => adsr(param, t, 0.26 * e.vel, { a: 1.6, d: 0, s: 1, r: 2 }, hold),
   );
   for (const side of sides) noise(kit, t, end).connect(side);
+  return end;
 }
 
 /** Glassy FM bell for the arpeggios. */
@@ -415,6 +435,7 @@ function bell(kit, out, t, e) {
   mg.gain.exponentialRampToValueAtTime(f * 0.04, t + 0.3);
   mod.connect(mg).connect(car.frequency);
   car.connect(g).connect(m % 2 ? out.inR : out.inL);
+  return end;
 }
 
 /** Tiny high glint (inharmonic partials). */
@@ -429,32 +450,34 @@ function glint(kit, out, t, e) {
   a.connect(g);
   b.connect(bg).connect(g);
   g.connect(out.inR);
+  return end;
 }
 
-/** Deep-house bass: saw + sine through a resonant low-pass with a quick filter blip. */
+/** Deep-house bass: two detuned saws + a sine through a resonant low-pass with a quick filter blip. */
 function hbass(kit, out, t, e, sd) {
   const { ctx } = kit;
   const f = mtof(e.notes[0]);
-  const cut = e.cutoff ?? 400;
+  const cut = e.cutoff ?? 500;
   const g = gainNode(ctx);
   const end = adsr(g.gain, t, 0.5 * e.vel, { a: 0.004, d: 0.25, s: 0.55, r: 0.07 }, e.len * sd);
-  const lp = filter(ctx, 'lowpass', cut, 4);
+  const lp = filter(ctx, 'lowpass', cut, 3.5);
   lp.frequency.setValueAtTime(cut * 3, t);
   lp.frequency.exponentialRampToValueAtTime(cut, t + 0.12);
-  const saw = osc(ctx, 'sawtooth', f, t, end);
+  const sg = gainNode(ctx, 0.36);
+  for (const det of [-6, 6]) osc(ctx, 'sawtooth', f, t, end, det).connect(sg);
+  sg.connect(lp);
   const s = osc(ctx, 'sine', f, t, end);
-  const sg = gainNode(ctx, 0.45);
-  const ssg = gainNode(ctx, 0.6);
-  saw.connect(sg).connect(lp);
+  const ssg = gainNode(ctx, 0.35);
   s.connect(ssg).connect(lp);
   lp.connect(g).connect(out.in);
+  return end;
 }
 
 /** Short filtered chord stab (deep-house minor 9th). */
 function stab(kit, out, t, e) {
   const { ctx } = kit;
   const cut = e.cutoff ?? 1600;
-  const per = 0.7 / Math.sqrt(e.notes.length);
+  const per = 0.9 / Math.sqrt(e.notes.length);
   const { sides, end } = stereoChains(
     ctx,
     out,
@@ -464,25 +487,27 @@ function stab(kit, out, t, e) {
       lp.frequency.exponentialRampToValueAtTime(cut * 0.45, t + 0.25);
       return lp;
     },
-    (param) => perc(param, t, e.vel, 0.003, 0.36),
+    (param) => perc(param, t, e.vel, 0.003, 0.48),
   );
   e.notes.forEach((m, j) => {
     const o = osc(ctx, 'sawtooth', mtof(m), t, end, j % 2 ? 5 : -5);
     const g = gainNode(ctx, per);
     o.connect(g).connect(sides[j % 2]);
   });
+  return end;
 }
 
 /** Playful pluck: triangle + a little square with a fast closing filter. */
 function pluck(kit, out, t, e, sd) {
   const { ctx } = kit;
   const per = 1 / Math.sqrt(e.notes.length);
+  let last = t;
   e.notes.forEach((m, j) => {
     const f = mtof(m);
     const g = gainNode(ctx);
-    const end = adsr(g.gain, t, 0.75 * e.vel * per, { a: 0.002, d: 0.5, s: 0, r: 0.08 }, e.len * sd);
-    const lp = filter(ctx, 'lowpass', 3000, 2.2);
-    lp.frequency.setValueAtTime(3400, t);
+    const end = adsr(g.gain, t, 0.75 * e.vel * per, { a: 0.004, d: 0.5, s: 0, r: 0.08 }, e.len * sd);
+    const lp = filter(ctx, 'lowpass', 2800, 1.4);
+    lp.frequency.setValueAtTime(2900, t);
     lp.frequency.exponentialRampToValueAtTime(750, t + 0.14);
     const tri = osc(ctx, 'triangle', f, t, end);
     const sq = osc(ctx, 'square', f, t, end, 4);
@@ -490,7 +515,9 @@ function pluck(kit, out, t, e, sd) {
     tri.connect(lp);
     sq.connect(sg).connect(lp);
     lp.connect(g).connect(j % 2 || m % 2 ? out.inR : out.inL);
+    last = Math.max(last, end);
   });
+  return last;
 }
 
 /** Bouncy bass: triangle + sine with a tiny downward pitch blip. */
@@ -498,8 +525,8 @@ function bbass(kit, out, t, e, sd) {
   const { ctx } = kit;
   const f = mtof(e.notes[0]);
   const g = gainNode(ctx);
-  const end = adsr(g.gain, t, 0.25 * e.vel, { a: 0.004, d: 0.22, s: 0.35, r: 0.06 }, e.len * sd);
-  const lp = filter(ctx, 'lowpass', 950, 1);
+  const end = adsr(g.gain, t, 0.25 * e.vel, { a: 0.01, d: 0.22, s: 0.35, r: 0.06 }, e.len * sd);
+  const lp = filter(ctx, 'lowpass', 1300, 1);
   for (const type of ['triangle', 'sine']) {
     const o = osc(ctx, type, f, t, end);
     o.frequency.setValueAtTime(f * 1.04, t);
@@ -507,6 +534,7 @@ function bbass(kit, out, t, e, sd) {
     o.connect(lp);
   }
   lp.connect(g).connect(out.in);
+  return end;
 }
 
 export const INSTRUMENTS = {

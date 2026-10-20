@@ -70,6 +70,9 @@ function walkMelody(rng, rhythm, pool, start, chordAt, { leap = [-2, -1, -1, 1, 
 
 // ------------------------------------------------------------------------- moods
 // mix: instrument level, rev: reverb send, dly: delay send (per instrument).
+// bus.level: overall trim, so every mood plays at about the same loudness (≈ -19.5 LUFS at
+// the default volume) and stays as loud on laptop / phone speakers (measured by offline
+// renders of every section; see tests/audio-render.test.mjs).
 
 const FACE_PROG = [
   { bass: note('F2'), notes: ns('A3', 'C4', 'E4', 'G4') }, // Fmaj9
@@ -113,11 +116,13 @@ const BH_PROGS = [
   ],
 ];
 
+// The bass sits in octave 2-3 (87-147 Hz roots): the kick carries the sub, and the bass
+// stays audible on laptop and phone speakers.
 const MIRROR_CHORDS = {
-  Am: { bass: note('A1'), stab: ns('C4', 'E4', 'G4', 'B4') },
-  Dm: { bass: note('D2'), stab: ns('C4', 'E4', 'F4', 'A4') },
-  F: { bass: note('F1'), stab: ns('A3', 'C4', 'E4', 'G4') },
-  G: { bass: note('G1'), stab: ns('B3', 'D4', 'E4', 'G4') },
+  Am: { bass: note('A2'), stab: ns('C4', 'E4', 'G4', 'B4') },
+  Dm: { bass: note('D3'), stab: ns('C4', 'E4', 'F4', 'A4') },
+  F: { bass: note('F2'), stab: ns('A3', 'C4', 'E4', 'G4') },
+  G: { bass: note('G2'), stab: ns('B3', 'D4', 'E4', 'G4') },
 };
 const MIRROR_PROGS = [
   ['Am', 'Am', 'Dm', 'Dm', 'Am', 'Am', 'Dm', 'Dm'],
@@ -127,8 +132,8 @@ const MIRROR_PROGS = [
 const MIRROR_BASS = [
   [[2, 0, 1], [6, 0, 1], [10, 0, 1], [14, 12, 1]],
   [[3, 0, 1], [6, 0, 1], [7, 12, 1], [10, 0, 1], [14, 7, 1]],
-  [[2, 0, 2], [5, 0, 1], [10, 0, 2], [13, 10, 1]],
-  [[2, 0, 1], [3, 0, 1], [6, 12, 1], [10, 0, 1], [11, 0, 1], [14, 7, 1]],
+  [[2, 0, 2], [5, 0, 1], [10, 0, 2], [13, -2, 1]],
+  [[2, 0, 1], [3, 0, 1], [6, 12, 1], [10, 0, 1], [11, 0, 1], [14, -5, 1]],
 ];
 const MIRROR_STABS = [[3, 11], [6], [3, 7, 14], [10], [7, 15]];
 
@@ -168,8 +173,8 @@ export const MOODS = {
     swing: 0.16,
     root: note('C4'),
     scale: [0, 2, 4, 7, 9],
-    bus: { tone: 4200, wow: 0.0016, reverb: 1, delay: null },
-    mix: { keys: 0.9, bass: 0.85, kick: 0.8, brush: 0.55, hat: 0.38, vinyl: 0.5 },
+    bus: { tone: 4200, wow: 0.0016, reverb: 1, delay: null, level: 0.79 },
+    mix: { keys: 0.9, bass: 0.85, kick: 0.66, brush: 0.55, hat: 0.38, vinyl: 0.5 },
     rev: { keys: 0.3, brush: 0.15, hat: 0.1, kick: 0.04 },
     dly: {},
     compose(c) {
@@ -218,7 +223,7 @@ export const MOODS = {
     swing: 0,
     root: note('A3'),
     scale: [0, 2, 3, 5, 7, 8, 10],
-    bus: { tone: 9000, wow: 0, reverb: 1, delay: null },
+    bus: { tone: 9000, wow: 0, reverb: 1, delay: null, level: 0.86 },
     mix: { organ: 0.8, drone: 0.75, tick: 0.5, oarp: 0.6 },
     rev: { organ: 0.55, drone: 0.35, tick: 0.25, oarp: 0.5 },
     dly: {},
@@ -266,7 +271,7 @@ export const MOODS = {
     swing: 0,
     root: note('D4'),
     scale: [0, 2, 4, 6, 7, 9, 11],
-    bus: { tone: 11000, wow: 0, reverb: 1, delay: { beats: 0.75, feedback: 0.42, tone: 3200 } },
+    bus: { tone: 11000, wow: 0, reverb: 1, delay: { beats: 0.75, feedback: 0.42, tone: 3200 }, level: 1.16 },
     mix: { pad: 0.75, bell: 0.6, sub: 0.6, air: 0.45, softkick: 0.6, glint: 0.45 },
     rev: { pad: 0.45, bell: 0.45, air: 0.6, glint: 0.7, softkick: 0.05 },
     dly: { bell: 0.4, glint: 0.5 },
@@ -314,8 +319,8 @@ export const MOODS = {
     swing: 0.06,
     root: note('A3'),
     scale: [0, 2, 3, 5, 7, 9, 10],
-    bus: { tone: 12000, wow: 0, reverb: 1, delay: { beats: 0.75, feedback: 0.35, tone: 2600 } },
-    mix: { kick: 0.85, hat: 0.4, chat: 0.45, clap: 0.42, hbass: 0.75, stab: 0.5, pad: 0.45 },
+    bus: { tone: 12000, wow: 0, reverb: 1, delay: { beats: 0.75, feedback: 0.35, tone: 2600 }, level: 1.2 },
+    mix: { kick: 0.6, hat: 0.6, chat: 0.6, clap: 0.8, hbass: 0.7, stab: 1, pad: 0.8 },
     rev: { stab: 0.35, clap: 0.2, hat: 0.06, pad: 0.4 },
     dly: { stab: 0.35, chat: 0.12 },
     compose(c) {
@@ -335,14 +340,14 @@ export const MOODS = {
       if (!breakdown) {
         const pattern = MIRROR_BASS[Math.floor(prng() * MIRROR_BASS.length)];
         const sweep = 0.5 - 0.5 * Math.cos((2 * Math.PI * (bar % 8)) / 8);
-        const cutoff = 240 + 520 * sweep + section * 70;
+        const cutoff = 380 + 650 * sweep + section * 90;
         for (const [s, off, len] of pattern) push(s, 'hbass', [chord.bass + off], vary(rng, 0.72, 0.05), len, { cutoff });
       }
       if (section >= 1 || breakdown) {
         const steps = pick(rng, MIRROR_STABS);
-        for (const s of steps) push(s, 'stab', chord.stab, vary(rng, 0.34, 0.04), 2, { cutoff: 1300 + rng() * 900 });
+        for (const s of steps) push(s, 'stab', chord.stab, vary(rng, 0.5, 0.04), 2, { cutoff: 1600 + rng() * 1000 });
       }
-      if (section >= 2 || breakdown) push(0, 'pad', chord.stab.map((m) => m - 12), breakdown ? 0.42 : 0.26, 16, { attack: 0.6, release: 1.4, cutoff: 1100 });
+      if (section >= 1 || breakdown) push(0, 'pad', chord.stab.map((m) => m - 12), breakdown ? 0.46 : section === 1 ? 0.24 : 0.34, 16, { attack: 0.6, release: 1.4, cutoff: 1200 });
     },
   },
 
@@ -354,8 +359,8 @@ export const MOODS = {
     swing: 0.08,
     root: note('C4'),
     scale: [0, 2, 4, 7, 9],
-    bus: { tone: 12000, wow: 0, reverb: 1, delay: { beats: 0.75, feedback: 0.28, tone: 3000 } },
-    mix: { kick: 0.75, clap: 0.42, shaker: 0.32, bbass: 0.75, pluck: 0.6, comp: 0.25 },
+    bus: { tone: 12000, wow: 0, reverb: 1, delay: { beats: 0.75, feedback: 0.28, tone: 3000 }, level: 1.2 },
+    mix: { kick: 0.52, clap: 0.65, shaker: 0.4, bbass: 0.62, pluck: 0.95, comp: 0.45 },
     rev: { pluck: 0.25, clap: 0.18, comp: 0.25 },
     dly: { pluck: 0.22, comp: 0.15 },
     compose(c) {
@@ -377,7 +382,8 @@ export const MOODS = {
       for (let s = 0; s < 16; s++) push(s, 'shaker', [], vary(rng, s % 2 ? 0.1 : s % 4 === 0 ? 0.2 : 0.15, 0.02));
       // Bouncy bass
       const bassPattern = SHAPES_BASS[Math.floor(prng() * SHAPES_BASS.length)];
-      for (const [s, off, len] of bassPattern) push(s, 'bbass', [chord.bass + 12 + off], vary(rng, s % 4 === 0 ? 0.8 : 0.62, 0.04), len);
+      // Accents on the beats, a bit lighter where the kick already hits (no kick + bass pile-up).
+      for (const [s, off, len] of bassPattern) push(s, 'bbass', [chord.bass + 12 + off], vary(rng, s % 8 === 0 ? 0.68 : s % 4 === 0 ? 0.78 : 0.62, 0.04), len);
       // Melody: a two-bar motif, repeated, varied, then answered.
       const playMelody = section !== 0 || i >= 4;
       if (playMelody) {

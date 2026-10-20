@@ -18,6 +18,45 @@ export const BANDS = {
 /** Bins used for the kick / beat detector: the kick's punch, above most sub-bass notes. */
 export const BEAT_BAND = [80, 190];
 
+/**
+ * Share of the music's energy (dB, band energy / total energy) at which a band reads as
+ * absent → fully present. Treble is naturally ~15 dB below the rest in any music.
+ */
+export const PRESENCE = { bass: [-26, -12], mid: [-30, -16], treble: [-42, -28] };
+
+const smoothstep = (a, b, x) => {
+  const t = clamp((x - a) / (b - a));
+  return t * t * (3 - 2 * t);
+};
+
+/** Share of the total energy in a band, in dB (0 = all of it). `db` holds bandDb() per band. */
+export function bandShare(name, db, ranges) {
+  const [f, t] = ranges[name];
+  const [lf, lt] = ranges.level;
+  return db[name] - db.level + 10 * Math.log10((t - f) / (lt - lf));
+}
+
+/**
+ * 0..1: how much a band takes part in the music right now. A band far quieter than the
+ * rest of the mix (a house track's mids, the treble between two hi-hats) reads low
+ * instead of being stretched over the whole 0..1 range by its normaliser.
+ */
+export function bandPresence(name, db, ranges) {
+  const p = PRESENCE[name];
+  if (!p) return 1;
+  return smoothstep(p[0], p[1], bandShare(name, db, ranges));
+}
+
+/** One normaliser per band (bass and treble are snappier: kicks and hats). */
+export function makeBandNormalizers() {
+  return {
+    level: new LevelNormalizer(),
+    bass: new LevelNormalizer({ attack: 0.012, release: 0.16 }),
+    mid: new LevelNormalizer(),
+    treble: new LevelNormalizer({ attack: 0.012, release: 0.14 }),
+  };
+}
+
 /** byte (0..255) → linear power, 0 for byte 0 (silence). */
 export function makePowerTable(minDb = ANALYSER_MIN_DB, maxDb = ANALYSER_MAX_DB) {
   const t = new Float32Array(256);
@@ -61,15 +100,38 @@ export const smoothK = (dt, tau) => (tau <= 0 ? 1 : 1 - Math.exp(-dt / tau));
 /**
  * Turns a band level in dB into a smooth 0..1 value that uses the whole range for any
  * song, quiet or loud:
- * - `avg` follows the band's typical level (slow, ~`avgTau` s) and maps to `mid` (0.45);
+ * - `avg` follows the band's typical level and maps to `mid`. It rises faster (`avgUp` s)
+ *   than it falls (`avgTau` s), so a sudden louder passage (a new scene, a drop) is
+ *   learnt within about a second instead of pinning the output at 1;
  * - `peak` follows its recent maxima (rises within ~0.1 s, falls `peakFall` dB/s) and
  *   maps to 1, so kicks and accents reach the top;
- * - `below` dB under the average maps to 0, and under `gate` dB (silence) it is 0.
+ * - `below` dB under the average maps to 0, and under the gate (silence) it is 0. The
+ *   gate has hysteresis (opens above `gate` + `hyst`/2, closes below `gate` - `hyst`/2) so
+ *   a band hovering at the noise floor does not flicker;
+ * - `presence` (0..1, per frame) scales the result, so a band with almost no content
+ *   reads low instead of being stretched over the whole range.
+ * After `reset()` / `reseed()` it "warms up" for `warmup` seconds of sound: the average
+ * and the peak adapt quickly (`warmTau`), so the first seconds of a song, a scene or a
+ * source are already in range.
  * The output rises fast (`attack`) and falls slower (`release`): punchy, not jittery.
  */
 export class LevelNormalizer {
-  constructor({ attack = 0.025, release = 0.22, mid = 0.45, below = 18, minSpread = 4, avgTau = 2.5, peakRise = 0.08, peakFall = 3, gate = -85 } = {}) {
-    Object.assign(this, { attack, release, mid, below, minSpread, avgTau, peakRise, peakFall, gate });
+  constructor({
+    attack = 0.025,
+    release = 0.22,
+    mid = 0.42,
+    below = 18,
+    minSpread = 4,
+    avgTau = 2.5,
+    avgUp = 0.6,
+    peakRise = 0.08,
+    peakFall = 3,
+    gate = -85,
+    hyst = 6,
+    warmup = 1.5,
+    warmTau = 0.3,
+  } = {}) {
+    Object.assign(this, { attack, release, mid, below, minSpread, avgTau, avgUp, peakRise, peakFall, gate, hyst, warmup, warmTau });
     this.reset();
   }
 
@@ -77,27 +139,45 @@ export class LevelNormalizer {
     this.avg = null;
     this.peak = null;
     this.value = 0;
+    this.open = false;
+    this.warm = this.warmup;
+  }
+
+  /** The music changed (scene, source): keep the current output but re-learn the range quickly. */
+  reseed() {
+    this.warm = this.warmup;
+  }
+
+  /** Is `db` above the gate? (with hysteresis) */
+  audible(db) {
+    const h = this.hyst / 2;
+    this.open = db > (this.open ? this.gate - h : this.gate + h);
+    return this.open;
   }
 
   /** Target for this frame (before smoothing). */
   target(db) {
-    if (!(db > this.gate) || this.avg === null) return 0;
+    if (!this.open || this.avg === null) return 0;
     if (db >= this.avg) return clamp(this.mid + ((1 - this.mid) * (db - this.avg)) / Math.max(this.peak - this.avg, this.minSpread));
     return clamp(this.mid * (1 - (this.avg - db) / this.below));
   }
 
-  update(db, dt) {
-    if (db > this.gate) {
+  update(db, dt, presence = 1) {
+    if (this.audible(db)) {
+      const warming = this.warm > 0;
       if (this.avg === null) {
         this.avg = db;
         this.peak = db;
       }
       if (db > this.peak) this.peak += (db - this.peak) * smoothK(dt, this.peakRise);
-      else this.peak = Math.max(this.avg, this.peak - this.peakFall * dt);
-      this.avg += (Math.max(db, this.avg - this.below) - this.avg) * smoothK(dt, this.avgTau);
+      else this.peak = Math.max(this.avg, this.peak - this.peakFall * (warming ? 4 : 1) * dt);
+      const goal = Math.max(db, this.avg - this.below);
+      const tau = warming ? this.warmTau : goal > this.avg ? this.avgUp : this.avgTau;
+      this.avg += (goal - this.avg) * smoothK(dt, tau);
       if (this.peak < this.avg) this.peak = this.avg;
+      if (warming) this.warm = Math.max(0, this.warm - dt);
     }
-    const t = this.target(db);
+    const t = this.target(db) * clamp(presence);
     this.value += (t - this.value) * smoothK(dt, t > this.value ? this.attack : this.release);
     if (this.value < 1e-4) this.value = 0;
     return this.value;

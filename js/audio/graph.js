@@ -1,7 +1,7 @@
 // The fixed part of the sound graph, built once per AudioContext (also works on an
 // OfflineAudioContext for test renders):
 //
-//   mood buses ─► genBus ─┬─► musicBus ─► duck ─┐
+//   mood buses ─► genBus ─┬─► highpass ─► musicBus ─► duck ─┐
 //   song file ─► fileBus ─┤                     │
 //                         └─► analyserIn ─► analyser (music only, never the effects)
 //   microphone ───────────────► analyserIn          (never connected to the speakers)
@@ -40,14 +40,16 @@ export class AudioGraph {
       return g;
     };
 
-    // Output: master volume → gentle limiter → speakers.
+    // Output: master volume → limiter → speakers. A safety net: the music stays under its
+    // knee up to a high volume; only loud peaks (booms, full volume) are caught, with a fast
+    // release so the music does not "pump".
     this.compressor = ctx.createDynamicsCompressor();
     const c = this.compressor;
-    c.threshold.value = -10;
-    c.knee.value = 8;
-    c.ratio.value = 10;
-    c.attack.value = 0.004;
-    c.release.value = 0.25;
+    c.threshold.value = -6;
+    c.knee.value = 5;
+    c.ratio.value = 12;
+    c.attack.value = 0.003;
+    c.release.value = 0.12;
     c.connect(destination);
     // DC / infrasound blocker (FM e-piano and pitch-swept kicks leave a little DC).
     this.dcBlock = ctx.createBiquadFilter();
@@ -68,7 +70,13 @@ export class AudioGraph {
     this.duck = gain(1, this.master);
     this.musicBus = gain(1, this.duck);
     this.musicWet = gain(1, this.reverb);
-    this.genBus = gain(0, this.musicBus);
+    // Generated music: nothing below ~38 Hz (no speaker plays it; it only drives the limiter).
+    this.genHp = ctx.createBiquadFilter();
+    this.genHp.type = 'highpass';
+    this.genHp.frequency.value = 38;
+    this.genHp.Q.value = Math.SQRT1_2;
+    this.genHp.connect(this.musicBus);
+    this.genBus = gain(0, this.genHp);
     this.genWet = gain(0, this.musicWet);
     this.fileBus = gain(0.6, this.musicBus);
 
@@ -114,7 +122,7 @@ export class AudioGraph {
   }
 
   dispose() {
-    for (const n of [this.master, this.dcBlock, this.compressor, this.reverb, this.reverbReturn, this.duck, this.musicBus, this.musicWet, this.genBus, this.genWet, this.fileBus, this.sfxBus, this.sfxWet, this.analyserIn, this.analyser]) {
+    for (const n of [this.master, this.dcBlock, this.compressor, this.reverb, this.reverbReturn, this.duck, this.musicBus, this.musicWet, this.genHp, this.genBus, this.genWet, this.fileBus, this.sfxBus, this.sfxWet, this.analyserIn, this.analyser]) {
       try {
         n.disconnect();
       } catch {
