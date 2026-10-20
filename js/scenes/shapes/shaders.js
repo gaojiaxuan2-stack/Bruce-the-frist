@@ -1,9 +1,10 @@
 // Shaders for the Shapes scene. All per-particle animation happens here:
-// morph (aFrom -> position with stagger, puff and curl swirl), breathing, heartbeat,
+// morph (aFrom -> position with stagger, puff and curl swirl), breathing, heartbeat, music,
 // "charging" tremble, fist core (view space), explosion burst, the fingertip push with its wake and
 // the planet body hiding whatever is behind it.
 import * as THREE from 'three';
 import { GLSL } from '../../core/glsl.js';
+import { MUSIC_GLSL } from '../music/MusicReact.js';
 
 export const TRAIL_SLOTS = 8;
 
@@ -12,6 +13,7 @@ ${GLSL.simplex3}
 ${GLSL.curl}
 ${GLSL.hash}
 ${GLSL.pointSize}
+${MUSIC_GLSL}
 
 attribute vec3 aFrom;
 attribute vec3 aColorFrom;
@@ -30,7 +32,9 @@ uniform float uCollapse;
 uniform float uExplodeT;
 uniform float uExplodeAmp;
 uniform float uTremble;
-uniform float uBeat;
+uniform float uHeart;      // heartbeat while the heart is showing
+uniform float uBounce;     // music: the shape bounces on the beat (a spring kicked by each beat)
+uniform float uSwirlT;     // music: extra flow of the swirl (runs faster when the music is loud)
 uniform float uSize;
 uniform float uSizeFrom;   // per-shape dot size, blended per particle during the morph
 uniform float uSizeTo;
@@ -74,10 +78,11 @@ void main() {
   }
 
   // ---- curl-noise swirl while travelling (and during the explosion)
+  vec4 mu = music();
   float travel = max(mid, aCarry * uCarryDecay);
-  float swAmp = uSwirl * (0.15 + 0.85 * travel) + boom * 0.6;
+  float swAmp = uSwirl * (0.15 + 0.85 * travel) + boom * 0.6 + mu.x * 0.05;
   if (swAmp > 0.002) {
-    vec3 c = curlNoise(p * 0.32 + vec3(0.0, uTime * 0.12, 0.0));
+    vec3 c = curlNoise(p * 0.32 + vec3(0.0, uTime * 0.12 + uSwirlT, 0.0));
     p += c * swAmp * (0.3 + 0.7 * aRand.w);
   }
 
@@ -85,7 +90,15 @@ void main() {
   float n = snoise(shapeP * 0.55 + vec3(0.0, 0.0, uTime * 0.22));
   p += normalize(shapeP + vec3(1e-4)) * n * 0.06;
   p += 0.02 * vec3(sin(uTime * 0.9 + ph), sin(uTime * 1.13 + ph * 1.7), sin(uTime * 0.77 + ph * 2.3));
-  p *= 1.0 + uBeat;
+
+  // ---- music: the particles push out along the surface normal with the bass (more where
+  // the noise is high, so the surface ripples); every beat bounces the whole shape (uBounce)
+  // and sends a ripple across it (below)
+  if (mu.y > 0.0) {
+    vec3 nrm = normalize(shapeP + vec3(1e-4));
+    p += nrm * mu.y * (0.04 + 0.16 * (0.5 + 0.5 * n)) * (0.5 + aRand.w);
+  }
+  p *= 1.0 + uHeart + uBounce;
 
   // ---- "charging" tremble while a finger count is being held
   p += uTremble * 0.055 * vec3(sin(uTime * 31.0 + ph * 7.0), sin(uTime * 37.0 + ph * 11.0), sin(uTime * 43.0 + ph * 13.0));
@@ -182,10 +195,18 @@ void main() {
 
   gl_Position = projectionMatrix * mv;
 
+  // ---- music: the beat ripple, a ring growing from the shape's centre as seen on screen
+  float beatW = 0.0;
+  if (uBeatWave.y + uBeatWave.w > 0.0) {
+    vec3 c0 = (modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    beatW = beatRing(length(mv.xy - c0.xy) / length(modelViewMatrix[0].xyz), 4.5, 0.28);
+  }
+
   // ---- size + brightness (soft depth of field: out-of-focus dots get bigger and fainter)
   float dof = abs(-mv.z - uFocus);
   float shapeSize = mix(uSizeFrom, uSizeTo, e);
   float size = uSize * shapeSize * aRand.y * (1.0 + 0.15 * push + 0.25 * boom) * (1.0 + 0.1 * min(dof, 4.0)) * mix(1.0, 0.75, ci);
+  size *= 1.0 + 0.12 * beatW;
   gl_PointSize = clamp(pointSize(size, mv), 1.0, 64.0);
 
   float tw = 0.78 + 0.22 * sin(uTime * (1.3 + aRand.x * 2.7) + ph * 3.0);
@@ -195,6 +216,15 @@ void main() {
   vAlpha *= 1.0 - 0.9 * occ;
   vAlpha *= smoothstep(1.5, 4.0, -mv.z); // never a wall of huge blurry dots right in front of the camera
   vColor = mix(col, vec3(1.0, 0.93, 0.86) * max(max(col.r, col.g), col.b) * 1.3 + 0.05, clamp(push * 0.04 + boom * 0.1, 0.0, 0.6));
+
+  // ---- music: colours shimmer with the treble (each dot slides its hue at its own pace;
+  // the light stays about the same, the shapes glow brightly enough already), and the beat
+  // wave lights the dots it passes
+  if (mu.w + beatW > 0.0) {
+    float tw = min(musicGlint(aRand.z * 9.1 + aRand.x, uTime) * mu.w, 1.0);
+    vColor = mix(vColor, aRand.w > 0.5 ? vColor.gbr : vColor.brg, tw * 0.5) * (1.0 + 0.25 * tw);
+    vAlpha *= 1.0 + 0.45 * beatW;
+  }
 }
 `;
 
@@ -212,7 +242,8 @@ void main() {
 }
 `;
 
-export function createShapeMaterial(shared) {
+/** @param {object} music MusicReact uniforms (uReact, uBeatWave) */
+export function createShapeMaterial(shared, music) {
   const trail = [];
   for (let i = 0; i < TRAIL_SLOTS; i++) trail.push(new THREE.Vector4(0, 0, -1, 0));
   return new THREE.ShaderMaterial({
@@ -220,6 +251,7 @@ export function createShapeMaterial(shared) {
     fragmentShader,
     uniforms: {
       ...shared,
+      ...music,
       uProgress: { value: 0 },
       uSpread: { value: 0.45 },
       uPuff: { value: 0.16 },
@@ -229,7 +261,9 @@ export function createShapeMaterial(shared) {
       uExplodeT: { value: 100 },
       uExplodeAmp: { value: 1.6 },
       uTremble: { value: 0 },
-      uBeat: { value: 0 },
+      uHeart: { value: 0 },
+      uBounce: { value: 0 },
+      uSwirlT: { value: 0 },
       uSize: { value: 2.6 },
       uSizeFrom: { value: 1 },
       uSizeTo: { value: 1 },
@@ -250,6 +284,7 @@ export function createShapeMaterial(shared) {
 // ------------------------------------------------------------------ background stars
 
 const starVertex = /* glsl */ `
+${MUSIC_GLSL}
 uniform float uTime;
 uniform float uPixelRatio;
 attribute vec3 aStar; // x: size, y: phase, z: brightness
@@ -260,6 +295,7 @@ void main() {
   gl_Position = projectionMatrix * mv;
   gl_PointSize = aStar.x * uPixelRatio;
   vAlpha = aStar.z * (0.65 + 0.35 * sin(uTime * (0.6 + aStar.y) + aStar.y * 40.0));
+  vAlpha *= 1.0 + music().w * 2.0 * musicGlint(aStar.y * 17.3, uTime); // treble: the stars glitter
   vColor = mix(vec3(0.55, 0.65, 1.0), vec3(1.0, 0.9, 0.8), fract(aStar.y * 13.7));
 }
 `;
@@ -275,11 +311,11 @@ void main() {
 }
 `;
 
-export function createStarMaterial(shared) {
+export function createStarMaterial(shared, music) {
   return new THREE.ShaderMaterial({
     vertexShader: starVertex,
     fragmentShader: starFragment,
-    uniforms: { uTime: shared.uTime, uPixelRatio: shared.uPixelRatio },
+    uniforms: { uTime: shared.uTime, uPixelRatio: shared.uPixelRatio, uAudio: shared.uAudio, ...music },
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,

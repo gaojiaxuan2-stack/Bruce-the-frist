@@ -3,9 +3,11 @@
 // sense of depth when the head turns.
 import * as THREE from 'three';
 import { GLSL } from '../../core/glsl.js';
+import { MUSIC_GLSL } from '../music/MusicReact.js';
 
 const vertexShader = /* glsl */ `
 ${GLSL.hash}
+${MUSIC_GLSL}
 uniform float uTime;
 uniform float uPixelRatio;
 uniform float uViewportHeight;
@@ -20,12 +22,15 @@ void main() {
   float a = uTime * (0.015 + 0.02 * h.x);
   p.xz = mat2(cos(a), -sin(a), sin(a), cos(a)) * p.xz;
   p += vec3(sin(uTime * 0.21 + h.y * 30.0), sin(uTime * 0.17 + h.z * 30.0), cos(uTime * 0.19 + h.x * 30.0)) * 0.25;
+  vec4 mu = music();
+  p *= 1.0 + 0.05 * mu.y; // the dust swells out with the bass
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
   gl_Position = projectionMatrix * mv;
   float size = (0.018 + 0.03 * h.z * h.z);
   gl_PointSize = max(1.0, size * projectionMatrix[1][1] * 0.5 * uViewportHeight * uPixelRatio / max(-mv.z, 0.1));
   float twinkle = 0.55 + 0.45 * sin(uTime * (0.6 + h.x * 1.4) + h.y * 40.0);
   vAlpha = uOpacity * twinkle * (0.25 + 0.75 * h.x) * smoothstep(1.0, 4.0, -mv.z);
+  vAlpha *= 1.0 + 0.35 * mu.x + 2.0 * mu.w * musicGlint(h.z, uTime); // and glitters with the treble
   vSeed = h.y;
 }
 `;
@@ -43,7 +48,8 @@ void main() {
 }
 `;
 
-export function createMotes(count, shared) {
+/** @param {object} music MusicReact uniforms (uReact, uBeatWave) */
+export function createMotes(count, shared, music) {
   const pos = new Float32Array(count * 3);
   const seed = new Float32Array(count);
   for (let i = 0; i < count; i++) {
@@ -64,6 +70,8 @@ export function createMotes(count, shared) {
     uTime: shared.uTime,
     uPixelRatio: shared.uPixelRatio,
     uViewportHeight: shared.uViewportHeight,
+    uAudio: shared.uAudio,
+    ...music,
     uOpacity: { value: 0.5 },
     uColorA: { value: new THREE.Color('#ffd7ae') },
     uColorB: { value: new THREE.Color('#9fd8ff') },

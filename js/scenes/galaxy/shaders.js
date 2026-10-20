@@ -2,6 +2,7 @@
 // numbers, so changing a GUI value or morphing to a new galaxy costs nothing on
 // the CPU. Shader outputs are LINEAR colour (OutputPass converts to sRGB).
 import { GLSL } from '../../core/glsl.js';
+import { MUSIC_GLSL } from '../music/MusicReact.js';
 
 /** Uniforms + helpers shared by the star and dust shaders. */
 const COMMON = /* glsl */ `
@@ -197,6 +198,7 @@ vec3 galaxyPosition(out vec3 col, out float alpha, out float heat, out float wel
 export const starVertex = /* glsl */ `
 ${GLSL.pointSize}
 ${COMMON}
+${MUSIC_GLSL}
 uniform float uSize;
 uniform float uBright;
 varying vec3 vColor;
@@ -254,6 +256,17 @@ void main() {
   // Radius slider: the camera reframes the galaxy (GalaxyScene.radiusFit), so the
   // stars of a small galaxy look bigger on screen - keep its light about the same
   bright *= min(pow(clamp(uRadius / 5.0, 0.3, 2.0), 1.6), 1.7);
+  // ---- music: the bass lifts the arms (most near the core), each beat sends a bright
+  // wave from the core out along the arms, the treble makes the bright stars glitter.
+  vec4 mu = music();
+  if (mu.y + mu.w + uBeatWave.y + uBeatWave.w > 0.0) {
+    float rp = length(p.xz) / max(uRadius, 0.1);
+    float coreW = 1.0 - smoothstep(0.0, 0.6, rp);
+    float wave = beatRing(rp, 0.9, 0.08);
+    float tw = musicGlint(aSeed.w * 7.7 + aRnd.y * 3.1, uTime) * mu.w * (isKind(4.0) ? 1.0 : smoothstep(0.55, 1.0, w));
+    bright *= (1.0 + mu.y * (0.22 + 0.35 * coreW)) * (1.0 + wave * 1.1) * (1.0 + tw * 2.5);
+    size *= (1.0 + wave * 0.35) * (1.0 + tw * 0.6);
+  }
   float h = clamp(heat, 0.0, 1.0);
   float wb = wellF * smoothstep(0.1, 0.35, rn); // no well boost inside the dense core
   col = mix(col, vec3(1.0, 0.88, 0.74) * 1.15, h);
@@ -335,6 +348,7 @@ void main() {
 `;
 
 export const bgVertex = /* glsl */ `
+${MUSIC_GLSL}
 uniform float uTime;
 uniform float uPixelRatio;
 uniform float uBgBright;
@@ -349,6 +363,7 @@ void main() {
   vec3 warm = vec3(1.0, 0.8, 0.6);
   vColor = mix(mix(cool, warm, aStar.w), vec3(1.0), 0.35);
   vAlpha = min(aStar.y, 0.5) * tw * uBgBright;
+  vAlpha *= 1.0 + music().w * 2.0 * musicGlint(aStar.z * 5.3 + aStar.w, uTime); // treble: the sky glitters
   gl_PointSize = max(aStar.x * uPixelRatio, 1.0);
 }
 `;

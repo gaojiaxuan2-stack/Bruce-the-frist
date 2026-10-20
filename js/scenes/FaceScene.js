@@ -11,12 +11,15 @@
 //   ✋ open hand after ✊  the ball explodes into dust, then the face re-assembles
 //   ✌️ victory        next colour mode (Photo / Mono / Neon)
 //   hand closer / two hands / wheel   zoom
+// Music (sound on): the face breathes out with the bass, a ripple ring crosses it on
+// every beat, treble makes the bright dots sparkle, Neon colours flow with the mids.
 import * as THREE from 'three';
 import { BaseScene } from '../core/BaseScene.js';
 import { loadPortrait, WORLD_HEIGHT } from './face/portrait.js';
 import { TouchTrail } from './face/TouchTrail.js';
 import { vertexShader, fragmentShader } from './face/shaders.js';
 import { createMotes } from './face/motes.js';
+import { MusicReact, SparkleLimiter, ChargeHum } from './music/MusicReact.js';
 
 const MODES = ['Photo', 'Mono', 'Neon'];
 const MODE_TOAST = { Photo: '📷 Photo colours', Mono: '⚪ Mono dots', Neon: '💜 Neon glow' };
@@ -84,6 +87,7 @@ export default class FaceScene extends BaseScene {
       pushRadius: 0.08,
       pushStrength: 1,
       sway: true,
+      music: 1,
     };
     this.actions = {
       explode: () => this.explode(this.gather > 0.25),
@@ -118,6 +122,10 @@ export default class FaceScene extends BaseScene {
     this.handLast = -Infinity;
     this.handTarget = 1;
 
+    this.music = new MusicReact(app, { decay: 1.6 });
+    this.sparkle = new SparkleLimiter(app);
+    this.hum = new ChargeHum(app);
+
     this.raycaster = new THREE.Raycaster();
     this._ray = new THREE.Ray();
     this._inv = new THREE.Matrix4();
@@ -146,6 +154,8 @@ export default class FaceScene extends BaseScene {
       uTime: shared.uTime,
       uPixelRatio: shared.uPixelRatio,
       uViewportHeight: shared.uViewportHeight,
+      uAudio: shared.uAudio,
+      ...this.music.uniforms,
       uPortrait: { value: new THREE.Vector2(portrait.worldSize.w, portrait.worldSize.h) },
       uPivotUV: { value: new THREE.Vector2(portrait.pivotUV.u, portrait.pivotUV.v) },
       uPivotDepth: { value: PIVOT_DEPTH },
@@ -187,7 +197,7 @@ export default class FaceScene extends BaseScene {
     this.points.frustumCulled = false;
     this.root.add(this.points);
 
-    this.motes = createMotes(this.count(2400), this.app.sharedUniforms);
+    this.motes = createMotes(this.count(2400), this.app.sharedUniforms, this.music.uniforms);
     this.scene.add(this.motes.points);
 
     // Framing: hair top .. faded bottom edge, centred; the head must fit the width too.
@@ -209,6 +219,8 @@ export default class FaceScene extends BaseScene {
 
   exit() {
     this.trail.clear();
+    this.hum.stop();
+    this.music.reset();
     // Leave the shared glow as the App configured it.
     if (this.bloomBase != null && this.app.bloomPass) {
       this.app.bloomPass.strength = this.bloomBase;
@@ -237,6 +249,8 @@ export default class FaceScene extends BaseScene {
     const usable = input.active && !input.uiCaptured;
     const pinching = usable && input.pinching;
     const fistDown = usable && input.fist;
+    this.music.strength = this.params.music;
+    this.music.update(dt);
 
     if (input.events.has('victorystart') && !input.uiCaptured) this.cycleMode();
     this.updateMode(dt);
@@ -261,6 +275,8 @@ export default class FaceScene extends BaseScene {
     U.uCamFront.value.copy(this.camera.position); // root sits at the origin
     this.updateGather(dt, input, fistDown);
     this.updateTouch(dt, input);
+    // the charging hum follows the ball while the fist gathers it
+    this.hum.set(fistDown && !this.burst ? this.gather : 0);
 
     // Idle life is calmer while the dots are busy elsewhere.
     const busy = Math.max(this.gather, this.burst ? 1 : 0);
@@ -444,7 +460,7 @@ export default class FaceScene extends BaseScene {
     this.fistWasDown = fistDown;
     U.uGather.value = this.gather;
     U.uBallTime.value = this.ballTime;
-    U.uBallRadius.value = BALL_RADIUS * (1 + 0.06 * Math.sin(this.time * 5.5));
+    U.uBallRadius.value = BALL_RADIUS * (1 + 0.06 * Math.sin(this.time * 5.5) + 0.1 * this.music.bass + 0.06 * this.music.beat);
     this.root.worldToLocal(U.uBallCenter.value.copy(this.ballWorld));
   }
 
@@ -459,6 +475,8 @@ export default class FaceScene extends BaseScene {
       this.trail.move(uv.u, uv.v, dt, this.pickHit);
     } else this.trail.lift();
     this.trail.update(dt);
+    // a quick swipe through the face: a soft, rate-limited sparkle sound
+    this.sparkle.update(dt, !!uv && this.pickHit, input.velocity, clamp(input.pointer.x, -1, 1) * 0.6);
   }
 
   /**
@@ -581,7 +599,10 @@ export default class FaceScene extends BaseScene {
       U.uBurstCenter.value.copy(U.uBallCenter.value);
       U.uBurstScale.value = 1;
       this.burst = { t: 0.001, reformStart: 0.85, reformDur: 2.2, reform: 0, rewind: 0 };
+      const pan = this._v.copy(this.ballWorld).project(this.camera).x;
+      this.app.audio?.sfx?.('boom', { intensity: 0.55 + 0.45 * this.gather, pan: clamp(pan, -1, 1) * 0.7 });
     } else {
+      this.app.audio?.sfx?.('boom', { intensity: 0.6 });
       this.gather = 0;
       U.uGather.value = 0;
       U.uBurstCenter.value.set(0, 0.3, (0.8 - PIVOT_DEPTH) * U.uDepthWorld.value);
@@ -657,11 +678,13 @@ export default class FaceScene extends BaseScene {
     folder.add(this.params, 'pushRadius', 0.03, 0.25, 0.005).name('Push radius');
     folder.add(this.params, 'pushStrength', 0, 3, 0.05).name('Push strength');
     folder.add(this.params, 'sway').name('Auto sway');
+    this.music.addGui(folder, this.params);
     folder.add(this.actions, 'explode').name('💥 Explode');
     folder.add(this.actions, 'reset').name('↺ Reset view');
   }
 
   dispose() {
+    this.hum?.stop();
     super.dispose();
     this.trail?.dispose();
   }

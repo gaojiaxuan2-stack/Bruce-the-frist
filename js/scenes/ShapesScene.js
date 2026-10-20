@@ -5,6 +5,8 @@
 //   ✋ tilt       rotate around the view axis  hand closer / wheel  scale
 //   mouse click / touch tap  next shape        right-drag / long-press, then let go  squeeze, explode
 //   GUI           shape list + your own text
+//   music (sound on): the shape bounces on the beat, the surface swells out with the bass,
+//   the swirl flows faster with the volume and the colours shimmer with the treble
 //
 // One hand pose can mean two things (1 finger = point = push; 5 fingers = open palm =
 // tilt / explode), so a finger count only picks a shape as a deliberate "dwell": the pose
@@ -25,6 +27,7 @@ import {
   textTarget,
   cloudTarget,
 } from './shapes/targets.js';
+import { MusicReact, SparkleLimiter, ChargeHum } from './music/MusicReact.js';
 
 const TAU = Math.PI * 2;
 const SPREAD = 0.45; // share of the morph used for the per-particle stagger (must match uSpread)
@@ -133,8 +136,13 @@ export default class ShapesScene extends BaseScene {
       swirl: 1,
       pushSize: 1,
       autoDemo: true,
+      music: 1,
       ...savedSettings,
     };
+    this.music = new MusicReact(this.app, { decay: 2 });
+    this.sparkle = new SparkleLimiter(this.app);
+    this.hum = new ChargeHum(this.app);
+    this.bounce = { x: 0, v: 0 };
     savedSettings = this.settings;
 
     const rand = mulberry32(SEED);
@@ -175,7 +183,7 @@ export default class ShapesScene extends BaseScene {
     geo.setAttribute('aRand', new THREE.BufferAttribute(this.rnd, 4));
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 20);
 
-    this.material = createShapeMaterial(this.app.sharedUniforms);
+    this.material = createShapeMaterial(this.app.sharedUniforms, this.music.uniforms);
     this.material.uniforms.uSpread.value = SPREAD;
     this.material.uniforms.uPuff.value = PUFF;
     this.points = new THREE.Points(geo, this.material);
@@ -283,7 +291,7 @@ export default class ShapesScene extends BaseScene {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('aStar', new THREE.BufferAttribute(star, 3));
-    this.stars = new THREE.Points(g, createStarMaterial(this.app.sharedUniforms));
+    this.stars = new THREE.Points(g, createStarMaterial(this.app.sharedUniforms, this.music.uniforms));
     this.stars.frustumCulled = false;
     this.scene.add(this.stars);
   }
@@ -322,6 +330,10 @@ export default class ShapesScene extends BaseScene {
   }
 
   exit() {
+    this.hum.stop();
+    this.music.reset();
+    this.bounce.x = this.bounce.v = 0;
+    this.material.uniforms.uBounce.value = 0;
     this.showIndicator(false);
     this.indicator.el.remove();
     this.listenTouches(false);
@@ -351,6 +363,7 @@ export default class ShapesScene extends BaseScene {
   }
 
   dispose() {
+    this.hum?.stop();
     this.indicator?.el.remove();
     if (this.onTouchDown) this.listenTouches(false);
     this.builder = null;
@@ -371,6 +384,7 @@ export default class ShapesScene extends BaseScene {
     folder.add(s, 'swirl', 0, 2.5, 0.05).name('Swirl');
     folder.add(s, 'pushSize', 0.3, 2.5, 0.05).name('Push size');
     folder.add(s, 'autoDemo').name('Auto demo when idle');
+    this.music.addGui(folder, s);
   }
 
   // ------------------------------------------------------------------ shapes
@@ -438,7 +452,8 @@ export default class ShapesScene extends BaseScene {
   }
 
   /** Start morphing from wherever the particles are right now to `target`. */
-  startMorph(target) {
+  startMorph(target, sound = 0.7) {
+    if (sound > 0) this.app.audio?.sfx?.('morph', { intensity: sound });
     const { from, to, cFrom, cTo, delay, carry } = this.attr;
     const f = from.array;
     const t = to.array;
@@ -478,14 +493,14 @@ export default class ShapesScene extends BaseScene {
     this.sizeTo = SHAPES[idx].dot;
   }
 
-  setShape(idx, { toast = true } = {}) {
+  setShape(idx, { toast = true, sound = 0.7 } = {}) {
     idx = clamp(Math.round(idx) || 0, 0, SHAPES.length - 1);
     if (idx === this.current) return;
     this.current = idx;
     this.settings.shape = idx;
     this.shapeCtrl?.updateDisplay();
     this.startSizeMorph(idx);
-    this.startMorph(this.target(idx));
+    this.startMorph(this.target(idx), sound);
     this.swayBase = null;
     this.ses.hold = 0;
     if (toast) {
@@ -522,6 +537,8 @@ export default class ShapesScene extends BaseScene {
   update(dt, time, input) {
     const u = this.material.uniforms;
     const s = this.settings;
+    this.music.strength = s.music;
+    const m = this.music.update(dt);
 
     this.buildSome(BUILD_MS);
     this.updateCounting(dt, input);
@@ -538,12 +555,22 @@ export default class ShapesScene extends BaseScene {
     u.uProgress.value = this.progress;
     u.uCarryDecay.value = Math.exp(-this.morphAge * 3);
     u.uSwirl.value = (this.swirlEnv * 0.7 + this.swirlBoost) * s.swirl;
+    // music: the swirl flows faster when the music is loud (only moves while there is music)
+    if (m.level > 0) u.uSwirlT.value += dt * 0.5 * m.level;
+    // ... and the shape bounces on every beat (a kicked spring: up, a little under, settle)
+    if (m.onset) this.bounce.v += 1.5 * m.onsetAmp;
+    if (this.bounce.x !== 0 || this.bounce.v !== 0) {
+      spring(this.bounce, 0, 11, 0.3, dt);
+      if (Math.abs(this.bounce.x) < 1e-4 && Math.abs(this.bounce.v) < 1e-3) this.bounce.x = this.bounce.v = 0;
+    }
+    u.uBounce.value = this.bounce.x;
 
     // fist core + explosion
     this.collapse += ((this.fistState === 'squeeze' || this.fistState === 'wait' ? 1 : 0) - this.collapse) *
       damp(this.fistState === 'squeeze' ? 3.2 : this.fistState === 'wait' ? 0 : this.collapseRate, dt);
     this.explodeAge = Math.min(100, this.explodeAge + dt);
     this.coreColor.lerp(CORE_COLORS[this.current], damp(3, dt));
+    this.hum.set(this.fistState === 'squeeze' ? this.collapse : 0);
     u.uCoreColor.value.copy(this.coreColor);
     u.uCollapse.value = this.collapse;
     u.uExplodeT.value = this.explodeAge;
@@ -565,14 +592,14 @@ export default class ShapesScene extends BaseScene {
     this.beatW += (beatOn - this.beatW) * damp(3, dt);
     const ph = (time % 1.05) / 1.05;
     const beat = 0.06 * Math.exp(-(((ph - 0.08) / 0.045) ** 2)) + 0.035 * Math.exp(-(((ph - 0.27) / 0.05) ** 2));
-    u.uBeat.value = beat * this.beatW;
+    u.uHeart.value = beat * this.beatW;
 
     // looks
     const q = this.app.particleScale;
     const tremble = this.charge * this.charge;
     u.uTremble.value = tremble;
     u.uSize.value = 2.5 * s.size * Math.pow(1 / q, 0.45);
-    u.uIntensity.value = 0.9 * Math.pow(1 / q, 0.25) * (1 + u.uBeat.value * 3 + this.collapse * 0.2);
+    u.uIntensity.value = 0.9 * Math.pow(1 / q, 0.25) * (1 + u.uHeart.value * 3 + this.collapse * 0.2) * (1 + 0.06 * m.bass + 0.06 * m.beat);
     u.uRepelRadius.value = 0.62 * s.pushSize;
 
     // camera shake after an explosion
@@ -765,7 +792,7 @@ export default class ShapesScene extends BaseScene {
     this.demoT += dt;
     if (this.demoT > 8) {
       this.demoT = 0;
-      this.setShape((this.current + 1) % SHAPES.length);
+      this.setShape((this.current + 1) % SHAPES.length, { sound: 0.35 }); // nobody is there: a softer morph sound
     }
   }
 
@@ -807,6 +834,7 @@ export default class ShapesScene extends BaseScene {
   }
 
   explode(input) {
+    this.app.audio?.sfx?.('boom', { intensity: 0.5 + 0.5 * this.collapse });
     this.fistState = 'idle';
     this.collapseRate = 8;
     this.explodeAge = 0;
@@ -829,6 +857,8 @@ export default class ShapesScene extends BaseScene {
     this.ptrLive = pointing || this.repel.x > 0.02;
     if (pointing && !this.wasPointing) this.pushDur = 0;
     if (pointing) this.pushDur += dt;
+    // a quick swipe through the particles: a soft, rate-limited sparkle sound
+    this.sparkle.update(dt, pointing, input.velocity, clamp(input.pointer.x, -1, 1) * 0.6);
     this.wasPointing = pointing;
     if (input.active) {
       spring(this.ptrX, input.pointer.x, 24, 0.75, dt);
@@ -926,7 +956,7 @@ export default class ShapesScene extends BaseScene {
       const step = (target - this.autoYaw) * damp(1.8, dt);
       this.autoYaw += clamp(step, -1.4 * dt, 1.4 * dt);
     } else {
-      this.autoYaw += dt * s.autoRotate * sh.spin;
+      this.autoYaw += dt * s.autoRotate * sh.spin * (1 + 0.5 * this.music.level); // spins a bit faster with loud music
     }
     this.autoGroup.rotation.y = this.autoYaw;
 

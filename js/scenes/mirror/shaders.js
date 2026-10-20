@@ -7,6 +7,7 @@
 // finger void + trail, fist collapse into a swirling ball, explosion, intro fly-in,
 // idle wave. Nothing is computed per particle on the CPU.
 import { GLSL } from '../../core/glsl.js';
+import { MUSIC_GLSL } from '../music/MusicReact.js';
 
 /** Number of "void" slots: [0] follows the fingertip, the rest are its fading trail. */
 export const VOID_COUNT = 8;
@@ -62,6 +63,7 @@ varying vec3 vColor;
 varying float vAlpha;
 
 ${GLSL.hash}
+${MUSIC_GLSL}
 
 vec3 toLinear(vec3 c) {
   return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
@@ -123,6 +125,19 @@ void main() {
            + sin(p.y * 1.05 - uTime * 0.8 + p.x * 0.3) * 0.35
            + sin(length(p.xy) * 1.5 - uTime * 1.6) * 0.3;
   p.z += wv * uWave * 0.24;
+
+  // ---- music (the relief itself pumps with the bass: uDepth, set by the scene)
+  // treble: every particle shivers on its own; a beat: a ripple ring runs out from the middle
+  vec4 mu = music();
+  float beatW = 0.0;
+  if (mu.w + uBeatWave.y + uBeatWave.w > 0.0) {
+    float sh = sin(uTime * (11.0 + 9.0 * aRand.w) + aRand.x * 60.0);
+    p.xy += rnd.xy * mu.w * uSpacing * 1.8 * sh;
+    p.z += rnd.z * mu.w * uSpacing * 4.0 * sh;
+    float rc = length(p.xy) / uSheet.y;
+    beatW = beatRing(rc, 0.75, 0.055);
+    p.z += beatW * 0.09 * uSheet.y;
+  }
 
   // background particles drift away and fade into dust
   if (bg > 0.001) {
@@ -265,6 +280,14 @@ void main() {
     float h = clamp(lumE * 0.78 + person * uMaskOn * 0.28 - 0.04, 0.0, 1.0);
     col = thermal(h) * 0.95;
     sz *= mix(0.7, 1.15, h);
+  }
+
+  // music: the beat ring glows, the bright particles sparkle with the treble
+  if (mu.x + mu.w + beatW > 0.0) {
+    float tw = musicGlint(aRand.y * 5.3 + aRand.w, uTime) * mu.w * smoothstep(0.3, 0.8, lum);
+    col = mix(col, vec3(max(max(col.r, col.g), col.b)), 0.3 * min(beatW, 1.0)); // whiter in every style
+    col *= (1.0 + beatW * 1.5 + 0.12 * mu.x) * (1.0 + tw * 1.6);
+    sz *= (1.0 + beatW * 0.4) * (1.0 + tw * 0.35);
   }
 
   // void rim: a faint mint tint; the packed particles themselves make the glow

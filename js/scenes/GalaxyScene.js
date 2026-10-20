@@ -5,6 +5,9 @@
 //   ✋ open hand  -> (after a fist) Big Bang: explode and re-form the spiral
 //   ✌️ victory    -> a brand-new random galaxy with a smooth morph
 //   hand near/far, wheel, two hands -> zoom
+//   music (sound on): the arms glow with the bass, a bright wave runs from the core out
+//   along the arms on every beat, the core breathes, stars glitter with the treble, and the
+//   galaxy turns a little faster when the music is loud
 // All star motion runs in the vertex shader (js/scenes/galaxy/shaders.js).
 import * as THREE from 'three';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
@@ -12,6 +15,7 @@ import { BaseScene } from '../core/BaseScene.js';
 import { buildGalaxyGeometry, buildDustGeometry, buildBackgroundGeometry } from './galaxy/build.js';
 import * as S from './galaxy/shaders.js';
 import { randomGalaxy } from './galaxy/palettes.js';
+import { MusicReact, ChargeHum } from './music/MusicReact.js';
 
 const TAU = Math.PI * 2;
 const DEG = Math.PI / 180;
@@ -72,7 +76,10 @@ export default class GalaxyScene extends BaseScene {
       insideColor: '#ff6030',
       outsideColor: '#1b3984',
       rotationSpeed: 0.15,
+      music: 1,
     };
+    this.music = new MusicReact(this.app, { decay: 1.3 });
+    this.hum = new ChargeHum(this.app);
 
     this.u = {
       uRotTime: { value: 0 },
@@ -101,7 +108,7 @@ export default class GalaxyScene extends BaseScene {
       uBright: { value: 1 },
       uDust: { value: 0.65 },
     };
-    const uniforms = { ...this.app.sharedUniforms, ...this.u };
+    const uniforms = { ...this.app.sharedUniforms, ...this.u, ...this.music.uniforms };
 
     // ---- stars (disk + bulge + bright stars + haze), additive
     this.starMat = new THREE.ShaderMaterial({
@@ -134,7 +141,7 @@ export default class GalaxyScene extends BaseScene {
     this.scene.add(this.dust);
 
     // ---- background star field
-    this.bgUniforms = { ...this.app.sharedUniforms, uBgBright: { value: 1 } };
+    this.bgUniforms = { ...this.app.sharedUniforms, ...this.music.uniforms, uBgBright: { value: 1 } };
     this.background = new THREE.Points(
       buildBackgroundGeometry(this.count(9000)),
       new THREE.ShaderMaterial({
@@ -356,6 +363,7 @@ export default class GalaxyScene extends BaseScene {
       this.flash = 1;
       this.shake = 1;
       this.app.hud.toast('💥 Big Bang!');
+      this.app.audio?.sfx?.('boom', { intensity: 0.65 + 0.35 * u.uBangC.value });
     }
   }
 
@@ -382,6 +390,7 @@ export default class GalaxyScene extends BaseScene {
       }
     }
     if (this.collapse > 0) this.collapseSpin += dt * (0.5 + 7 * this.collapse * this.collapse);
+    this.hum.set(fist ? this.collapse : 0);
 
     if (this.bang >= 0) {
       this.bang += dt / this.bangDuration;
@@ -417,6 +426,8 @@ export default class GalaxyScene extends BaseScene {
 
   exit() {
     this.restoreTone();
+    this.hum.stop();
+    this.music.reset();
   }
 
   restoreTone() {
@@ -442,6 +453,8 @@ export default class GalaxyScene extends BaseScene {
     const p = this.params;
     const ui = input.uiCaptured;
     const active = input.active;
+    this.music.strength = p.music;
+    const m = this.music.update(dt);
 
     // ---- ✌️ new galaxy (not while a fist is held / being released: a hand that
     // opens slowly from ✊ to ✋ passes through ☝️ and ✌️ on the way)
@@ -513,7 +526,8 @@ export default class GalaxyScene extends BaseScene {
     // ---- galaxy rotation (rigid + bounded differential, see shader)
     const dir = p.spin >= 0 ? -1 : 1;
     u.uDir.value = damp(u.uDir.value, dir, 3, dt);
-    u.uRotTime.value = wrap(u.uRotTime.value + dt * p.rotationSpeed * dir, TAU);
+    // loud music turns the galaxy a little faster
+    u.uRotTime.value = wrap(u.uRotTime.value + dt * p.rotationSpeed * dir * (1 + 0.35 * m.level), TAU);
     u.uLifeTime.value = wrap(u.uLifeTime.value + dt * Math.min(p.rotationSpeed, 0.25) * dir, TAU);
     u.uWellPhase.value = wrap(u.uWellPhase.value + dt, 400);
 
@@ -587,7 +601,9 @@ export default class GalaxyScene extends BaseScene {
 
     // glowing core: brighter while collapsed, flashes on the Big Bang
     const cu = this.core.material.uniforms;
-    const pulse = 1 + this.u.uPulse.value * 2.5;
+    const m = this.music;
+    // the core breathes with the bass and glows up on the beat
+    const pulse = (1 + this.u.uPulse.value * 2.5) * (1 + 0.45 * m.bass + 0.3 * m.beat);
     this.flash *= Math.exp(-2.2 * dt);
     const bangGlow = this.bang >= 0 ? (1 - smoothstep(0, 0.45, this.bang)) * this.u.uBangC.value : 0;
     cu.uColor.value.copy(this.coreColor);
@@ -596,10 +612,10 @@ export default class GalaxyScene extends BaseScene {
     // a small Size makes the stars fainter: the resting glow follows so the core stays in balance
     const sizeLight = 0.4 + 0.6 * Math.min(p.size, 1);
     cu.uIntensity.value = (0.11 * sizeLight + 0.5 * this.collapse + 0.4 * bangGlow + 0.75 * this.flash) * pulse * near;
-    cu.uScale.value = p.radius * (0.75 - 0.25 * this.collapse + 0.7 * this.flash);
+    cu.uScale.value = p.radius * (0.75 - 0.25 * this.collapse + 0.7 * this.flash) * (1 + 0.08 * m.bass + 0.05 * m.beat);
     // the hot nucleus belongs to the settled galaxy (the collapsed knot has its own heat)
     const settled = (1 - this.collapse) * (this.bang >= 0 ? smoothstep(0.4, 1, this.bang) : 1);
-    cu.uNucleus.value = 0.32 * sizeLight * settled * near * (1 - 0.6 * this.wellStrength * this.wellNearCore());
+    cu.uNucleus.value = 0.32 * sizeLight * settled * near * (1 - 0.6 * this.wellStrength * this.wellNearCore()) * (1 + 0.4 * m.bass);
     this.core.visible = cu.uIntensity.value + cu.uNucleus.value > 0.002;
 
     // gravity-well marker
@@ -646,6 +662,8 @@ export default class GalaxyScene extends BaseScene {
     folder.addColor(p, 'insideColor').name('Inside color').onChange(apply);
     folder.addColor(p, 'outsideColor').name('Outside color').onChange(apply);
     folder.add(p, 'rotationSpeed', 0, 1, 0.01).name('Rotation speed');
+    // (no "Music reaction" slider here: this folder already has the 10 controls of REF/4;
+    // the global Sound > "Particles follow music" switch turns it off)
   }
 
   /** 1 when the gravity well sits on the core (it then pulls the nucleus apart). */
@@ -656,6 +674,7 @@ export default class GalaxyScene extends BaseScene {
 
   dispose() {
     this.disposed = true;
+    this.hum?.stop();
     clearTimeout(this.regenTimer);
     window.removeEventListener('dblclick', this.onDblClick);
     this.restoreTone();

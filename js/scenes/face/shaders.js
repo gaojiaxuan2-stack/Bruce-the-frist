@@ -7,11 +7,16 @@
 //   final     = mix(exploded, home, reform)             (uReform, re-assembly)
 import { GLSL } from '../../core/glsl.js';
 import { MONO_FRACTION } from './portrait.js';
+import { MUSIC_GLSL } from '../music/MusicReact.js';
+
+/** Where the beat ripple starts (head-local xy, about the middle of the face). */
+const RIPPLE_ORIGIN = '0.0, 0.3';
 
 export const vertexShader = /* glsl */ `
 ${GLSL.simplex3}
 ${GLSL.curl}
 ${GLSL.hash}
+${MUSIC_GLSL}
 
 uniform float uTime;
 uniform float uPixelRatio;
@@ -88,6 +93,23 @@ void main() {
   home.x += hair * uLife * 0.022 * sin(uTime * 1.6 + uv.y * 11.0 + rnd2 * 1.2) * (1.0 - 0.6 * edge);
   home.y += hair * uLife * 0.012 * sin(uTime * 1.3 + uv.x * 9.0 + rnd * 1.2) * (1.0 - 0.6 * edge);
   home += (h3 - 0.5) * uSpacing * 0.9 * sin(uTime * (1.3 + 2.0 * rnd2) + rnd * 40.0) * uLife;
+
+  // ---------------------------------------------------------------- music
+  // Bass: the face breathes out along its depth (the nose comes forward most, the
+  // outline stays put). Each beat sends a soft ripple ring across the face from its
+  // middle. Every term is a product with the music uniforms: silence = no change.
+  vec4 mu = music();
+  float beatW = 0.0;
+  if (mu.y > 0.0) {
+    home.z += mu.y * 0.24 * depth01 * uDepthWorld;
+    home.xy *= 1.0 + 0.008 * mu.y * depth01;
+  }
+  if (uBeatWave.y + uBeatWave.w > 0.0) {
+    vec2 fromMid = home.xy - vec2(${RIPPLE_ORIGIN});
+    beatW = beatRing(length(fromMid), 5.0, 0.28);
+    home.z += beatW * (0.1 + 0.25 * depth01);
+    home.xy += fromMid / (length(fromMid) + 0.3) * beatW * 0.045;
+  }
 
   // Touch trail: push away from the finger, forward in z, then spring back.
   float touch = texture2D(uTouch, uv).r;
@@ -196,12 +218,15 @@ void main() {
   vec3 cMono = vec3(1.0);
   float sMono = (0.2 + 1.3 * m) * 1.6 * keep;
 
-  vec3 neon = mix(uNeonFar, uNeonMid, smoothstep(0.05, 0.45, depth01));
-  neon = mix(neon, uNeonNear, smoothstep(0.5, 0.95, depth01));
+  // Neon colours flow with the mids: the depth gradient sways up and down the face.
+  float nd = depth01 + mu.z * 0.24 * sin(uTime * 0.9 + uv.y * 5.0 - depth01 * 3.0);
+  vec3 neon = mix(uNeonFar, uNeonMid, smoothstep(0.05, 0.45, nd));
+  neon = mix(neon, uNeonNear, smoothstep(0.5, 0.95, nd));
   float scanPos = 1.15 - fract(uTime * 0.11) * 1.4;
   float scan = 1.0 - smoothstep(0.0, 0.03, abs(uv.y - scanPos));
   // Kept well below clipping so the eyes, brows and mouth stay darker dots.
   vec3 cNeon = neon * (0.03 + 0.9 * pow(lumC, 1.5)) * (1.0 + 1.2 * scan) * (1.0 + 0.7 * (1.0 - edge));
+  cNeon *= 1.0 + 0.25 * mu.z;
   float sNeon = 1.0 + 0.35 * lumC;
 
   vec3 col = photo * uMode.x + cMono * uMode.y + cNeon * uMode.z;
@@ -243,6 +268,15 @@ void main() {
 
   // Touched dots light up a little.
   col *= 1.0 + pushed * 0.45;
+
+  // Music: the ripple ring glows, bass lifts the light a little, treble makes the
+  // bright dots (hair highlights, eyes, skin shine) sparkle one by one.
+  if (mu.x + mu.y + mu.w + beatW > 0.0) {
+    float tw = musicGlint(rnd * 3.7 + rnd2, uTime) * mu.w * smoothstep(0.35, 0.9, lumC);
+    col = mix(col, uGlowColor * (0.3 + lumC), 0.2 * min(beatW, 1.0)); // the ring catches a cool light
+    col *= (1.0 + beatW * 0.55 + 0.06 * mu.y) * (1.0 + tw * 1.8);
+    size *= (1.0 + beatW * 0.12) * (1.0 + tw * 0.3);
+  }
 
   // Glowing orb, and a hot flash when it bursts.
   float ballness = ge * exp(-3.0 * uBurstT);

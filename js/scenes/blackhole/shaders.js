@@ -1,6 +1,7 @@
 // GLSL for the Black Hole scene. Everything moves on the GPU: the CPU only
 // updates a handful of uniforms per frame.
 import { GLSL } from '../../core/glsl.js';
+import { MUSIC_GLSL } from '../music/MusicReact.js';
 
 /**
  * Gravitational lensing, done in view space.
@@ -65,6 +66,7 @@ ${GLSL.simplex3}
 ${GLSL.hash}
 ${GLSL.pointSize}
 ${LENS}
+${MUSIC_GLSL}
 attribute vec4 aOrbit;   // spawn radius, start angle, phase, inflow speed (cycles per clock unit)
 attribute vec4 aRand;    // gaussian, size rand, brightness rand, kind (0 disk, 1 stream, 2 plunge)
 uniform float uTime;
@@ -152,10 +154,13 @@ void main() {
   float sd = (x - uShock.x) / uShock.z;
   float shock = uShock.y * exp(-sd * sd);
   xv += shock * 0.9;
+  // Music: every beat sends a faint bright ring rolling out through the disk.
+  float beatW = beatRing(x - uRin, 8.5, 0.75);
+  xv += beatW * 0.12;
 
   float thick = 0.018 + 0.026 * max(x - uRin, 0.0);
   if (isStream) thick *= 0.35;
-  float h = aRand.x * (thick * (1.0 + 0.55 * n) + shock * 0.35);
+  float h = aRand.x * (thick * (1.0 + 0.55 * n) + shock * 0.35 + beatW * 0.04);
   if (isStream) h += (sh - 0.5) * 0.32 * max(x - uRin, 0.0);
 
   vec3 pos = vec3(xv * cos(theta), h, xv * sin(theta));
@@ -217,6 +222,8 @@ void main() {
   // The release shock front glows white-hot as it rolls through the disk.
   col = mix(col, uCol0 * 1.4, clamp(shock * 0.9, 0.0, 1.0));
   I += shock * (0.16 + 0.18 * aRand.z) * fade;
+  col = mix(col, uCol0 * 1.2, clamp(beatW * 0.35, 0.0, 1.0));
+  I += beatW * (0.03 + 0.045 * aRand.z) * fade;
 
 #ifdef SECONDARY
   I *= weight * 1.3;
@@ -249,6 +256,7 @@ void main() {
 export const starVertex = /* glsl */ `
 ${GLSL.pointSize}
 ${LENS}
+${MUSIC_GLSL}
 attribute vec4 aStar;   // size px, brightness, temperature, phase
 uniform float uTime;
 uniform float uLensStar;
@@ -263,6 +271,7 @@ void main() {
   vec4 mvl = vec4(lp, 1.0);
   gl_Position = projectionMatrix * mvl;
   float tw = 0.7 + 0.3 * sin(uTime * (0.8 + aStar.w * 2.5) + aStar.w * 61.0);
+  tw *= 1.0 + music().w * 1.8 * musicGlint(aStar.w * 13.1 + aStar.z, uTime); // treble: the stars glitter
   vec3 c = mix(vec3(0.62, 0.74, 1.0), vec3(1.0, 0.82, 0.62), aStar.z);
   // stars bunched up near the Einstein ring get a touch brighter (magnified)
   c *= aStar.y * tw * uStarBright * min(sqrt(stretch), 2.5);
@@ -296,6 +305,7 @@ void main() {
 export const dustVertex = /* glsl */ `
 ${GLSL.pointSize}
 ${LENS}
+${MUSIC_GLSL}
 attribute vec4 aDust;   // radius, angle, height, rand
 uniform float uClock;
 uniform float uOrbitK;
@@ -324,6 +334,7 @@ void main() {
   vec3 c = mix(vec3(0.55, 0.58, 0.66), mix(uCol1, uCol2, 0.5), 0.55 * near);
   float I = (0.35 + 0.65 * aDust.w) * (0.4 + 0.6 * near) * smoothstep(2.5, 6.0, aDust.x);
   I *= 1.0 + shock * 1.5 + uFlash * 0.6;
+  I *= 1.0 + 0.35 * music().x + beatRing(aDust.x - 2.6, 8.5, 1.4) * 0.8; // the dust lights up with the music
   vColor = c * I * uDust;
   gl_PointSize = min(pointSize(uSize * (0.5 + aDust.w * 0.9), mvl) * sqrt(clamp(stretch, 1.0, 3.0)), 7.0);
 }

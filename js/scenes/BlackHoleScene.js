@@ -6,6 +6,9 @@
 // ring, infalling streams, dust, background stars and optional jets.
 // The hand orbits the camera, a fist feeds the hole, opening the hand
 // (mouse / touch: letting go) releases a shock wave, a victory sign changes the colours.
+// Music (sound on): the disk glows brighter and turns faster with the bass, a faint ring
+// rolls out through the disk and the photon ring flares on every beat, jets pulse, and the
+// stars glitter with the treble.
 import * as THREE from 'three';
 import { BaseScene } from '../core/BaseScene.js';
 import {
@@ -19,6 +22,7 @@ import {
   ringFragment,
 } from './blackhole/shaders.js';
 import { ShadowPasses } from './blackhole/ShadowPasses.js';
+import { MusicReact, ChargeHum } from './music/MusicReact.js';
 
 const RS = 1; // event-horizon radius (world units)
 const R_IN = 2.6; // inner edge of the disk
@@ -91,7 +95,10 @@ export default class BlackHoleScene extends BaseScene {
       tilt: 0,
       jets: false,
       palette: PALETTES[0].name,
+      music: 1,
     };
+    this.music = new MusicReact(this.app, { decay: 1.3 });
+    this.hum = new ChargeHum(this.app);
     this.paletteIndex = 0;
 
     this.camera.fov = 45;
@@ -105,6 +112,7 @@ export default class BlackHoleScene extends BaseScene {
     this.paletteGain = PALETTES[0].gain;
     this.u = {
       ...this.app.sharedUniforms,
+      ...this.music.uniforms,
       uClock: { value: 0 },
       uHoleView: { value: new THREE.Vector3(0, 0, -BASE_DIST) },
       uRing: { value: RING },
@@ -359,10 +367,13 @@ export default class BlackHoleScene extends BaseScene {
     this.flash = 0;
     this.jetBurst = 0;
     this.mass = 1;
+    this.hum.stop();
+    this.music.reset();
     this.shadowFx.detach(this.app.composer);
   }
 
   dispose() {
+    this.hum?.stop();
     this.shadowFx.detach(this.app.composer);
     this.shadowFx.dispose();
     super.dispose();
@@ -393,6 +404,7 @@ export default class BlackHoleScene extends BaseScene {
     folder.add(s, 'lensing', 0, 2, 0.01).name('Lensing strength');
     folder.add(s, 'tilt', -45, 45, 1).name('Disk tilt (°)');
     folder.add(s, 'jets').name('Jets');
+    this.music.addGui(folder, s);
     this.paletteController = folder
       .add(s, 'palette', PALETTES.map((p) => p.name))
       .name('Colours')
@@ -407,6 +419,8 @@ export default class BlackHoleScene extends BaseScene {
     const ui = input.uiCaptured;
     const pinching = active && input.pinching && !ui;
     const fist = active && input.fist && !ui;
+    this.music.strength = this.settings.music;
+    const m = this.music.update(dt);
 
     // ------------------------------------------------ camera: hand orbit
     // The PALM steers (wrist + knuckles), not the fingertip: it stays put when the
@@ -490,6 +504,7 @@ export default class BlackHoleScene extends BaseScene {
       this.sinceFist += dt;
       if (this.sinceFist > 3) this.charge = Math.max(0, this.charge - dt * 0.6);
     }
+    this.hum.set(fist ? this.charge : 0);
     this.feed += ((fist ? 1 : 0) - this.feed) * damp(fist ? 2.2 : 1.1, dt);
     // (Open hand and victory are whole-hand poses, not clicks, so they work even
     // while the hand cursor happens to hover the UI.)
@@ -504,7 +519,7 @@ export default class BlackHoleScene extends BaseScene {
 
     // ------------------------------------------------ simulation clocks
     const spin = this.settings.spin;
-    this.clockValue += dt * spin * (1 + 3 * this.feed);
+    this.clockValue += dt * spin * (1 + 3 * this.feed) * (1 + 0.45 * m.bass);
     this.flash *= Math.exp(-4 * dt);
     this.jetBurst *= Math.exp(-1.1 * dt);
     this.jetClock += dt * (0.6 + 2.5 * this.jetBurst) * Math.max(spin, 0.2);
@@ -545,6 +560,7 @@ export default class BlackHoleScene extends BaseScene {
 
   release(power) {
     const p = Math.max(0.45, power);
+    this.app.audio?.sfx?.('boom', { intensity: Math.min(1, p) });
     this.shock = { t: 0, power: 1.2 * p };
     this.flash = Math.max(this.flash, p);
     this.jetBurst = Math.max(this.jetBurst, p);
@@ -581,15 +597,18 @@ export default class BlackHoleScene extends BaseScene {
     u.uFeed.value = this.feed;
     u.uFlash.value = this.flash;
     u.uSize.value = 7 * s.size * this.sizeComp;
-    u.uBright.value = s.brightness * this.brightComp * this.paletteGain;
+    const m = this.music;
+    // music: the disk swells with the bass (a little extra on the beat)
+    u.uBright.value = s.brightness * this.brightComp * this.paletteGain * (1 + 0.3 * m.bass + 0.08 * m.beat);
     u.uDust.value = 0.075 * this.brightComp;
     u.uRs.value = RS * this.mass;
     u.uRing.value = RING * this.mass;
     u.uLensA.value = 3 * s.lensing * this.mass * this.mass;
     u.uLensStar.value = 2.5 * s.lensing;
     u.uStreams.value = 0.45 + 1.6 * this.feed;
-    u.uJet.value = this.jetLevel;
-    u.uRingBright.value = (0.9 + 0.6 * this.feed + 1.6 * this.flash) * Math.sqrt(s.brightness);
+    u.uJet.value = this.jetLevel * (1 + 0.7 * m.bass + 0.6 * m.beat);
+    // the photon ring flares on the beat
+    u.uRingBright.value = (0.9 + 0.6 * this.feed + 1.6 * this.flash + 0.35 * m.beat + 0.15 * m.bass) * Math.sqrt(s.brightness);
 
     // Edge-on, the disk piles up along the line of sight: tone it down a bit.
     const sinI = Math.abs(Math.sin(this.cam.incl));

@@ -6,19 +6,22 @@
 // Hand:  point = push a hole, pinch + move = tilt the relief, fist = pull all
 // particles into a swirling ball, open hand after a fist = explode,
 // hand closer / farther = more / less depth, peace sign = next style.
+// Music (sound on): the 3D relief pumps with the bass, the particles shiver with the
+// treble and every beat sends a glowing ripple out from the middle.
 import * as THREE from 'three';
 import { BaseScene } from '../core/BaseScene.js';
 import { vertexShader, fragmentShader, VOID_COUNT, STYLE_IDS } from './mirror/shaders.js';
 import { PersonSegmenter } from './mirror/PersonSegmenter.js';
 import { MirrorUi } from './mirror/ui.js';
 import { loadImageTexture, VideoCanvasTexture } from './mirror/media.js';
+import { MusicReact, SparkleLimiter, ChargeHum } from './music/MusicReact.js';
 
 const STYLES = Object.keys(STYLE_IDS);
 const PHOTO_URL = new URL('../../assets/face/color.jpg', import.meta.url).href;
 const PHOTO_DATA_URL = new URL('../../assets/face/data.png', import.meta.url).href;
 
 /** Settings live at module level so they survive a quality change (which rebuilds the scene). */
-const PARAMS = { style: 'Matrix', removeBg: true, depth: 1, size: 1, brightness: 1 };
+const PARAMS = { style: 'Matrix', removeBg: true, depth: 1, size: 1, brightness: 1, music: 1 };
 /** The last image / video the user loaded (the File, not its object URL) - reopened after a rebuild. */
 let lastFile = null;
 
@@ -140,6 +143,9 @@ export default class MirrorScene extends BaseScene {
     this.segWarned = false;
     this.personSeen = false;
     this.personTimer = 0;
+    this.music = new MusicReact(app, { decay: 1.5 });
+    this.sparkle = new SparkleLimiter(app);
+    this.hum = new ChargeHum(app);
   }
 
   // ------------------------------------------------------------------ setup
@@ -165,6 +171,7 @@ export default class MirrorScene extends BaseScene {
     const voids = Array.from({ length: VOID_COUNT }, () => new THREE.Vector4(0, 0, 1, 0));
     this.uniforms = {
       ...this.app.sharedUniforms,
+      ...this.music.uniforms,
       uFovScale: { value: 1 / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2)) },
       uTanHalf: { value: Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2) },
       uCamDist: { value: this.camera.position.z },
@@ -223,6 +230,7 @@ export default class MirrorScene extends BaseScene {
     this.depthCtrl = folder.add(this.params, 'depth', 0, 3, 0.01).name('3D depth');
     folder.add(this.params, 'size', 0.4, 2.5, 0.01).name('Particle size');
     folder.add(this.params, 'brightness', 0.2, 2.5, 0.01).name('Brightness');
+    this.music.addGui(folder, this.params);
     folder.add(this.actions, 'load').name('Load image or video…');
     folder.add(this.actions, 'camera').name('Use camera');
   }
@@ -236,6 +244,8 @@ export default class MirrorScene extends BaseScene {
 
   exit() {
     this.isActive = false;
+    this.hum.stop();
+    this.music.reset();
     this.ui.setCtaVisible(false, true);
     this.file?.video?.pause();
   }
@@ -247,6 +257,7 @@ export default class MirrorScene extends BaseScene {
 
   dispose() {
     this.disposed = true;
+    this.hum?.stop();
     super.dispose();
     this.ui?.dispose();
     this.segmenter?.close();
@@ -485,6 +496,8 @@ export default class MirrorScene extends BaseScene {
       this.layout();
     }
     const u = this.uniforms;
+    this.music.strength = this.params.music;
+    const m = this.music.update(dt);
     const vs = this.viewH / 9.326; // world units scale with the view
     // hand-sized effects (void, ball) follow the short side so they fit on a phone held upright
     const hs = Math.max(0.6, Math.min(1, this.camera.aspect)) * vs;
@@ -532,6 +545,8 @@ export default class MirrorScene extends BaseScene {
       this.voidSeen = false;
     }
     const strength = this.voidStrength.step(pointing ? 1 : 0, dt);
+    // a quick swipe through the particles: a soft, rate-limited sparkle sound
+    this.sparkle.update(dt, pointing, input.velocity, clamp(input.pointer.x, -1, 1) * 0.6);
     this.ghostTimer += dt;
     if (strength > 0.3 && this.ghostTimer > 0.035 && this.voidPos.distanceTo(this.voidLast) > R * 0.28) {
       const g = this.ghosts[this.ghostIndex];
@@ -580,6 +595,7 @@ export default class MirrorScene extends BaseScene {
       this.collapse = Math.max(0, this.collapse - dt * release);
     }
     this.wasFist = fist;
+    this.hum.set(fist ? this.collapse : 0);
     u.uCollapse.value = this.collapse;
     u.uFist.value.set(this.fistPos.x, this.fistPos.y, this.fistPos.z, 1.25 * hs * (1 + 0.05 * Math.sin(time * 5)));
 
@@ -606,7 +622,8 @@ export default class MirrorScene extends BaseScene {
       }
     }
     this.depthF = damp(this.depthF, hand ? 0.3 + 1.4 * clamp(input.depth, 0, 1) : 1, 3, dt);
-    u.uDepth.value = BASE_DEPTH * vs * this.params.depth * this.depthF * (1 + 0.5 * tiltAmount);
+    // music: the relief pumps with the bass (Particleify's audio mode)
+    u.uDepth.value = BASE_DEPTH * vs * this.params.depth * this.depthF * (1 + 0.5 * tiltAmount) * (1 + 0.6 * m.bass);
 
     // ---- peace sign: next style
     if (input.events.has('victorystart')) {
@@ -673,6 +690,7 @@ export default class MirrorScene extends BaseScene {
   }
 
   explode() {
+    this.app.audio?.sfx?.('boom', { intensity: 0.5 + 0.5 * this.collapse });
     this.blastT = 0;
     this.charged = 0;
     this.blastCenter.copy(this.fistPos);
