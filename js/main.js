@@ -90,15 +90,9 @@ async function main() {
     hideStart();
   } else if (input === 'hand') {
     startHands();
-  } else {
-    // Returning visitors who already allowed the camera go straight in.
-    try {
-      const status = await navigator.permissions?.query({ name: 'camera' });
-      if (status?.state === 'granted') startHands();
-    } catch {
-      /* Permissions API without "camera" (Firefox) - wait for a click. */
-    }
   }
+  // Everyone else starts from the start screen: its button click is also what lets the
+  // browser play sound (pages can't start audio on their own).
 }
 
 main().catch((err) => {

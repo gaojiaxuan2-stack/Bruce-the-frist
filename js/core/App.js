@@ -51,6 +51,9 @@ export class App {
 
     this.input = new InputManager(this);
     this.audio = new AudioEngine(this);
+    // Sound starts on with every visit (🔊 mutes for this visit only), so an old "muted"
+    // choice can't leave someone wondering why the site is silent.
+    this.audio.settings.muted = false;
     this.hud = new Hud(this, VISIBLE_SCENES);
     this.buildGui();
 
@@ -331,9 +334,14 @@ export class App {
 
   toggleSound() {
     const a = this.audio;
+    // Act on what the button showed when it was tapped: "🔈 Tap for sound" only wakes sound
+    // up. (The tap itself already unlocked audio, so a.running may be true by now.)
+    const waiting = this.hud.soundKey === 'waiting';
     a.unlock();
-    // The first tap only wakes sound up; after that it mutes / unmutes.
-    if (!a.running && !a.settings.muted) return;
+    if (waiting) {
+      this.hud.toast('🔊 Sound on');
+      return;
+    }
     a.toggleMuted();
     this.muteController?.updateDisplay();
     this.hud.toast(a.settings.muted ? '🔇 Sound off' : '🔊 Sound on');
