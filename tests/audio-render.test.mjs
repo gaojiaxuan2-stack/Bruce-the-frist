@@ -1,6 +1,8 @@
 // Renders the real sound graph in headless Chromium with OfflineAudioContext and checks
-// the result by numbers (nobody can listen in CI): every mood and every effect has a
-// sane level, no clipping, no DC, effects end, the built-in beats keep tempo, and the
+// the result by numbers (nobody can listen in CI): every mood plays clearly at the
+// default volume (about -17 dBFS RMS) and about as loud as the others on laptop
+// speakers, is heard within a second of the first start, never clips, has no DC; the
+// echoes end in true silence; effects end; the built-in beats keep tempo; and the
 // song / microphone beat detector pulses at the right tempo on real low-end hits.
 //
 // Needs a browser, so it only runs when asked:
@@ -43,13 +45,47 @@ async function withPage(fn) {
 
 /** Runs in the page: offline renders + metrics. */
 async function renderAll() {
-  const { AudioGraph } = await import('/js/audio/graph.js');
+  const { AudioGraph, volumeGain } = await import('/js/audio/graph.js');
   const { MusicEngine } = await import('/js/audio/music.js');
   const { SfxPlayer, ChargeHum } = await import('/js/audio/sfx.js');
   const { MOODS } = await import('/js/audio/patterns.js');
+  const { FIRST_FADE, FIRST_FROM } = await import('/js/audio/AudioEngine.js');
   const A = await import('/js/audio/analysis.js');
   const SR = 44100;
   const db = (x) => 20 * Math.log10(x + 1e-12);
+
+  /** 4th-order Butterworth high-pass at `f0` (two RBJ biquads): a laptop / phone speaker. */
+  function speaker(x, f0) {
+    let y = x;
+    for (const q of [0.5412, 1.3066]) {
+      const w = (2 * Math.PI * f0) / SR;
+      const cs = Math.cos(w);
+      const al = Math.sin(w) / (2 * q);
+      const a0 = 1 + al;
+      const [b0, b1, b2, a1, a2] = [(1 + cs) / 2 / a0, -(1 + cs) / a0, (1 + cs) / 2 / a0, (-2 * cs) / a0, (1 - al) / a0];
+      const o = new Float32Array(y.length);
+      let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+      for (let i = 0; i < y.length; i++) {
+        const v = b0 * y[i] + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+        x2 = x1;
+        x1 = y[i];
+        y2 = y1;
+        y1 = v;
+        o[i] = v;
+      }
+      y = o;
+    }
+    return y;
+  }
+  function rmsDb(L, R, from, to) {
+    let e = 0;
+    let n = 0;
+    for (let i = Math.floor(from * SR); i < Math.min(L.length, Math.floor(to * SR)); i++) {
+      e += (L[i] * L[i] + R[i] * R[i]) / 2;
+      n++;
+    }
+    return db(Math.sqrt(e / Math.max(1, n)));
+  }
 
   function metrics(buf, from = 0, to = buf.duration) {
     const L = buf.getChannelData(0);
@@ -71,17 +107,18 @@ async function renderAll() {
 
   function graphFor(ctx, volume) {
     const g = new AudioGraph(ctx);
-    g.master.gain.value = volume * volume;
+    g.master.gain.value = volumeGain(volume);
     g.genBus.gain.value = 1;
     g.genWet.gain.value = 1;
     return g;
   }
 
-  async function mood(id, { secs = 5, startBar = 0, volume = 0.7, analyse = false } = {}) {
+  async function mood(id, { secs = 5, startBar = 0, volume = 0.7, analyse = false, first = false, speakers = false } = {}) {
     const ctx = new OfflineAudioContext(2, SR * secs, SR);
     const g = graphFor(ctx, volume);
     const music = new MusicEngine(g, { seed: 4242 });
-    music.setMood(id, 0.01);
+    if (first) music.setMood(id, FIRST_FADE, FIRST_FROM);
+    else music.setMood(id, 0.01);
     music.current.clock.bar = startBar;
     music.setPlaying(true, 0);
     music.schedule(secs, 0);
@@ -113,7 +150,45 @@ async function renderAll() {
     }
     const beats = music.beats.slice();
     const buf = await ctx.startRendering();
-    return { id, startBar, volume, ...metrics(buf, 0.5), beats, kicks, detected, bpm: MOODS[id].bpm };
+    const L = buf.getChannelData(0);
+    const R = buf.getChannelData(1);
+    const extra = {};
+    if (first) extra.firstSecondDb = rmsDb(L, R, 0.06, 1);
+    if (speakers) extra.laptopDb = rmsDb(speaker(L, 150), speaker(R, 150), 1, secs);
+    return { id, startBar, volume, ...metrics(buf, 0.5), ...extra, beats, kicks, detected, bpm: MOODS[id].bpm };
+  }
+
+  /**
+   * Book `play` seconds of a mood, then nothing: the mood's bus (echoes included) must
+   * end in exact silence (no feedback loop keeps it busy), and so must the output.
+   */
+  async function silence(id, play = 2, secs = 20) {
+    const ctx = new OfflineAudioContext(3, SR * secs, SR);
+    const merger = ctx.createChannelMerger(3);
+    merger.connect(ctx.destination);
+    const out = ctx.createGain();
+    out.connect(merger, 0, 0);
+    const g = new AudioGraph(ctx, { destination: out });
+    g.master.gain.value = volumeGain(0.7);
+    g.genBus.gain.value = 1;
+    g.genWet.gain.value = 1;
+    const music = new MusicEngine(g, { seed: 4242 });
+    music.setMood(id, 0.01);
+    music.setPlaying(true, 0);
+    music.schedule(play, 0);
+    const bus = music.current.bus;
+    const tap = ctx.createGain();
+    tap.channelCount = 1;
+    tap.channelCountMode = 'explicit';
+    bus.out.connect(tap).connect(merger, 0, 1);
+    bus.wet.connect(tap);
+    music.setPlaying(false, play);
+    const buf = await ctx.startRendering();
+    const lastSound = (data) => {
+      for (let i = data.length - 1; i >= 0; i--) if (data[i] !== 0) return i / SR;
+      return 0;
+    };
+    return { id, busyUntil: bus.busyUntil, busSilentAfter: lastSound(buf.getChannelData(1)), outTailDb: metrics(buf, secs - 3).peakDb, secs };
   }
 
   async function sfx(name, intensity) {
@@ -143,12 +218,15 @@ async function renderAll() {
     return { name: 'charge', ...metrics(buf), tail: metrics(buf, 4.6).peakDb }; // after the reverb tail
   }
 
-  const out = { moods: [], sfx: [] };
+  const out = { moods: [], balance: [], first: [], silence: [], sfx: [] };
   for (const id of Object.keys(MOODS)) {
     out.moods.push(await mood(id));
     out.moods.push(await mood(id, { startBar: 16 }));
     out.moods.push(await mood(id, { startBar: 8, volume: 1 }));
+    out.balance.push(await mood(id, { startBar: 16, secs: 16, speakers: true }));
+    out.first.push(await mood(id, { secs: 1.5, first: true }));
   }
+  for (const id of ['galaxy', 'mirror']) out.silence.push(await silence(id));
   for (const name of ['click', 'whoosh', 'chime', 'boom', 'pop', 'morph', 'sparkle']) {
     out.sfx.push(await sfx(name, 0.6));
     out.sfx.push(await sfx(name, 1));
@@ -166,20 +244,43 @@ test('offline renders: moods, effects and beat detection', { skip: !ENABLED && '
     return r;
   });
 
+  const show = (list, keys) => list.map((m) => `${m.id || m.name}${m.startBar !== undefined ? ' bar ' + m.startBar : ''}${m.volume ? ' vol ' + m.volume : ''}: ` + keys.map((k) => `${k} ${typeof m[k] === 'number' ? m[k].toFixed(1) : m[k]}`).join(', ')).join('\n');
+  console.log(show(res.moods, ['rmsDb', 'peakDb']));
+  console.log(show(res.balance, ['rmsDb', 'laptopDb', 'peakDb']));
+  console.log(show(res.first, ['firstSecondDb']));
+  console.log(show(res.silence, ['busyUntil', 'busSilentAfter', 'outTailDb']));
+  console.log(show(res.sfx, ['peakDb', 'rmsDb', 'tail']));
+
   for (const m of res.moods) {
     const tag = `${m.id} bar ${m.startBar} vol ${m.volume}`;
     assert.ok(m.finite, `${tag}: NaN / Infinity`);
     assert.ok(m.peakDb < -0.5, `${tag}: clipping, peak ${m.peakDb.toFixed(1)} dB`);
-    if (m.volume < 1) assert.ok(m.rmsDb > -32 && m.rmsDb < -15, `${tag}: rms ${m.rmsDb.toFixed(1)} dB`);
+    // Clearly audible on small speakers at the default volume, not blasting.
+    if (m.volume < 1) assert.ok(m.rmsDb > -21 && m.rmsDb < -14, `${tag}: rms ${m.rmsDb.toFixed(1)} dB`);
     assert.ok(Math.abs(m.dc) < 2e-3, `${tag}: DC ${m.dc}`);
     // Scheduled beats are exactly one quarter note apart.
     const iv = m.beats.slice(1).map((t, i) => t - m.beats[i]);
     for (const x of iv) assert.ok(Math.abs(x - 60 / m.bpm) < 1e-6, `${tag}: beat interval ${x}`);
   }
+  // Every mood at about the same loudness: -17 dBFS RMS (±1.5) at the default volume, and
+  // within 3 dB of each other through a laptop speaker (150 Hz high-pass), so changing
+  // scene never makes the music drop away.
+  for (const m of res.balance) assert.ok(Math.abs(m.rmsDb + 16.8) < 1.5, `${m.id}: ${m.rmsDb.toFixed(1)} dB RMS at volume 0.7`);
+  const laptop = res.balance.map((m) => m.laptopDb);
+  assert.ok(Math.max(...laptop) - Math.min(...laptop) < 3, `laptop-speaker loudness spread: ${laptop.map((x) => x.toFixed(1)).join(' / ')}`);
+  // The first start is heard within a second (slow swells come in fast on the first bar).
+  for (const m of res.first) assert.ok(m.firstSecondDb > -24, `${m.id}: first second only ${m.firstSecondDb.toFixed(1)} dB`);
+  // No feedback anywhere: after the last note and its echoes the mood bus is exactly 0.
+  for (const s of res.silence) {
+    assert.ok(s.busSilentAfter < s.busyUntil + 1, `${s.id}: bus still sounding at ${s.busSilentAfter.toFixed(2)} s (notes end ${s.busyUntil.toFixed(2)} s)`);
+    assert.ok(s.outTailDb < -120, `${s.id}: output not silent at the end (${s.outTailDb.toFixed(1)} dB)`);
+  }
+
   for (const s of res.sfx) {
     const tag = `${s.name} @${s.intensity ?? ''}`;
     assert.ok(s.finite, `${tag}: NaN`);
-    assert.ok(s.peakDb < -6 && s.peakDb > -40, `${tag}: peak ${s.peakDb.toFixed(1)} dB`);
+    // Heard over the music (about -17 dBFS RMS, peaks -1..-4 dB) but never above its peaks.
+    assert.ok(s.peakDb < -2 && s.peakDb > -36, `${tag}: peak ${s.peakDb.toFixed(1)} dB`);
     assert.ok(Math.abs(s.dc) < 1e-3, `${tag}: DC ${s.dc}`);
     assert.ok(s.tail < -70, `${tag}: still sounding at the end (${s.tail.toFixed(1)} dB)`);
   }

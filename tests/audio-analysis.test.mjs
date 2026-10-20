@@ -4,9 +4,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  BANDS,
   BeatDetector,
   LevelNormalizer,
   bandDb,
+  bandPresence,
   beatPulse,
   binRange,
   makePowerTable,
@@ -220,6 +222,70 @@ test('level normaliser: frame-rate independent', () => {
   let maxDiff = 0;
   for (let i = 0; i < va.length; i++) maxDiff = Math.max(maxDiff, Math.abs(va[i] - vb[Math.min(vb.length - 1, i * 4 + 3)]));
   assert.ok(maxDiff < 0.06, `30 vs 120 fps differ by ${maxDiff}`);
+});
+
+test('level normaliser: a sudden louder passage (+15 dB) is learnt within about a second', () => {
+  const lastAbove = (vals, x) => (vals.reduce((last, v, i) => (v > x ? i : last), -1) + 1) / FPS;
+  const plain = new LevelNormalizer();
+  feed(plain, () => -50, 8);
+  const up = feed(plain, () => -35, 4);
+  assert.ok(lastAbove(up, 0.9) < 1.3, `pinned at the top for ${lastAbove(up, 0.9)} s`);
+  assert.ok(up[up.length - 1] < 0.6, 'then back in the middle');
+  // The engine re-seeds on a scene / source change: faster still.
+  const seeded = new LevelNormalizer();
+  feed(seeded, () => -50, 8);
+  seeded.reseed();
+  const up2 = feed(seeded, () => -35, 4);
+  assert.ok(lastAbove(up2, 0.9) < 0.8, `re-seeded: ${lastAbove(up2, 0.9)} s`);
+});
+
+test('level normaliser: the first seconds after the sound starts (a fade-in) are already in range', () => {
+  // The music fades in from silence over 2.5 s, then plays a pulse every half second.
+  const song = (t) => -35 + 30 * Math.log10(Math.min(1, 0.05 + t / 2.5)) + (t % 0.5 < 0.08 ? 10 : 0);
+  const v = feed(new LevelNormalizer(), song, 8);
+  const pinned = v.filter((x) => x > 0.9).length / v.length;
+  assert.ok(pinned < 0.25, `above 0.9 for ${(pinned * 100).toFixed(0)}% of the first 8 s`);
+  const late = v.slice(3 * FPS);
+  assert.ok(Math.min(...late) < 0.6, 'moves with the music after the fade-in');
+});
+
+test('band presence: a band far below the rest of the mix reads low, a full band reads high', () => {
+  const ranges = {};
+  for (const [name, [lo, hi]] of Object.entries(BANDS)) ranges[name] = binRange(48000, 2048, lo, hi);
+  // Mean power per bin: the level band covers ~510 bins, mid ~77, treble ~427.
+  const full = { level: -40, bass: -30, mid: -38, treble: -60 };
+  assert.ok(bandPresence('bass', full, ranges) > 0.95);
+  assert.ok(bandPresence('mid', full, ranges) > 0.95);
+  const thinMids = { level: -40, bass: -30, mid: -72, treble: -60 };
+  assert.ok(bandPresence('mid', thinMids, ranges) < 0.05, `mid ${bandPresence('mid', thinMids, ranges)}`);
+  assert.equal(bandPresence('level', full, ranges), 1);
+  // Scales the normalised output.
+  const a = new LevelNormalizer();
+  const b = new LevelNormalizer();
+  const ra = feed(a, (t) => -60 + (t % 0.5 < 0.1 ? 10 : 0), 4);
+  let vb = 0;
+  for (let k = 1; k <= 4 * FPS; k++) vb = Math.max(vb, b.update(-60 + ((k / FPS) % 0.5 < 0.1 ? 10 : 0), 1 / FPS, 0.2));
+  assert.ok(Math.max(...ra) > 0.9 && vb < 0.25, `full ${Math.max(...ra)} vs 20% present ${vb}`);
+});
+
+test('level normaliser: a band hovering at the noise gate does not flicker', () => {
+  const norm = new LevelNormalizer();
+  feed(norm, () => -60, 2);
+  let flips = 0;
+  let open = norm.open;
+  for (let k = 0; k < 4 * FPS; k++) {
+    norm.update(k % 2 ? -84 : -87, 1 / FPS); // around the -85 dB gate
+    if (norm.open !== open) flips++;
+    open = norm.open;
+  }
+  assert.equal(flips, 0, 'stays open');
+  feed(norm, () => -120, 1);
+  assert.equal(norm.open, false);
+  for (let k = 0; k < 4 * FPS; k++) {
+    norm.update(k % 2 ? -84 : -87, 1 / FPS);
+    if (norm.open) flips++;
+  }
+  assert.equal(flips, 0, 'stays closed');
 });
 
 // ------------------------------------------------------------------ helpers

@@ -80,7 +80,10 @@ class MockSource extends MockNode {
 
 class MockAudioContext {
   static instances = [];
+  /** iOS: a context created on pointerdown can't start until the touchend. */
+  static blockResumeOnCreate = false;
   constructor() {
+    this.blockResume = MockAudioContext.blockResumeOnCreate;
     this.state = 'suspended';
     this.currentTime = 0;
     this.sampleRate = 48000;
@@ -91,8 +94,20 @@ class MockAudioContext {
   }
   resume() {
     this.resumes++;
-    this.state = 'running';
+    if (this.blockResume) return Promise.reject(new Error('NotAllowedError'));
+    this.setState('running');
     return Promise.resolve();
+  }
+  suspend() {
+    this.suspends = (this.suspends || 0) + 1;
+    this.setState('suspended');
+    return Promise.resolve();
+  }
+  /** Like the browser: change the state, then tell the listener. */
+  setState(state) {
+    if (this.state === state) return;
+    this.state = state;
+    this.onstatechange?.();
   }
   close() {
     this.state = 'closed';
@@ -121,6 +136,12 @@ class MockAudioContext {
   }
   createConvolver() {
     return new MockNode(this, 'convolver');
+  }
+  createWaveShaper() {
+    const n = new MockNode(this, 'waveshaper');
+    n.curve = null;
+    n.oversample = 'none';
+    return n;
   }
   createDynamicsCompressor() {
     return new MockNode(this, 'compressor', { threshold: -24, knee: 30, ratio: 12, attack: 0.003, release: 0.25 });
@@ -204,7 +225,9 @@ Object.defineProperty(globalThis.navigator, 'mediaDevices', {
   },
 });
 
-const { AudioEngine } = await import('../js/audio/AudioEngine.js');
+const { AudioEngine, LOOKAHEAD, PARK_AFTER, FIRST_FROM } = await import('../js/audio/AudioEngine.js');
+const { volumeGain } = await import('../js/audio/graph.js');
+const { ENTRY_ATTACK } = await import('../js/audio/instruments.js');
 
 // ------------------------------------------------------------------ helpers
 
@@ -302,7 +325,7 @@ test('gates follow the settings every frame (volume curve, mute, music, effects)
   const e = makeEngine();
   const g = e.graph;
   e.update(1 / 60);
-  assert.ok(Math.abs(g.master.gain.target - 0.49) < 1e-9, `master ${g.master.gain.target}`);
+  assert.ok(Math.abs(g.master.gain.target - volumeGain(0.7)) < 1e-9, `master ${g.master.gain.target}`);
   assert.equal(g.musicBus.gain.target, 1);
   assert.equal(g.genBus.gain.target, 1);
   e.settings.muted = true; // the GUI checkbox writes the setting directly
@@ -323,7 +346,7 @@ test('gates follow the settings every frame (volume curve, mute, music, effects)
   e.sfx('chime');
   assert.equal(e.ctx.nodes.length, n, 'no nodes for effects that are off');
   e.setVolume(0.5);
-  assert.ok(Math.abs(g.master.gain.target - 0.25) < 1e-9);
+  assert.ok(Math.abs(g.master.gain.target - volumeGain(0.5)) < 1e-9);
   // Unchanged settings don't add automation events.
   const events = g.master.gain.events.length;
   for (let i = 0; i < 20; i++) e.update(1 / 60);
@@ -344,9 +367,11 @@ test('built-in music: notes are booked ahead, beats fire on the schedule at the 
     const log = e.beatLog.slice(-6);
     const intervals = log.slice(1).map((t, i) => t - log[i]);
     for (const iv of intervals) assert.ok(Math.abs(iv - 60 / bpm) < 0.02, `${scene}: beat interval ${iv}`);
-    // Never booked further ahead than the look-ahead window.
+    // Never booked further ahead than the look-ahead window (long enough to ride out a
+    // scene load without gaps).
     const latest = Math.max(...e.ctx.nodes.filter((n) => n.started !== undefined).map((n) => n.started));
-    assert.ok(latest <= e.ctx.currentTime + 0.16, `booked ${latest - e.ctx.currentTime}s ahead`);
+    assert.ok(latest <= e.ctx.currentTime + LOOKAHEAD + 0.01, `booked ${latest - e.ctx.currentTime}s ahead`);
+    assert.equal(st.resyncs, 0, 'no restarts');
     e.scheduler.stop();
     e.dispose();
   }
@@ -380,9 +405,13 @@ test('levels follow the analyser and decay to 0 when nothing plays', () => {
   for (const k of ['level', 'bass', 'mid', 'treble']) assert.equal(e.levels[k], 0, `${k} decays when muted`);
   assert.equal(e.levels.beat, 0);
   e.settings.muted = false;
-  e.ctx.state = 'suspended';
+  // The browser suspends the context and refuses to resume it (no gesture yet): levels
+  // stay at 0 and the engine says it is not running (the HUD then shows "Tap for sound").
+  e.ctx.blockResume = true;
+  e.ctx.setState('suspended');
   step(e, 0.5);
   assert.equal(e.running, false);
+  for (const k of ['level', 'bass', 'mid', 'treble']) assert.equal(e.levels[k], 0);
   e.dispose();
 });
 
@@ -396,11 +425,12 @@ test('scene changes crossfade, and rapid switching keeps at most two moods alive
   assert.equal(e.stats.mood, 'galaxy');
   assert.ok(e.music.players.length <= 2, `${e.music.players.length} players`);
   const cur = e.music.current.bus;
-  assert.equal(cur.out.gain.target, 1, 'new mood fades in');
-  // Old moods are disposed once their tails are over.
+  assert.equal(cur.out.gain.target, cur.level, 'new mood fades in (to its loudness trim)');
+  // Old moods are dropped once their fade is over; each mood has one bus, reused.
   step(e, 8, 1 / 30);
   assert.equal(e.music.players.length, 1);
-  assert.equal(e.music.zombies.length, 0);
+  assert.ok(Object.keys(e.music.buses).length <= 5);
+  assert.equal(e.stats.buses, 1, 'only the playing mood stays connected');
   // Same scene again: no restart.
   const p = e.music.current;
   e.setScene('test');
@@ -553,4 +583,264 @@ test('dispose closes the context and stops the timer', () => {
   e.sfx('click');
   e.charge(1);
   e.dispose();
+});
+
+// ------------------------------------------------------------------ sound must start and stay on
+
+/** A page clock the test controls, plus frames that advance both clocks. */
+function fakeTime(e, start = 100) {
+  const clock = { t: start };
+  e._now = () => clock.t;
+  clock.run = (seconds, dt = 1 / 60) => {
+    for (let i = 0; i < Math.round(seconds / dt); i++) {
+      clock.t += dt;
+      if (e.ctx.state === 'running') e.ctx.currentTime += dt;
+      if (e.scheduler.running) e._tick();
+      e.update(dt);
+    }
+  };
+  return clock;
+}
+
+const blips = (ctx) => ctx.nodes.filter((n) => n.kind === 'buffer' && n.outputs.has(ctx.destination)).length;
+
+test('iOS first tap: pointerdown cannot start sound, the touchend retries inside the gesture and the music starts at once', () => {
+  const e = new AudioEngine({});
+  e.settings = { muted: false, volume: 0.7, music: true, effects: true, react: true };
+  e.setScene('face');
+  MockAudioContext.blockResumeOnCreate = true;
+  e.unlock(); // pointerdown: not a user activation on iOS
+  MockAudioContext.blockResumeOnCreate = false;
+  const ctx = e.ctx;
+  assert.equal(e.running, false);
+  assert.equal(ctx.resumes, 1);
+  assert.equal(blips(ctx), 1, 'a silent sample with every try');
+  e.update(1 / 60);
+  assert.equal(e.scheduler.running, false);
+  ctx.blockResume = false;
+  e.unlock(); // touchend: counts
+  assert.equal(ctx.resumes, 2);
+  assert.equal(blips(ctx), 2);
+  assert.equal(e.running, true);
+  assert.equal(e.scheduler.running, true, 'the music starts on the state change, not a frame later');
+  assert.ok(e.graph.genBus.gain.target === 1 && e.graph.master.gain.target > 0.9, 'gates open, default volume is loud');
+  // Repeating unlock on later taps costs nothing.
+  e.unlock();
+  assert.equal(ctx.resumes, 2);
+  e.scheduler.stop();
+  e.dispose();
+});
+
+test('the engine resumes by itself after an iOS interruption or a browser suspend', () => {
+  const e = makeEngine();
+  const clock = fakeTime(e);
+  clock.run(0.5);
+  const ctx = e.ctx;
+  ctx.blockResume = true; // a phone call: resume() can't succeed yet
+  let r = ctx.resumes;
+  ctx.setState('interrupted');
+  assert.equal(ctx.resumes, r + 1, 'tries at once');
+  assert.equal(e.running, false, 'the HUD offers "Tap for sound" meanwhile');
+  clock.run(0.5);
+  assert.equal(ctx.resumes, r + 1, 'no hammering');
+  clock.run(1.5);
+  assert.equal(ctx.resumes, r + 2, 'retries every couple of seconds');
+  ctx.blockResume = false; // the call ended
+  clock.run(1.6);
+  assert.equal(ctx.state, 'running');
+  assert.equal(e.scheduler.running, true);
+  // A tab that comes back retries at once, and so does the next tap.
+  ctx.blockResume = true;
+  ctx.setState('suspended');
+  r = ctx.resumes;
+  e._onVisibility();
+  assert.equal(ctx.resumes, r + 1);
+  ctx.blockResume = false;
+  e.unlock();
+  assert.equal(ctx.state, 'running');
+  e.scheduler.stop();
+  e.dispose();
+});
+
+test('parking: the context sleeps only when nothing can be heard, and wakes at once', () => {
+  const e = makeEngine();
+  const clock = fakeTime(e);
+  const ctx = e.ctx;
+  clock.run(PARK_AFTER * 3);
+  assert.equal(ctx.suspends ?? 0, 0, 'never while the music plays');
+  e.settings.music = false;
+  clock.run(PARK_AFTER * 2);
+  assert.equal(ctx.suspends ?? 0, 0, 'never while effects can sound');
+  e.settings.music = true;
+  e.setMuted(true);
+  clock.run(PARK_AFTER - 0.5);
+  assert.equal(ctx.state, 'running', 'gates and tails first');
+  clock.run(1);
+  assert.equal(ctx.state, 'suspended');
+  assert.equal(e.stats.parked, true);
+  assert.equal(e.running, true, 'still "unlocked" for the HUD');
+  // Any tap wakes it (iOS only resumes inside a gesture: the next action may be "unmute").
+  e.unlock();
+  assert.equal(ctx.state, 'running');
+  assert.equal(e.stats.parked, false);
+  clock.run(PARK_AFTER + 0.5);
+  assert.equal(ctx.state, 'suspended', 'and it parks again');
+  e.setMuted(false);
+  assert.equal(ctx.state, 'running', 'unmute resumes at once');
+  clock.run(0.3);
+  assert.equal(e.scheduler.running, true);
+  assert.equal(e.graph.genBus.gain.target, 1);
+  // A background tab with the built-in music parks (the timer finishes the countdown,
+  // as frames stop); coming back wakes it.
+  document.hidden = true;
+  e._onVisibility();
+  clock.t += PARK_AFTER + 0.1;
+  e._syncPark();
+  assert.equal(ctx.state, 'suspended');
+  document.hidden = false;
+  e._onVisibility();
+  assert.equal(ctx.state, 'running');
+  e.scheduler.stop();
+  e.dispose();
+});
+
+test('first start is heard at once: the fade starts at half level and slow swells come in fast', () => {
+  const e = makeEngine({ scene: 'blackhole' });
+  e.update(1 / 60);
+  step(e, 1);
+  const bus = e.music.current.bus;
+  const first = bus.out.gain.events[0];
+  assert.equal(first[0], 'target');
+  assert.ok(Math.abs(first[1] - FIRST_FROM * bus.level) < 1e-9 && first[3] < 0.05, `first fade ${first}`);
+  // Organ and drone swells (2-3.5 s attacks) in the first bar reach full level within ENTRY_ATTACK.
+  let swells = 0;
+  for (const n of e.ctx.nodes) {
+    const ev = n.kind === 'gain' ? n.gain.events : [];
+    if (ev.length < 2 || ev[0][0] !== 'set' || ev[1][0] !== 'linear') continue;
+    swells++;
+    assert.ok(ev[1][2] - ev[0][2] <= ENTRY_ATTACK + 1e-9, `attack ${ev[1][2] - ev[0][2]}`);
+  }
+  assert.ok(swells >= 2, `${swells} envelopes`);
+  e.scheduler.stop();
+  e.dispose();
+});
+
+test('a saved volume of (almost) 0 is reset to the default', () => {
+  const saved = globalThis.localStorage;
+  globalThis.localStorage = { getItem: () => JSON.stringify({ volume: 0, music: true }), setItem() {} };
+  try {
+    assert.equal(new AudioEngine({}).settings.volume, 0.7);
+    globalThis.localStorage.getItem = () => JSON.stringify({ volume: 0.4 });
+    assert.equal(new AudioEngine({}).settings.volume, 0.4);
+  } finally {
+    globalThis.localStorage = saved;
+  }
+});
+
+test('song-file beats pulse when the song is heard (after the output latency), microphone beats at once', async () => {
+  const e = makeEngine();
+  const ctx = e.ctx;
+  ctx.outputLatency = 0.2;
+  ctx.baseLatency = 0.01;
+  await e.playFile(new Blob(['song']));
+  const clock = fakeTime(e);
+  const bytes = new Uint8Array(1024);
+  e.graph.analyser.fakeBytes = bytes;
+  const measure = (seconds) => {
+    const delays = [];
+    let lastBurst = null;
+    let count = e.levels.beatCount;
+    for (let k = 0; k < seconds * 60; k++) {
+      const burst = k % 30 === 0;
+      bytes.fill(90);
+      if (burst) for (let i = 2; i < 10; i++) bytes[i] = 230;
+      clock.run(1 / 60);
+      if (burst) lastBurst = clock.t;
+      if (e.levels.beatCount !== count) {
+        count = e.levels.beatCount;
+        if (lastBurst !== null && k > 60) delays.push(clock.t - lastBurst);
+      }
+    }
+    return delays;
+  };
+  const file = measure(6);
+  assert.ok(file.length >= 6, `${file.length} beats`);
+  for (const d of file) assert.ok(Math.abs(d - 0.19) < 0.02, `file beat ${d.toFixed(3)} s after the analyser saw it`);
+  await e.useMic();
+  const mic = measure(6);
+  assert.ok(mic.length >= 6);
+  for (const d of mic) assert.ok(d < 0.02, `mic beat ${d.toFixed(3)} s late`);
+  e.dispose();
+});
+
+test('no feedback loops anywhere, and one bus per mood, reused across visits', () => {
+  const e = makeEngine({ scene: 'galaxy' });
+  e.update(1 / 60);
+  step(e, 1);
+  const galaxyBus = e.music.buses.galaxy;
+  for (const id of ['face', 'blackhole', 'mirror', 'shapes', 'galaxy']) {
+    e.setScene(id);
+    step(e, 2, 1 / 30);
+  }
+  assert.equal(Object.keys(e.music.buses).length, 5);
+  assert.equal(e.music.buses.galaxy, galaxyBus, 'the galaxy bus is reused');
+  assert.ok(galaxyBus.echoTail > 0 && galaxyBus.echoTail < 4);
+  // Depth-first search for a cycle through connections (audio params count as their node).
+  const state = new Map();
+  const visit = (n) => {
+    state.set(n, 1);
+    for (const o of n.outputs) {
+      const next = o instanceof MockParam ? o.owner : o;
+      if (state.get(next) === 1) return true;
+      if (!state.has(next) && visit(next)) return true;
+    }
+    state.set(n, 2);
+    return false;
+  };
+  for (const n of e.ctx.nodes) if (!state.has(n)) assert.equal(visit(n), false, `feedback loop through a ${n.kind}`);
+  // Only the playing mood stays connected once the others' notes and fades are over.
+  step(e, 25, 1 / 20);
+  assert.equal(e.stats.buses, 1);
+  e.scheduler.stop();
+  e.dispose();
+});
+
+test('iOS before 17: a silent looping <audio> plays from the tap (the ring switch no longer mutes), paused while muted or hidden', () => {
+  const made = [];
+  const savedCreate = document.createElement;
+  document.createElement = (tag) => {
+    const el = new MockAudio();
+    el.tag = tag;
+    el.attrs = {};
+    el.setAttribute = (k, v) => (el.attrs[k] = v);
+    made.push(el);
+    return el;
+  };
+  AudioEngine.iosLegacy = true;
+  try {
+    const e = makeEngine();
+    assert.equal(made.length, 1);
+    const el = made[0];
+    assert.equal(el.tag, 'audio');
+    assert.ok(el.loop && 'playsinline' in el.attrs && el.src.startsWith('blob:'));
+    assert.equal(el.paused, false, 'started inside the unlocking gesture');
+    e.setMuted(true);
+    assert.equal(el.paused, true, 'muted: other apps keep their audio');
+    e.setMuted(false);
+    assert.equal(el.paused, false);
+    document.hidden = true;
+    e._onVisibility();
+    assert.equal(el.paused, true);
+    document.hidden = false;
+    e._onVisibility();
+    assert.equal(el.paused, false);
+    e.unlock();
+    assert.equal(made.length, 1, 'one element');
+    e.scheduler.stop();
+    e.dispose();
+    assert.ok(revoked.includes(el.src));
+  } finally {
+    AudioEngine.iosLegacy = false;
+    document.createElement = savedCreate;
+  }
 });

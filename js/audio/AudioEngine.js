@@ -2,7 +2,10 @@
 // live analysis so the particles can move with whatever is playing.
 //
 // Browsers only allow sound after a user gesture, so the App calls unlock() from
-// the first click / tap / key press.
+// every pointerdown / keydown / touchend until the sound runs (iOS only counts touchend
+// and click as a gesture, other browsers pointerdown too). After that the engine keeps
+// it running by itself: it resumes the AudioContext after an iOS interruption (a call,
+// Siri), when the tab comes back, and whenever the browser suspended it.
 //
 // Everything is synthesised with the Web Audio API (no audio files, no libraries):
 //   graph.js        buses, reverb, limiter, analyser
@@ -19,7 +22,7 @@
 
 import { BANDS, BEAT_BAND, BeatDetector, bandDb, bandPresence, beatPulse, binRange, makeBandNormalizers, makePowerTable, spectralFlux } from './analysis.js';
 import { clamp } from './dsp.js';
-import { AudioGraph } from './graph.js';
+import { AudioGraph, volumeGain } from './graph.js';
 import { MusicEngine } from './music.js';
 import { MOODS, moodFor } from './patterns.js';
 import { LookaheadScheduler } from './scheduler.js';
@@ -33,8 +36,16 @@ const STORAGE_KEY = 'particle3d.sound';
  */
 export const LOOKAHEAD = 0.45;
 const TICK_MS = 25;
-/** First start of the music: a slower, gentle fade-in. */
-const FIRST_FADE = 2.5;
+/**
+ * First start of the music: a gentle 2.5 s fade-in that starts at half level, so the
+ * music is clearly heard within a second of the first click.
+ */
+export const FIRST_FADE = 2.5;
+export const FIRST_FROM = 0.5;
+/** Default volume, also used when a saved volume is (almost) silent. */
+const DEFAULT_VOLUME = 0.7;
+/** The browser suspended the context on its own: try to resume it this often (s). */
+const WAKE_EVERY = 1.5;
 /** A song file is mastered much louder than the generated music: bring it down. */
 const FILE_LEVEL = 0.55;
 const BEAT_LENGTH = 0.25;
@@ -86,6 +97,9 @@ function silentWavUrl(seconds = 0.5, rate = 8000) {
 }
 
 export class AudioEngine {
+  /** iOS before 17 (the ring / silent switch mutes Web Audio); tests can turn it on. */
+  static iosLegacy = IOS_LEGACY;
+
   constructor(app) {
     this.app = app;
     /** User settings, remembered in localStorage. */
@@ -95,6 +109,9 @@ export class AudioEngine {
     } catch {
       /* storage blocked: keep defaults */
     }
+    // A volume saved at (almost) 0 would make the site silent with no visible reason.
+    const v = Number(this.settings.volume);
+    if (!(v >= 0.05)) this.settings.volume = DEFAULT_VOLUME;
     /**
      * Smoothed analysis, all 0..1. beat jumps to 1 on a beat and decays to 0 in ~0.25 s;
      * beatCount goes up by one per beat.
@@ -131,11 +148,18 @@ export class AudioEngine {
     this._parkSince = null;
     this._parkTimer = null;
     this._silentEl = null;
+    /** The context has run at least once (the browser allowed sound on this page). */
+    this._everRan = false;
+    /** Page time of the last resume() request, and of the next automatic retry. */
+    this._askedAt = -Infinity;
+    this._wakeAt = 0;
     this._onVisibility = () => {
       if (pageHidden()) this._sleep();
       this._iosUnmute();
       this._syncPark();
+      if (!pageHidden()) this._wake(true);
     };
+    this._onState = () => this._stateChanged();
   }
 
   /** Create / resume the AudioContext. Call from a user-gesture handler; safe to repeat. */
@@ -155,12 +179,16 @@ export class AudioEngine {
       this._init();
     }
     const st = this.ctx.state;
-    // 'interrupted' is iOS Safari after a call / Siri / another app took the audio.
-    // A context we suspended ourselves (nothing to hear) stays asleep.
-    if (st !== 'running' && st !== 'closed' && !(this._parked && this._parkWanted())) {
+    // Not running yet (first gesture; on iOS the pointerdown before the touchend that
+    // really counts), or 'interrupted' (iOS after a call / Siri / another app), or
+    // suspended by the browser or by us (parked): resume, inside this gesture. Every call
+    // retries until the context runs. A parked context wakes up too: the user is doing
+    // something (maybe about to unmute from the panel, which iOS would only allow inside
+    // a gesture); it parks again a few seconds later if there is still nothing to hear.
+    if (st !== 'running' && st !== 'closed') {
       this._parked = false;
       this._parkSince = null;
-      this.ctx.resume().catch(() => {});
+      this._resume();
       // Older iOS only unlocks after a sound starts inside the gesture: play one silent sample.
       this._blip();
     }
@@ -184,9 +212,13 @@ export class AudioEngine {
     this._beatRange = binRange(ctx.sampleRate, a.fftSize, BEAT_BAND[0], BEAT_BAND[1]);
     this._db = { level: 0, bass: 0, mid: 0, treble: 0 };
     this._pendingMood = null;
-    this.music.setMood(this.sceneId, FIRST_FADE);
+    this.music.setMood(this.sceneId, FIRST_FADE, FIRST_FROM);
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this._onVisibility);
+    if (typeof window !== 'undefined') window.addEventListener?.('pageshow', this._onVisibility);
+    if (ctx.addEventListener) ctx.addEventListener('statechange', this._onState);
+    else ctx.onstatechange = this._onState;
     this._applyGains();
+    if (ctx.state === 'running') this._stateChanged();
   }
 
   /**
@@ -277,7 +309,7 @@ export class AudioEngine {
    * @param {{intensity?: number, pan?: number}} [opts] intensity 0..1, pan -1 (left) .. 1 (right)
    */
   sfx(name, opts = {}) {
-    if (!this.effects || !this._live()) return;
+    if (!this.effects || !this._canPlay()) return;
     const s = this.settings;
     if (!s.effects || s.muted || pageHidden()) return;
     const mood = this.mood;
@@ -389,6 +421,7 @@ export class AudioEngine {
     const now = this._now();
     if (this.graph) {
       this._syncPark();
+      this._wake(false, now);
       this._applyPendingMood(now);
       if (this._reseedAt && now >= this._reseedAt) {
         this._reseedAt = 0;
@@ -414,6 +447,11 @@ export class AudioEngine {
     clearTimeout(this._parkTimer);
     this._parkTimer = null;
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this._onVisibility);
+    if (typeof window !== 'undefined') window.removeEventListener?.('pageshow', this._onVisibility);
+    if (this.ctx) {
+      if (this.ctx.removeEventListener) this.ctx.removeEventListener('statechange', this._onState);
+      else this.ctx.onstatechange = null;
+    }
     this._stopFile(true);
     this._stopMic();
     this.hum?.stop();
@@ -450,6 +488,61 @@ export class AudioEngine {
   /** The audio clock is actually running (not suspended by the browser or by us). */
   _live() {
     return this.ctx?.state === 'running';
+  }
+
+  /**
+   * An effect can be booked: the clock runs, or a gesture has just asked it to start (the
+   * click that unlocks the sound then plays its own click as soon as the clock starts).
+   */
+  _canPlay() {
+    if (this._live()) return true;
+    return this.ctx?.state === 'suspended' && !this._parked && this._now() - this._askedAt < 1;
+  }
+
+  /** resume(), remembering when it was asked (a refusal is fine: a later gesture retries). */
+  _resume() {
+    this._askedAt = this._now();
+    try {
+      const p = this.ctx.resume();
+      if (p?.catch) p.catch(() => {});
+    } catch {
+      /* old WebKit without a promise */
+    }
+  }
+
+  /**
+   * The context state changed. Running: start what should play now (not on the next
+   * frame, which can be late while a scene loads). Suspended or 'interrupted' (iOS) by
+   * the browser, not by us: try to resume it.
+   */
+  _stateChanged() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    if (ctx.state === 'running') {
+      this._everRan = true;
+      if (this._parked) return;
+      if (this.graph) {
+        this._applyGains();
+        this._syncGenerated();
+      }
+    } else if (ctx.state !== 'closed' && !this._parked) {
+      this._wake(true);
+    }
+  }
+
+  /**
+   * Keep the sound alive: when the browser suspended or interrupted a context that has
+   * already played, and something should be heard, ask it to resume (now when `force`,
+   * else at most every WAKE_EVERY s). Before the first run only a gesture (unlock) does.
+   */
+  _wake(force = false, now = this._now()) {
+    const ctx = this.ctx;
+    if (!ctx || !this._everRan || this._parked) return;
+    const st = ctx.state;
+    if (st === 'running' || st === 'closed' || this._parkWanted()) return;
+    if (!force && now < this._wakeAt) return;
+    this._wakeAt = now + WAKE_EVERY;
+    this._resume();
   }
 
   /** Built-in music should be playing right now. */
@@ -490,11 +583,11 @@ export class AudioEngine {
       }
       if (this._parked) {
         this._parked = false;
-        ctx.resume().catch(() => {});
+        this._resume();
       }
       return;
     }
-    if (this._parked || ctx.state !== 'running') return;
+    if (this._parked || ctx.state !== 'running' || typeof ctx.suspend !== 'function') return;
     const now = this._now();
     if (this._parkSince === null) {
       this._parkSince = now;
@@ -503,11 +596,12 @@ export class AudioEngine {
         this._parkTimer = null;
         this._syncPark();
       }, PARK_AFTER * 1000 + 50);
+      this._parkTimer?.unref?.(); // Node (tests): don't keep the process alive
     }
     if (now - this._parkSince >= PARK_AFTER) {
       this._parked = true;
       this.hum?.stop();
-      const p = ctx.suspend?.();
+      const p = ctx.suspend();
       if (p?.catch) p.catch(() => (this._parked = false));
     }
   }
@@ -532,7 +626,7 @@ export class AudioEngine {
    * while muted or hidden (so other apps' audio and the lock screen are left alone).
    */
   _iosUnmute() {
-    if (!IOS_LEGACY || typeof document === 'undefined') return;
+    if (!AudioEngine.iosLegacy || typeof document === 'undefined') return;
     const want = !this.settings.muted && !pageHidden() && !!this.ctx;
     let el = this._silentEl;
     if (want && !el) {
@@ -550,8 +644,13 @@ export class AudioEngine {
       }
     }
     if (!el) return;
-    if (want && el.paused) el.play().catch(() => {});
-    else if (!want && !el.paused) el.pause();
+    if (want && el.paused) {
+      try {
+        el.play()?.catch?.(() => {}); // refused outside a gesture: the next tap retries
+      } catch {
+        /* ignore */
+      }
+    } else if (!want && !el.paused) el.pause();
   }
 
   /** Move a gate only when its target changes (cheap: no node churn, no automation spam). */
@@ -572,7 +671,7 @@ export class AudioEngine {
       if (this._source !== 'mic') this._audioSession(s.muted ? 'ambient' : 'playback');
       this._iosUnmute();
     }
-    this._ramp('master', g.master.gain, s.muted ? 0 : vol * vol, 0.06);
+    this._ramp('master', g.master.gain, s.muted ? 0 : volumeGain(vol), 0.06);
     this._ramp('music', [g.musicBus.gain, g.musicWet.gain], s.music ? 1 : 0, 0.1);
     this._ramp('sfx', [g.sfxBus.gain, g.sfxWet.gain], s.effects ? 1 : 0, 0.05);
     const gen = this._generatedWanted();

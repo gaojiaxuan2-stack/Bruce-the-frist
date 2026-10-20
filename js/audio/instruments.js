@@ -13,6 +13,17 @@ import { mtof } from './dsp.js';
 
 const EPS = 1e-4;
 
+/**
+ * Attack of a slow swell (organ, drone, pad, air). In the first bar after the music
+ * starts (`e.entry`), swells come in within ENTRY_ATTACK seconds, so sound is heard
+ * right after the first click instead of seconds later.
+ */
+export const ENTRY_ATTACK = 0.3;
+export const attackOf = (e, slow) => {
+  const a = e.attack ?? slow;
+  return e.entry ? Math.min(a, ENTRY_ATTACK) : a;
+};
+
 /** Percussive envelope: 0 → peak in `attack`, exponential fall over `decay`. Returns the stop time. */
 export function perc(param, t, peak, attack, decay) {
   const p = Math.max(peak, 2 * EPS);
@@ -276,7 +287,7 @@ function bass(kit, out, t, e, sd) {
 function organ(kit, out, t, e, sd) {
   const { ctx } = kit;
   const hold = e.len * sd;
-  const a = e.attack ?? 2;
+  const a = attackOf(e, 2);
   const r = e.release ?? 3;
   const top = 900 + 1500 * (e.bright ?? 0.6);
   const n = e.notes.length;
@@ -314,7 +325,7 @@ function organ(kit, out, t, e, sd) {
 function drone(kit, out, t, e, sd) {
   const { ctx } = kit;
   const hold = e.len * sd;
-  const a = e.attack ?? 3;
+  const a = attackOf(e, 3);
   const r = e.release ?? 4;
   const g = gainNode(ctx);
   const end = adsr(g.gain, t, 0.3 * e.vel, { a, d: 0, s: 1, r }, hold);
@@ -359,7 +370,7 @@ function oarp(kit, out, t, e, sd) {
 function pad(kit, out, t, e, sd) {
   const { ctx } = kit;
   const hold = e.len * sd;
-  const a = e.attack ?? 1;
+  const a = attackOf(e, 1);
   const r = e.release ?? 2;
   const cut = e.cutoff ?? 1400;
   const per = 0.4 / Math.sqrt(e.notes.length);
@@ -415,7 +426,7 @@ function air(kit, out, t, e, sd) {
       bp.frequency.linearRampToValueAtTime(3000, t + hold + 2);
       return bp;
     },
-    (param) => adsr(param, t, 0.26 * e.vel, { a: 1.6, d: 0, s: 1, r: 2 }, hold),
+    (param) => adsr(param, t, 0.26 * e.vel, { a: attackOf(e, 1.6), d: 0, s: 1, r: 2 }, hold),
   );
   for (const side of sides) noise(kit, t, end).connect(side);
   return end;

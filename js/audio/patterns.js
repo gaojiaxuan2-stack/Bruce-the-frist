@@ -70,9 +70,9 @@ function walkMelody(rng, rhythm, pool, start, chordAt, { leap = [-2, -1, -1, 1, 
 
 // ------------------------------------------------------------------------- moods
 // mix: instrument level, rev: reverb send, dly: delay send (per instrument).
-// bus.level: overall trim, so every mood plays at about the same loudness (≈ -19.5 LUFS at
-// the default volume) and stays as loud on laptop / phone speakers (measured by offline
-// renders of every section; see tests/audio-render.test.mjs).
+// bus.level: overall trim, so every mood plays at about the same loudness (≈ -17 dBFS RMS,
+// -14.5 LUFS at the default volume) and stays as loud on laptop / phone speakers (measured
+// by offline renders of every section; see tests/audio-render.test.mjs).
 
 const FACE_PROG = [
   { bass: note('F2'), notes: ns('A3', 'C4', 'E4', 'G4') }, // Fmaj9
@@ -359,8 +359,8 @@ export const MOODS = {
     swing: 0.08,
     root: note('C4'),
     scale: [0, 2, 4, 7, 9],
-    bus: { tone: 12000, wow: 0, reverb: 1, delay: { beats: 0.75, feedback: 0.28, tone: 3000 }, level: 1.2 },
-    mix: { kick: 0.52, clap: 0.65, shaker: 0.4, bbass: 0.62, pluck: 0.95, comp: 0.45 },
+    bus: { tone: 12000, wow: 0, reverb: 1, delay: { beats: 0.75, feedback: 0.28, tone: 3000 }, level: 1.3 },
+    mix: { kick: 0.52, clap: 0.55, shaker: 0.4, bbass: 0.62, pluck: 0.95, comp: 0.45 },
     rev: { pluck: 0.25, clap: 0.18, comp: 0.25 },
     dly: { pluck: 0.22, comp: 0.15 },
     compose(c) {

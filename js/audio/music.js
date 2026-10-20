@@ -46,6 +46,8 @@ export class MoodBus {
     this.sources = [];
     /** Audio time when the last note booked into this bus has fully ended. */
     this.busyUntil = 0;
+    /** Audio time when a fade-out has made the bus inaudible (< -70 dB); Infinity while it plays. */
+    this.silentAt = Infinity;
     this.attached = false;
     const make = (fn) => {
       const n = fn();
@@ -186,11 +188,21 @@ export class MoodBus {
     this.attached = false;
   }
 
-  /** Fade the whole mood (dry and wet) to `value` from time t, ~98% there after `seconds`. */
-  fade(value, t, seconds) {
+  /**
+   * Fade the whole mood (dry and wet) to `value` from time t, ~98% there after `seconds`.
+   * With `from`, it first moves quickly (50 ms) to that level and fades on from there.
+   */
+  fade(value, t, seconds, from = null) {
+    const tau = Math.max(0.01, seconds / 4);
+    this.silentAt = value > 0 ? Infinity : t + 8 * tau;
     for (const p of [this.out.gain, this.wet.gain]) {
       p.cancelScheduledValues(t);
-      p.setTargetAtTime(value * this.level, t, Math.max(0.01, seconds / 4));
+      let t0 = t;
+      if (from !== null) {
+        p.setTargetAtTime(from * this.level, t, 0.012);
+        t0 = t + 0.05;
+      }
+      p.setTargetAtTime(value * this.level, t0, tau);
     }
   }
 
@@ -230,6 +242,8 @@ export class MoodPlayer {
     this.clock = new StepClock(this.stepDur);
     this.barData = null;
     this.barIndex = -1;
+    /** The first bar after a (re)start: its slow swells come in quickly (see instruments). */
+    this.entryBar = -1;
     this.retireAt = Infinity;
     this.disposeAt = Infinity;
     this.notes = 0;
@@ -245,6 +259,7 @@ export class MoodPlayer {
 
   start(t) {
     this.clock.start(t);
+    this.entryBar = this.clock.bar;
   }
 
   stop() {
@@ -271,7 +286,7 @@ export class MoodPlayer {
     this.retireAt = Infinity;
     this.disposeAt = Infinity;
     this.bus.fade(1, t, fade);
-    if (startAt !== null && !this.clock.running) this.clock.start(startAt);
+    if (startAt !== null && !this.clock.running) this.start(startAt);
   }
 
   /**
@@ -297,11 +312,12 @@ export class MoodPlayer {
         this.barData = generateBar(this.mood.id, bar, this.seed);
       }
       const t = Math.max(time + swingOffset(step, sd, swing), now);
+      const entry = bar === this.entryBar;
       for (const e of this.barData.events) {
         if (e.step !== step) continue;
         const play = INSTRUMENTS[e.inst];
         if (!play) continue;
-        const end = play(kit, bus.strip(e.inst), t, e, sd);
+        const end = play(kit, bus.strip(e.inst), t, entry ? { ...e, entry: true } : e, sd);
         bus.booked(Number.isFinite(end) ? end : t + 30);
         this.notes++;
       }
@@ -346,8 +362,11 @@ export class MusicEngine {
     return b;
   }
 
-  /** Switch to a scene's mood with a crossfade (`fade` seconds; 0 = instant). */
-  setMood(sceneId, fade = this.crossfade) {
+  /**
+   * Switch to a scene's mood with a crossfade (`fade` seconds; 0 = instant). `from`: the
+   * new mood starts at this level (0..1) instead of silence (the very first start).
+   */
+  setMood(sceneId, fade = this.crossfade, from = null) {
     const id = moodFor(sceneId);
     const old = this.current;
     if (old && old.mood.id === id) return;
@@ -361,16 +380,16 @@ export class MusicEngine {
       this.players = this.players.filter((x) => x !== p);
     } else {
       p = new MoodPlayer(this.graph, id, (this.seed + 7919 * this.visits++) | 0, this.busFor(MOODS[id]));
-      p.bus.fade(1, t, fade);
+      p.bus.fade(1, t, fade, from);
       if (this.playing) p.start(startAt);
     }
     this.players.push(p);
     this.current = p;
     // Beats of the old mood after the new one starts would double up: the new mood leads.
     if (old) this.beats = this.beats.filter((b) => b < startAt);
-    // Rapid switching: never keep more than one mood fading out.
-    const fading = this.players.filter((x) => x !== p && x.retireAt > t);
-    while (fading.length > 1) fading.shift().kill(t);
+    // Rapid switching: never more than one mood fading out. Older ones fade out fast and
+    // stop booking; their notes already booked end on their own (the bus stays until then).
+    while (this.players.length > 2) this.players.shift().kill(t);
   }
 
   /** Start or pause booking new notes (notes already booked finish on their own). */
@@ -393,9 +412,11 @@ export class MusicEngine {
   }
 
   /**
-   * Drop old players whose fade is over, and disconnect every bus whose notes have all
-   * ended and that nothing is about to play into (paused, or its mood has gone): the
-   * browser then skips it entirely. A player re-attaches its bus when it books notes.
+   * Drop old players whose fade is over, and disconnect every bus that nothing is about
+   * to play into (paused, or its mood has gone) once it is silent: its notes have all
+   * ended, or it has faded out (long organ / drone notes may still be "playing" inside,
+   * inaudibly). The browser then skips the bus entirely. A player re-attaches its bus
+   * when it books notes.
    */
   collect(now = this.ctx.currentTime) {
     if (this.players.length > 1) {
@@ -407,7 +428,7 @@ export class MusicEngine {
     }
     for (const id in this.buses) {
       const b = this.buses[id];
-      if (!b.attached || now <= b.busyUntil + 0.25) continue;
+      if (!b.attached || (now <= b.busyUntil + 0.25 && now < b.silentAt)) continue;
       const booking = this.playing && this.players.some((p) => p.bus === b && p.playing && now < p.retireAt);
       if (!booking) b.detach();
     }

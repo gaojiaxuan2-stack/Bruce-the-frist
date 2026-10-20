@@ -8,14 +8,50 @@
 //   effects ─► sfxBus ──────────────────────────┤
 //   reverb sends: genWet ─► musicWet ─┐         │
 //                 sfxWet ─────────────┴─► convolver ─► reverbReturn ─┤
-//                                                   master (volume) ─► compressor ─► out
+//                  master (volume) ─► dcBlock ─► glue compressor ─► soft clipper ─► out
 //
 // Gate gains (genBus/genWet, musicBus/musicWet, sfxBus/sfxWet) switch the parts on and
 // off with short ramps; nothing is rebuilt while the page runs.
+//
+// Loudness: at the default volume (0.7) the music plays at about -17 dBFS RMS (about
+// -14.5 LUFS, the level of a streaming service), so laptop and phone speakers hear it
+// clearly. The glue compressor (ratio 2, slow) evens out loud passages without pumping;
+// the soft clipper rounds off the few transient peaks (claps, plucks, kicks) that would
+// otherwise clip, and caps the output at -0.7 dBFS whatever the volume.
 
-import { makeImpulse, vinylNoise, whiteNoise } from './dsp.js';
+import { clamp, makeImpulse, vinylNoise, whiteNoise } from './dsp.js';
 
 export const FFT_SIZE = 2048;
+
+/** Master gain at volume 1, and the slider's curve (gain = OUTPUT_GAIN · volume^VOLUME_CURVE). */
+export const OUTPUT_GAIN = 1.67;
+export const VOLUME_CURVE = 1.5;
+
+/** Volume slider (0..1) → master gain. 0.7 → 0.98 (the default); 1 → +4.6 dB louder. */
+export function volumeGain(volume) {
+  return OUTPUT_GAIN * Math.pow(clamp(Number(volume) || 0), VOLUME_CURVE);
+}
+
+/** The soft clipper's input is scaled by 1 / CLIP_RANGE, so it handles peaks up to +12 dBFS. */
+export const CLIP_RANGE = 4;
+
+/**
+ * Soft-clip transfer curve for a WaveShaperNode: exactly linear up to `knee` (-5.2 dBFS),
+ * then a smooth tanh shoulder that never goes above `ceiling` (-0.7 dBFS). Odd symmetric,
+ * with an odd number of points, so silence stays exactly 0 (no DC).
+ */
+export function softClipCurve({ knee = 0.55, ceiling = 0.92, range = CLIP_RANGE, points = 4097 } = {}) {
+  const c = new Float32Array(points);
+  const room = ceiling - knee;
+  for (let i = 0; i < points; i++) {
+    const u = ((i / (points - 1)) * 2 - 1) * range;
+    const a = Math.abs(u);
+    const y = a <= knee ? a : knee + room * Math.tanh((a - knee) / room);
+    c[i] = u < 0 ? -y : y;
+  }
+  c[(points - 1) / 2] = 0;
+  return c;
+}
 
 function bufferFrom(ctx, channels) {
   const buf = ctx.createBuffer(channels.length, channels[0].length, ctx.sampleRate);
@@ -40,17 +76,28 @@ export class AudioGraph {
       return g;
     };
 
-    // Output: master volume → limiter → speakers. A safety net: the music stays under its
-    // knee up to a high volume; only loud peaks (booms, full volume) are caught, with a fast
-    // release so the music does not "pump".
+    // Output: master volume → glue compressor → soft clipper → speakers.
+    // The compressor only leans on loud passages (ratio 2, soft knee, slow attack and
+    // release, so it never "pumps" on the kicks); short peaks pass it and are rounded off
+    // by the clipper, which also guarantees the output never clips.
     this.compressor = ctx.createDynamicsCompressor();
     const c = this.compressor;
-    c.threshold.value = -6;
-    c.knee.value = 5;
-    c.ratio.value = 12;
-    c.attack.value = 0.003;
-    c.release.value = 0.12;
-    c.connect(destination);
+    c.threshold.value = -12;
+    c.knee.value = 10;
+    c.ratio.value = 2;
+    c.attack.value = 0.02;
+    c.release.value = 0.3;
+    this.clipIn = null;
+    this.clipper = null;
+    if (typeof ctx.createWaveShaper === 'function') {
+      this.clipIn = gain(1 / CLIP_RANGE);
+      this.clipper = ctx.createWaveShaper();
+      this.clipper.curve = softClipCurve();
+      this.clipper.oversample = '2x';
+      c.connect(this.clipIn).connect(this.clipper).connect(destination);
+    } else {
+      c.connect(destination);
+    }
     // DC / infrasound blocker (FM e-piano and pitch-swept kicks leave a little DC).
     this.dcBlock = ctx.createBiquadFilter();
     this.dcBlock.type = 'highpass';
@@ -122,9 +169,9 @@ export class AudioGraph {
   }
 
   dispose() {
-    for (const n of [this.master, this.dcBlock, this.compressor, this.reverb, this.reverbReturn, this.duck, this.musicBus, this.musicWet, this.genHp, this.genBus, this.genWet, this.fileBus, this.sfxBus, this.sfxWet, this.analyserIn, this.analyser]) {
+    for (const n of [this.master, this.dcBlock, this.compressor, this.clipIn, this.clipper, this.reverb, this.reverbReturn, this.duck, this.musicBus, this.musicWet, this.genHp, this.genBus, this.genWet, this.fileBus, this.sfxBus, this.sfxWet, this.analyserIn, this.analyser]) {
       try {
-        n.disconnect();
+        n?.disconnect();
       } catch {
         /* already disconnected */
       }

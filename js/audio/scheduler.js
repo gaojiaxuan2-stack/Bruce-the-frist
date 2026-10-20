@@ -1,6 +1,6 @@
 // Timing for the generated music: a "look-ahead" scheduler. A timer wakes up every
-// ~25 ms and books every 16th-note step that starts in the next ~150 ms on the audio
-// clock (AudioContext.currentTime). The audio clock is sample-accurate, the timer is not,
+// ~25 ms and books every 16th-note step that starts in the next ~0.45 s on the audio
+// clock (AudioContext.currentTime; long enough to ride out a scene load). The audio clock is sample-accurate, the timer is not,
 // so notes land exactly on the grid however late the timer fires.
 // The maths is pure and unit-tested; LookaheadScheduler only adds the timer.
 
