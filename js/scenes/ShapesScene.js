@@ -152,6 +152,8 @@ export default class ShapesScene extends BaseScene {
     // Only the first shape is built here. The others are built in small time slices over the
     // next seconds (buildSome), or at once if one is asked for before it is ready (target).
     this.targets = SHAPES.map(() => null);
+    /** Bounding radius of each shape (world units, before scaling), for the sparkle check. */
+    this.radii = SHAPES.map(() => 2.5);
     this.builder = null;
     this.buildQueue = SHAPES.map((_, k) => (this.current + 1 + k) % SHAPES.length).slice(0, -1);
 
@@ -331,6 +333,10 @@ export default class ShapesScene extends BaseScene {
 
   exit() {
     this.hum.stop();
+    // A fist held while leaving is over: coming back must not explode (and boom) by itself.
+    // The core simply relaxes back into the shape.
+    this.fistState = 'idle';
+    this.collapseRate = 2.2;
     this.music.reset();
     this.bounce.x = this.bounce.v = 0;
     this.material.uniforms.uBounce.value = 0;
@@ -397,6 +403,11 @@ export default class ShapesScene extends BaseScene {
 
   storeTarget(idx, target) {
     this.targets[idx] = target;
+    // bounding radius (every 7th point is plenty), once per built shape
+    const pos = target.pos;
+    let r2 = 0;
+    for (let i = 0; i < pos.length; i += 21) r2 = Math.max(r2, pos[i] * pos[i] + pos[i + 1] * pos[i + 1] + pos[i + 2] * pos[i + 2]);
+    if (r2 > 0) this.radii[idx] = Math.sqrt(r2);
     const q = this.buildQueue.indexOf(idx);
     if (q >= 0) this.buildQueue.splice(q, 1);
     if (idx === TEXT && target.text !== this.settings.text) {
@@ -844,6 +855,13 @@ export default class ShapesScene extends BaseScene {
     if (input.source === 'hand') this.ses.used = true;
   }
 
+  /** Is the fingertip over the shape (its bounding circle on screen, plus the push radius)? */
+  pushTouches(ndc) {
+    const halfH = this.camDist * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)); // world, at the shape
+    const r = this.radii[this.current] * this.scale + 0.5 * 0.62 * this.settings.pushSize;
+    return Math.hypot(ndc.x * this.camera.aspect, ndc.y) * halfH < r;
+  }
+
   /** Fingertip push: a springy head plus a short wake that ripples closed. */
   updatePointer(dt, time, input) {
     const pointing = input.active && !input.uiCaptured && input.gesture === 'point' && !input.pinching && !input.fist &&
@@ -857,8 +875,10 @@ export default class ShapesScene extends BaseScene {
     this.ptrLive = pointing || this.repel.x > 0.02;
     if (pointing && !this.wasPointing) this.pushDur = 0;
     if (pointing) this.pushDur += dt;
-    // a quick swipe through the particles: a soft, rate-limited sparkle sound
-    this.sparkle.update(dt, pointing, input.velocity, clamp(input.pointer.x, -1, 1) * 0.6);
+    // a quick swipe through the particles: a soft, rate-limited sparkle sound - only when the
+    // push really goes through the shape (not a mouse on its way to the tabs or the panel)
+    this.sparkle.update(dt, pointing && this.repel.x > 0.5 && this.pushTouches(input.pointer), input.velocity,
+      clamp(input.pointer.x, -1, 1) * 0.6);
     this.wasPointing = pointing;
     if (input.active) {
       spring(this.ptrX, input.pointer.x, 24, 0.75, dt);

@@ -6,9 +6,9 @@
 // ring, infalling streams, dust, background stars and optional jets.
 // The hand orbits the camera, a fist feeds the hole, opening the hand
 // (mouse / touch: letting go) releases a shock wave, a victory sign changes the colours.
-// Music (sound on): the disk glows brighter and turns faster with the bass, a faint ring
-// rolls out through the disk and the photon ring flares on every beat, jets pulse, and the
-// stars glitter with the treble.
+// Music (sound on): the disk turns faster and its outer part glows brighter with the bass,
+// a bright ring rolls out through the disk and the photon ring glints on every beat, jets
+// pulse, and the stars glitter with the treble.
 import * as THREE from 'three';
 import { BaseScene } from '../core/BaseScene.js';
 import {
@@ -598,8 +598,9 @@ export default class BlackHoleScene extends BaseScene {
     u.uFlash.value = this.flash;
     u.uSize.value = 7 * s.size * this.sizeComp;
     const m = this.music;
-    // music: the disk swells with the bass (a little extra on the beat)
-    u.uBright.value = s.brightness * this.brightComp * this.paletteGain * (1 + 0.3 * m.bass + 0.08 * m.beat);
+    // music: only a touch of global gain - the bass swell lives in the shader, on the outer
+    // disk, so the photon ring, the lensed arc and the shadow keep their contrast on a beat
+    u.uBright.value = s.brightness * this.brightComp * this.paletteGain * (1 + 0.05 * m.bass);
     u.uDust.value = 0.075 * this.brightComp;
     u.uRs.value = RS * this.mass;
     u.uRing.value = RING * this.mass;
@@ -607,8 +608,8 @@ export default class BlackHoleScene extends BaseScene {
     u.uLensStar.value = 2.5 * s.lensing;
     u.uStreams.value = 0.45 + 1.6 * this.feed;
     u.uJet.value = this.jetLevel * (1 + 0.7 * m.bass + 0.6 * m.beat);
-    // the photon ring flares on the beat
-    u.uRingBright.value = (0.9 + 0.6 * this.feed + 1.6 * this.flash + 0.35 * m.beat + 0.15 * m.bass) * Math.sqrt(s.brightness);
+    // the photon ring glints on the beat (the travelling ring in the disk carries the beat)
+    u.uRingBright.value = (0.9 + 0.6 * this.feed + 1.6 * this.flash + 0.08 * m.beat) * Math.sqrt(s.brightness);
 
     // Edge-on, the disk piles up along the line of sight: tone it down a bit.
     const sinI = Math.abs(Math.sin(this.cam.incl));

@@ -315,7 +315,7 @@ export function createStarMaterial(shared, music) {
   return new THREE.ShaderMaterial({
     vertexShader: starVertex,
     fragmentShader: starFragment,
-    uniforms: { uTime: shared.uTime, uPixelRatio: shared.uPixelRatio, uAudio: shared.uAudio, ...music },
+    uniforms: { uTime: shared.uTime, uPixelRatio: shared.uPixelRatio, ...music },
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,

@@ -603,7 +603,7 @@ export default class GalaxyScene extends BaseScene {
     const cu = this.core.material.uniforms;
     const m = this.music;
     // the core breathes with the bass and glows up on the beat
-    const pulse = (1 + this.u.uPulse.value * 2.5) * (1 + 0.45 * m.bass + 0.3 * m.beat);
+    const pulse = (1 + this.u.uPulse.value * 2.5) * (1 + 0.4 * m.bass + 0.2 * m.beat);
     this.flash *= Math.exp(-2.2 * dt);
     const bangGlow = this.bang >= 0 ? (1 - smoothstep(0, 0.45, this.bang)) * this.u.uBangC.value : 0;
     cu.uColor.value.copy(this.coreColor);

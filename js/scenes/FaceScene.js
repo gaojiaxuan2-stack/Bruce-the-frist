@@ -154,8 +154,7 @@ export default class FaceScene extends BaseScene {
       uTime: shared.uTime,
       uPixelRatio: shared.uPixelRatio,
       uViewportHeight: shared.uViewportHeight,
-      uAudio: shared.uAudio,
-      ...this.music.uniforms,
+      ...this.music.uniforms, // the music (uMusicLv & co., see MusicReact)
       uPortrait: { value: new THREE.Vector2(portrait.worldSize.w, portrait.worldSize.h) },
       uPivotUV: { value: new THREE.Vector2(portrait.pivotUV.u, portrait.pivotUV.v) },
       uPivotDepth: { value: PIVOT_DEPTH },

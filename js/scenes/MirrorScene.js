@@ -42,6 +42,7 @@ const _plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 const _hit = new THREE.Vector3();
 const _ball = new THREE.Vector3();
 const _v2a = new THREE.Vector2();
+const _touch = new THREE.Vector3();
 const clamp = THREE.MathUtils.clamp;
 const damp = (x, target, k, dt) => x + (target - x) * (1 - Math.exp(-k * dt));
 
@@ -50,6 +51,25 @@ const damp = (x, target, k, dt) => x + (target - x) * (1 - Math.exp(-k * dt));
  * (relief) and an anti-aliased colour for any particle density. (Video files go
  * through a small canvas instead, see mirror/media.js.)
  */
+/**
+ * The photo's person mask (green channel of data.png) as a small CPU array, read once, for
+ * the sparkle check. Rows run top -> bottom, like the segmenter's masks.
+ */
+function readPhotoMask(image) {
+  const width = 96;
+  const height = Math.max(1, Math.round((width * image.height) / image.width));
+  try {
+    const ctx = Object.assign(document.createElement('canvas'), { width, height }).getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(image, 0, 0, width, height);
+    const rgba = ctx.getImageData(0, 0, width, height).data;
+    const data = new Uint8Array(width * height);
+    for (let i = 0; i < data.length; i++) data[i] = rgba[i * 4 + 1];
+    return { data, width, height };
+  } catch {
+    return { data: null, width, height };
+  }
+}
+
 function videoTexture(video) {
   const tex = new THREE.VideoTexture(video);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -107,6 +127,7 @@ export default class MirrorScene extends BaseScene {
     this.mode = 'auto';
     this.current = null;
     this.photo = null;
+    this.photoMask = null; // CPU copy of the photo's person mask (sparkle check), read on first use
     this.cam = null;
     this.camVideo = null;
     this.file = null;
@@ -245,6 +266,11 @@ export default class MirrorScene extends BaseScene {
   exit() {
     this.isActive = false;
     this.hum.stop();
+    // A fist held while leaving is over: coming back must not explode (and boom) by itself.
+    // The ball simply relaxes back into the picture.
+    this.wasFist = false;
+    this.fistSeen = false;
+    this.charged = 0;
     this.music.reset();
     this.ui.setCtaVisible(false, true);
     this.file?.video?.pause();
@@ -545,8 +571,10 @@ export default class MirrorScene extends BaseScene {
       this.voidSeen = false;
     }
     const strength = this.voidStrength.step(pointing ? 1 : 0, dt);
-    // a quick swipe through the particles: a soft, rate-limited sparkle sound
-    this.sparkle.update(dt, pointing, input.velocity, clamp(input.pointer.x, -1, 1) * 0.6);
+    // a quick swipe through the particles: a soft, rate-limited sparkle sound (only where the
+    // void really pushes visible particles - not a mouse on its way to the tabs or the panel)
+    const swiping = pointing && strength > 0.5 && Math.hypot(input.velocity.x, input.velocity.y) >= this.sparkle.minSpeed;
+    this.sparkle.update(dt, swiping && this.voidTouches(input.pointer, 1.35 * hs), input.velocity, clamp(input.pointer.x, -1, 1) * 0.6);
     this.ghostTimer += dt;
     if (strength > 0.3 && this.ghostTimer > 0.035 && this.voidPos.distanceTo(this.voidLast) > R * 0.28) {
       const g = this.ghosts[this.ghostIndex];
@@ -687,6 +715,44 @@ export default class MirrorScene extends BaseScene {
     // ---- camera call-to-action while only the photo is showing
     this.ui.setCtaVisible(this.isActive && src.kind === 'photo' && !this.app.input.video);
     if (!this.cameraBusy) this.ui.setBusy(!!this.app.input.handStarting);
+  }
+
+  /**
+   * Does a void of radius `r` (world units) at this NDC point cover particles you can see:
+   * the sheet, and with the background removed, the person on it? Five samples, no allocations.
+   */
+  voidTouches(ndc, r) {
+    const u = this.uniforms;
+    const p = this.toSheet(ndc, 0, _touch);
+    const W = u.uSheet.value.x;
+    const H = u.uSheet.value.y;
+    const o = 0.6 * r;
+    for (let i = 0; i < 5; i++) {
+      const gx = (p.x + (i === 1 ? o : i === 2 ? -o : 0)) / W + 0.5;
+      const gy = (p.y + (i === 3 ? o : i === 4 ? -o : 0)) / H + 0.5;
+      if (gx < 0 || gx > 1 || gy < 0 || gy > 1) continue;
+      if (this.maskOn < 0.5 || this.personAt(gx, gy) > 0.5) return true;
+    }
+    return false;
+  }
+
+  /** Person mask (0..1) at a point of the sheet (0..1 across), as the shader reads it. */
+  personAt(gx, gy) {
+    const u = this.uniforms;
+    const rect = u.uUvRect.value;
+    let x = rect.x + gx * rect.z;
+    const y = rect.y + gy * rect.w;
+    if (u.uFlipX.value > 0.5) x = 1 - x;
+    let img;
+    if (this.current.kind === 'camera') {
+      img = this.segmenter.next?.image; // DataTexture: row 0 = top of the frame (uMaskFlipY)
+    } else if (this.current.kind === 'photo') {
+      img = this.photoMask || (this.photoMask = readPhotoMask(this.photo.mask.image));
+    }
+    if (!img?.data) return 1;
+    const col = clamp(Math.floor(x * img.width), 0, img.width - 1);
+    const row = clamp(Math.floor((1 - y) * img.height), 0, img.height - 1);
+    return img.data[row * img.width + col] / 255;
   }
 
   explode() {

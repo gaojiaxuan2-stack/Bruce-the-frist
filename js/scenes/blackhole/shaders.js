@@ -154,8 +154,10 @@ void main() {
   float sd = (x - uShock.x) / uShock.z;
   float shock = uShock.y * exp(-sd * sd);
   xv += shock * 0.9;
-  // Music: every beat sends a faint bright ring rolling out through the disk.
-  float beatW = beatRing(x - uRin, 8.5, 0.75);
+  // Music: every beat sends a bright ring rolling out through the disk. It lights up from the
+  // middle of the disk outward: the inner disk is white-hot already, a ring there would only
+  // bloom it together with the photon ring into one blob.
+  float beatW = beatRing(x - uRin, 11.0, 0.75) * smoothstep(uRin * 1.2, uRin * 2.0, x);
   xv += beatW * 0.12;
 
   float thick = 0.018 + 0.026 * max(x - uRin, 0.0);
@@ -218,6 +220,10 @@ void main() {
   }
   I *= fade;
   I *= 1.0 + uFeed * 0.8 * (1.0 - t) + uFlash * 0.9;
+  // Music: the outer disk swells with the bass. Not the inner disk: on a beat it would bloom
+  // together with the photon ring and the lensed arc into one white blob.
+  float bassSwell = music().y;
+  if (bassSwell > 0.0) I *= 1.0 + 0.5 * bassSwell * smoothstep(uRin * 1.9, uRin * 3.4, x);
 
   // The release shock front glows white-hot as it rolls through the disk.
   col = mix(col, uCol0 * 1.4, clamp(shock * 0.9, 0.0, 1.0));
@@ -334,7 +340,7 @@ void main() {
   vec3 c = mix(vec3(0.55, 0.58, 0.66), mix(uCol1, uCol2, 0.5), 0.55 * near);
   float I = (0.35 + 0.65 * aDust.w) * (0.4 + 0.6 * near) * smoothstep(2.5, 6.0, aDust.x);
   I *= 1.0 + shock * 1.5 + uFlash * 0.6;
-  I *= 1.0 + 0.35 * music().x + beatRing(aDust.x - 2.6, 8.5, 1.4) * 0.8; // the dust lights up with the music
+  I *= 1.0 + 0.15 * music().x + beatRing(aDust.x - 2.6, 11.0, 1.4) * 0.8; // the dust lights up with the music
   vColor = c * I * uDust;
   gl_PointSize = min(pointSize(uSize * (0.5 + aDust.w * 0.9), mvl) * sqrt(clamp(stretch, 1.0, 3.0)), 7.0);
 }

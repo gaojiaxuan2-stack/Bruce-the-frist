@@ -273,9 +273,11 @@ void main() {
   // bright dots (hair highlights, eyes, skin shine) sparkle one by one.
   if (mu.x + mu.y + mu.w + beatW > 0.0) {
     float tw = musicGlint(rnd * 3.7 + rnd2, uTime) * mu.w * smoothstep(0.35, 0.9, lumC);
-    col = mix(col, uGlowColor * (0.3 + lumC), 0.2 * min(beatW, 1.0)); // the ring catches a cool light
-    col *= (1.0 + beatW * 0.55 + 0.06 * mu.y) * (1.0 + tw * 1.8);
-    size *= (1.0 + beatW * 0.12) * (1.0 + tw * 0.3);
+    // the ring catches a cool light: added on the lit dots only, so dark hair stays dark and
+    // the portrait keeps its own colours (a ring of light passes over it)
+    col += uGlowColor * (min(beatW, 1.0) * 0.12 * (0.15 + lumC) * smoothstep(0.1, 0.5, lumC));
+    col *= (1.0 + beatW * 0.35 + 0.03 * mu.y) * (1.0 + tw * 1.2);
+    size *= (1.0 + beatW * 0.1) * (1.0 + tw * 0.2);
   }
 
   // Glowing orb, and a hot flash when it bursts.

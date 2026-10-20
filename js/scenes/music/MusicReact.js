@@ -2,16 +2,21 @@
 //
 // The App feeds the music analysis into two shared shader uniforms every frame:
 //   uAudio (vec4: x level, y bass, z mid, w treble, 0..1) and uBeat (1 on a beat -> 0 in ~0.25 s).
-// They are already 0 when the sound is muted or "Particles follow music" is off, and every
-// music term in the scene shaders is a product with them, so silence = the normal look, exactly.
+// They are 0 when the sound is muted or "Particles follow music" is off. The App switches them
+// in one frame; MusicReact eases that switch over ~0.25 s (uMusicLv, a gated copy of uAudio)
+// so muting never makes a scene jump. Every music term in the scene shaders is a product with
+// these values, so once the fade has settled, silence = the normal look, exactly.
 //
 // The band levels are normalised to the music's own recent peak, so with most music they sit
 // near the top most of the time. Pushing particles by the raw bass would just leave a scene
 // in a constantly "pumped" state; instead the bass reaction is gated by a beat envelope:
 // about a third of it all the time (the scene feels the energy), the rest swelling on every
-// beat and decaying over ~0.4 s (the scene pulses with the music).
+// beat and decaying over ~0.4 s (the scene pulses with the music). The envelope rises over
+// ~3 frames (no one-frame pop) and beats closer than 0.34 s count as one, so a scene never
+// pulses more than ~3 times a second, whatever the music (photosensitivity guideline).
 //
 // A scene adds a few uniforms of its own (MusicReact.uniforms):
+//   uMusicLv   level, bass, mid, treble: uAudio with the sound on/off switch eased
 //   uReact     the scene's "Music reaction" strength (GUI 0..2, default 1)
 //   uBeatEnv   beat envelope: 1 on a beat, smooth decay (also catches beats a slow frame missed)
 //   uBeatWave  the two most recent beats as travelling waves: (age1, amp1, age2, amp2).
@@ -21,9 +26,9 @@
 // that live there (rotation speed, a bouncing scale, the photon-ring flare, ...).
 import * as THREE from 'three';
 
-/** Declarations + helpers for a vertex shader (needs the uniforms of MusicReact + uAudio). */
+/** Declarations + helpers for a vertex shader (needs the uniforms of MusicReact). */
 export const MUSIC_GLSL = /* glsl */ `
-uniform vec4 uAudio;     // shared: level, bass, mid, treble (0 when the sound is off)
+uniform vec4 uMusicLv;   // level, bass, mid, treble (uAudio, on/off eased; 0 when the sound is off)
 uniform float uReact;    // this scene's "Music reaction" strength
 uniform float uBeatEnv;  // beat envelope 0..1
 uniform vec4 uBeatWave;  // last two beats: age (s), amplitude, age, amplitude
@@ -31,7 +36,7 @@ uniform vec4 uBeatWave;  // last two beats: age (s), amplitude, age, amplitude
 // The music, scaled by the scene's reaction strength: level, bass (pulsing with the beat),
 // mid, treble. All 0 when the sound is off.
 vec4 music() {
-  return vec4(uAudio.x, uAudio.y * (0.3 + 0.7 * uBeatEnv), uAudio.z, uAudio.w) * uReact;
+  return vec4(uMusicLv.x, uMusicLv.y * (0.3 + 0.7 * uBeatEnv), uMusicLv.z, uMusicLv.w) * uReact;
 }
 
 // Ring travelling outward from a beat: r = distance from the wave's origin, speed in the
@@ -62,8 +67,13 @@ float musicGlint(float seed, float t) {
 }
 `;
 
-const MIN_GAP = 0.12; // s: two onsets closer than this are one beat
+// s: two onsets closer than this are one beat - at most ~3 pulses a second (WCAG 2.3.1)
+const MIN_GAP = 0.34;
 const ENV_DECAY = 4.5; // 1/s: the beat envelope is down to ~1/6 after 0.4 s
+const ATTACK = 0.04; // s: the envelope rises with this time constant (~3 frames, still punchy)
+const HOLD = 0.06; // s: the peak waits this long before it decays, so the rise gets there
+const RISE_WINDOW = 0.1; // s: the engine's beat pulse still rising this soon after an onset = same beat
+const GATE_TAU = 0.08; // s: sound on / off eases over ~0.25 s
 const BASS_FLOOR = 0.3; // share of the bass reaction that does not wait for a beat (as in music())
 
 export class MusicReact {
@@ -77,6 +87,7 @@ export class MusicReact {
     /** GUI "Music reaction" (0..2). */
     this.strength = 1;
     this.uniforms = {
+      uMusicLv: { value: new THREE.Vector4() },
       uReact: { value: 1 },
       uBeatEnv: { value: 0 },
       uBeatWave: { value: new THREE.Vector4(99, 0, 99, 0) },
@@ -93,6 +104,12 @@ export class MusicReact {
     /** Strength of the beat that just started (x strength). */
     this.onsetAmp = 0;
     this.env = 0;
+    /** Peak the envelope rises to (set on a beat, then decays). */
+    this.peak = 0;
+    /** Sound on/off, eased: 0 off .. 1 on. */
+    this.gate = 0;
+    /** Last live levels (faded out by the gate when the sound is switched off). */
+    this.held = new THREE.Vector4();
     this.waves = [
       { age: 99, amp: 0 },
       { age: 99, amp: 0 },
@@ -110,6 +127,16 @@ export class MusicReact {
     const k = this.strength;
     this.uniforms.uReact.value = k;
 
+    // Sound on/off (mute, "Particles follow music"): the App switches the shared uniforms in
+    // one frame. Ease it: on fades the music in, off fades the last levels out.
+    const live = a.x + a.y + a.z + a.w + b > 0;
+    if (live) this.held.copy(a);
+    this.gate += ((live ? 1 : 0) - this.gate) * (1 - Math.exp(-dt / GATE_TAU));
+    if (live && this.gate > 0.999) this.gate = 1;
+    if (!live && this.gate < 1e-3) this.gate = 0;
+    const g = this.gate;
+    const lv = this.uniforms.uMusicLv.value.copy(this.held).multiplyScalar(g);
+
     // Beat onset: the engine counted a new beat, or the pulse jumped up. Only while the
     // shared uniforms are live (the engine keeps counting beats when "Particles follow
     // music" is off, but then the uniforms are 0). A slow frame may land after the pulse
@@ -119,37 +146,40 @@ export class MusicReact {
     const now = this.app.elapsed ?? 0;
     if (now - this.lastSeen > 0.25) this.prevCount = count;
     this.lastSeen = now;
-    const live = a.x + a.y + a.z + a.w + b > 0;
     const counted = count !== this.prevCount;
     this.sinceOnset += dt;
     this.onset = false;
-    let hit = 0;
     if (live && k > 0 && this.sinceOnset > MIN_GAP && (counted || (b > this.prevBeat + 0.25 && b > 0.3))) {
-      hit = Math.min(1, Math.max(b, counted ? 0.7 : 0));
+      const hit = Math.min(1, Math.max(b, counted ? 0.7 : 0)) * g;
       this.onset = true;
       this.onsetAmp = hit * k;
       this.sinceOnset = 0;
+      this.peak = Math.max(this.peak, hit);
       const w0 = this.waves[0];
       const w1 = this.waves[1];
       w1.age = w0.age;
       w1.amp = w0.amp;
       w0.age = 0;
       w0.amp = this.onsetAmp;
+    } else if (live && this.sinceOnset < RISE_WINDOW) {
+      // the same beat's pulse still rising (never a new pulse: those wait for MIN_GAP)
+      this.peak = Math.max(this.peak, Math.min(1, b) * g);
     }
     this.prevBeat = b;
     this.prevCount = count;
 
-    // Beat envelope: jumps up with the beat, decays smoothly.
-    this.env *= Math.exp(-ENV_DECAY * dt);
-    if (live) this.env = Math.max(this.env, Math.min(1, b), hit);
-    if (this.env < 1e-3) this.env = 0;
+    // Beat envelope: rises to the peak over a few frames, then decays smoothly.
+    if (this.sinceOnset > HOLD) this.peak *= Math.exp(-ENV_DECAY * dt);
+    if (this.peak < 1e-3) this.peak = 0;
+    if (this.env < this.peak) this.env += (this.peak - this.env) * (1 - Math.exp(-dt / ATTACK));
+    else this.env = this.peak;
     this.uniforms.uBeatEnv.value = this.env;
 
-    this.level = a.x * k;
-    this.bass = a.y * (BASS_FLOOR + (1 - BASS_FLOOR) * this.env) * k;
-    this.mid = a.z * k;
-    this.treble = a.w * k;
-    this.beat = live ? this.env * k : 0;
+    this.level = lv.x * k;
+    this.bass = lv.y * (BASS_FLOOR + (1 - BASS_FLOOR) * this.env) * k;
+    this.mid = lv.z * k;
+    this.treble = lv.w * k;
+    this.beat = this.env * k;
 
     // Waves age and fade; when the music stops they fade out quickly.
     const fade = Math.exp(-(!live || k === 0 ? 5 : 0) * dt);
@@ -176,8 +206,12 @@ export class MusicReact {
     }
     this.uniforms.uBeatWave.value.set(99, 0, 99, 0);
     this.env = 0;
+    this.peak = 0;
     this.uniforms.uBeatEnv.value = 0;
     this.sinceOnset = 99;
+    // back in the scene: the music fades in (the scene itself is fading in too)
+    this.gate = 0;
+    this.uniforms.uMusicLv.value.set(0, 0, 0, 0);
   }
 
   /** Adds the 'Music reaction' slider to a scene's GUI folder. */

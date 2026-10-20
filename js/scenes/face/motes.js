@@ -70,7 +70,6 @@ export function createMotes(count, shared, music) {
     uTime: shared.uTime,
     uPixelRatio: shared.uPixelRatio,
     uViewportHeight: shared.uViewportHeight,
-    uAudio: shared.uAudio,
     ...music,
     uOpacity: { value: 0.5 },
     uColorA: { value: new THREE.Color('#ffd7ae') },
