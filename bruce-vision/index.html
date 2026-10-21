@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#05060a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="description" content="Hands-free AR effects in your browser. No keyboard, no mouse — your camera and your hands are the controller.">
+  <title>Bruce Vision</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2305060a'/%3E%3Cpath d='M14 22V14h8M42 14h8v8M50 42v8h-8M22 50h-8v-8' stroke='%2338f9ff' stroke-width='5' fill='none'/%3E%3Ccircle cx='32' cy='32' r='9' fill='%23ff2a3d'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <video id="cam" playsinline muted autoplay></video>
+  <canvas id="gl"></canvas>
+  <canvas id="fx"></canvas>
+  <div id="vignette"></div>
+  <div id="flash"></div>
+
+  <div id="hud">
+    <div class="corners"><i></i><i></i><i></i><i></i></div>
+    <header class="topbar">
+      <div class="brand">BRUCE<b>//</b>VISION</div>
+      <nav id="modes" class="chips" aria-label="Modes"></nav>
+      <div class="status">
+        <span id="status-dot" data-state="loading"></span><span id="status-text">BOOTING</span>
+        <button id="sound-chip" class="chip small" type="button" data-kind="action" data-id="sound"><span class="ring"></span><span class="ico"><svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg></span><span class="lbl"><span class="long">SOUND ON</span><span class="short">ON</span></span></button>
+      </div>
+    </header>
+
+    <div id="toast"><div class="t1"></div><div class="t2"></div></div>
+    <div id="idle"><span class="wave">✋</span> Raise your hand in front of the camera</div>
+    <aside id="guide"></aside>
+    <div id="snaps"></div>
+
+    <footer class="bottombar">
+      <div id="hint"></div>
+      <nav id="options" class="chips" aria-label="Options"></nav>
+    </footer>
+  </div>
+
+  <section id="splash">
+    <div class="grid"></div>
+    <div class="splash-inner">
+      <div class="logo" data-text="BRUCE//VISION">BRUCE<b>//</b>VISION</div>
+      <p class="tag">Hands-free AR effects. <em>Your camera is the controller.</em></p>
+      <ul class="features">
+        <li><span>▣</span>Portal filters</li>
+        <li><span>🕷️</span>Spider-Man</li>
+        <li><span>✺</span>Doctor Strange</li>
+        <li><span>◉</span>Iron Man</li>
+        <li><span>〰</span>Neon air-draw</li>
+      </ul>
+      <button id="start" type="button">▶ START CAMERA</button>
+      <div id="progress"><i></i></div>
+      <div id="progress-label">Loading hand tracking…</div>
+      <p id="splash-msg">No keyboard, no mouse — just show your hands.<br>Everything runs on your device; video never leaves your browser.</p>
+    </div>
+  </section>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
