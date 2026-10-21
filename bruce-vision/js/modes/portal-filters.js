@@ -1,13 +1,17 @@
-// portal-filters.js — the eleven window filters of PORTAL mode.
+// portal-filters.js — the window filters of PORTAL mode.
 //
 // Every filter is a GLSL body defining `vec3 filt(vec2 px)` (px = device
 // pixels, so the window is a lens over the camera at the same spot). It is
 // wrapped by COMMON (window uniforms + helpers) and MAIN (inner vignette,
 // edge glow, open reveal, wipe transition, flash), then gfx.js adds PRELUDE.
+// The Spider-Man versions share one suit shader; SUITS holds what differs.
 
 export const FILTERS = [
   { id: 'dots', label: 'DOT MATRIX', short: 'DOTS', sym: '◉', color: [0.32, 0.5, 1.0] },
   { id: 'spider', label: 'SPIDER-MAN', short: 'SPIDEY', sym: '✷', color: [1.0, 0.12, 0.18] },
+  { id: 'miles', label: 'MILES MORALES', short: 'MILES', sym: '✸', color: [1.0, 0.1, 0.34] },
+  { id: 'symbiote', label: 'BLACK SUIT', short: 'BLACK', sym: '✱', color: [0.6, 0.7, 1.0] },
+  { id: 'noir', label: 'SPIDER-NOIR', short: 'NOIR', sym: '◐', color: [0.86, 0.86, 0.84] },
   { id: 'verse', label: 'SPIDER-VERSE', short: 'VERSE', sym: '✶', color: [1.0, 0.17, 0.25] },
   { id: 'thermal', label: 'THERMAL', short: 'HEAT', sym: '✹', color: [1.0, 0.5, 0.1] },
   { id: 'matrix', label: 'MATRIX', short: 'CODE', sym: '⌗', color: [0.15, 1.0, 0.45] },
@@ -28,6 +32,55 @@ const HUES = Array.from({ length: 24 }, (_, i) => {
 export function filterColor(f, t) {
   return f.color || HUES[Math.floor(((t * 0.07) % 1) * 24) % 24];
 }
+
+// The Spider-Man versions: suit shader uniforms (tones are shadow, mid,
+// light, highlight), backdrop (spider-gl.js), emblem (atlas channel; centre
+// in face heights below the chin, size in face widths), chest web ring
+// spacing (face widths), mask style (spider-mask.js), cover masthead and
+// THWIP colours (portal.js).
+const tones = (a) => new Float32Array(a.flat());
+export const SUITS = {
+  spider: {
+    bg: 'wall', chan: [1, 0, 0], embAt: 0.8, embSize: 0.62, webSp: 0.17,
+    pA: tones([[0.34, 0.015, 0.045], [0.78, 0.06, 0.1], [1.0, 0.2, 0.15], [1.0, 0.72, 0.64]]),
+    pB: tones([[0.025, 0.04, 0.11], [0.07, 0.11, 0.29], [0.15, 0.24, 0.56], [0.52, 0.66, 1.0]]),
+    pE: tones([[0.03, 0.01, 0.02], [0.04, 0.01, 0.025], [0.06, 0.02, 0.04], [0.3, 0.24, 0.3]]),
+    web: [0.04, 0.01, 0.02, 0.95], look: [0, 0, 0.5, 0], fx: [0.8, 0, 0, 1.3],
+    mask: { miles: 0, comic: 1, ink: 1.7 },
+    title: { top: 'THE AMAZING', main: 'SPIDER-MAN', fill: '#ffffff', topFill: '#ffe23a', shade: '#1b2a6b' },
+    pop: ['#ffffff', '#e62429'],
+  },
+  miles: {
+    bg: 'verse', chan: [0, 1, 0], embAt: 0.95, embSize: 1.45, webSp: 0.19,
+    pA: tones([[0.012, 0.012, 0.02], [0.05, 0.055, 0.08], [0.13, 0.16, 0.25], [0.45, 0.6, 0.9]]),
+    pB: tones([[0.42, 0.02, 0.05], [0.85, 0.06, 0.1], [1.0, 0.25, 0.25], [1.0, 0.75, 0.7]]),
+    pE: tones([[0.62, 0.03, 0.06], [0.93, 0.07, 0.1], [1.0, 0.32, 0.27], [1.0, 0.8, 0.74]]),
+    web: [0.5, 0.04, 0.08, 0.85], look: [1, 1, 0.7, 0], fx: [0, 0.8, 1, 1.3],
+    mask: { miles: 1, comic: 1, ink: 1.4, kind: 'miles' },
+    title: { top: 'SPIDER-MAN', main: 'MILES MORALES', fill: '#ff2a3d', topFill: '#ffffff', ghost: true },
+    pop: ['#ff2a3d', '#00d8ff'],
+  },
+  symbiote: {
+    bg: 'night', chan: [0, 0, 1], embAt: 1.0, embSize: 3.3, webSp: 0.3,
+    pA: tones([[0.005, 0.005, 0.01], [0.035, 0.04, 0.06], [0.13, 0.15, 0.23], [0.6, 0.68, 0.88]]),
+    pB: tones([[0.005, 0.005, 0.01], [0.035, 0.04, 0.06], [0.13, 0.15, 0.23], [0.6, 0.68, 0.88]]),
+    pE: tones([[0.52, 0.57, 0.68], [0.86, 0.88, 0.94], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]),
+    web: [0, 0, 0, 0], look: [2, 2, 1, 0.3], fx: [0, 0, 0, 1.3],
+    mask: { miles: 0, comic: 0.5, kind: 'symbiote' },
+    title: { top: 'THE SENSATIONAL', main: 'SPIDER-MAN', fill: '#f4f6fb', topFill: '#9fb4ff', shade: '#2a3350' },
+    pop: ['#ffffff', '#2b3a80'],
+  },
+  noir: {
+    bg: 'night', chan: [0, 0, 0], embAt: 0.8, embSize: 1, webSp: 0.3,
+    pA: tones([[0.03, 0.03, 0.03], [0.17, 0.17, 0.17], [0.42, 0.42, 0.42], [0.92, 0.92, 0.92]]),
+    pB: tones([[0.03, 0.03, 0.03], [0.17, 0.17, 0.17], [0.42, 0.42, 0.42], [0.92, 0.92, 0.92]]),
+    pE: tones([[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]),
+    web: [0, 0, 0, 0], look: [2, 3, 0.4, 0.8], fx: [0.9, 0, 0, 1.5],
+    mask: { miles: 0, comic: 0, kind: 'noir' },
+    title: { top: 'SPIDER-MAN', main: 'NOIR', fill: '#f2f0ea', topFill: '#cfcac0', shade: '#3a3a3a', serif: true },
+    pop: ['#f2f0ea', '#3a3a3a'],
+  },
+};
 
 // --- GLSL ------------------------------------------------------------------
 
@@ -123,6 +176,245 @@ void main() {
 }
 `;
 
+// 2-5. The Spider-Man versions, one shader driven by SUITS. With person
+// segmentation whoever is in the window wears the suit: cel shaded in three
+// hard tones (the silhouette rounds the body off, the camera adds folds),
+// glossy highlights, hatching / Ben-Day dots in the shadows, web lines from
+// the chest and the face, panels, emblem, gloves and an ink outline, in
+// front of the version's backdrop; portal.js draws the mask + masthead.
+// Until the mask arrives it is a comic print of the camera.
+const SUIT = `
+uniform sampler2D u_city;  // this version's backdrop, screen-sized (spider-gl.js)
+uniform sampler2D u_emb;   // emblem atlas: r classic, g Miles, b black suit
+uniform sampler2D u_lumS;  // camera light blurred ~6 px and ~24 px (lightTargets)
+uniform sampler2D u_lumL;
+uniform float u_seg;       // 0..1 person mask is live (eased)
+uniform vec4 u_body;       // body centre line x, shoulder y, face width, face height (device px)
+uniform float u_bodyOn;    // 0..1 a face is known (panels, emblem, head web)
+uniform vec4 u_web;        // chest web centre x, y, ring spacing (device px), rotation
+uniform vec4 u_face;       // head web centre x, y (nose bridge), ring spacing, head tilt
+uniform vec4 u_head;       // head ellipse centre x, y, radii x, y (device px)
+uniform vec4 u_glove;      // two hands: middle knuckle x, y (device px) ...
+uniform vec2 u_gloveR;     // ... and glove radius (0 = no hand)
+uniform vec4 u_embXf;      // emblem centre x, y, atlas size (device px), rotation
+uniform vec3 u_embSel;     // the version's atlas channel
+uniform vec3 u_pA[4];      // suit tones: shadow, mid, light, highlight
+uniform vec3 u_pB[4];      // panel tones (navy sides, Miles' red shoulders)
+uniform vec3 u_pE[4];      // emblem tones
+uniform vec4 u_webC;       // web line colour, amount (0 = no web)
+uniform vec4 u_look;       // panels (0 sides, 1 shoulders, 2 none), look (0 wall, 1 verse, 2 night, 3 noir), gloss, rain
+uniform vec4 u_fx;         // shadow hatching, shadow dots, gloves in the panel colour, ink outline (CSS px)
+
+const vec3 INK = vec3(0.03, 0.01, 0.025);
+
+float pmask(vec2 uv) { return u_hasMask > 0.5 ? texture(u_mask, clamp(uv, 0.0, 1.0)).r : 0.0; }
+mat2 rot2(float a) { float c = cos(a), s = sin(a); return mat2(c, s, -s, c); }
+
+// Ben-Day dots on a 45 degree grid, cover 0..1.
+float bd(vec2 px, float cell, float cover) {
+  vec2 p = mat2(0.7071, 0.7071, -0.7071, 0.7071) * px / cell;
+  float r = sqrt(clamp(cover, 0.0, 1.0)) * 0.64;
+  return (1.0 - smoothstep(r - 0.1, r + 0.1, length(fract(p) - 0.5))) * step(0.02, cover);
+}
+
+// Diagonal ink hatching (coverage); period and half width in device px.
+float hatch(vec2 p, float period, float w) {
+  float d = abs(fract((p.x + p.y) * 0.7071 / period) - 0.5) * period;
+  return 1.0 - smoothstep(w, w + 0.8 * u_dpr, d);
+}
+
+// Suit web around c: n0 spokes at the centre, doubling outward at rings
+// k0, 3 k0, 6 k0, 12 k0 so the cells stay square, and rings that sag toward
+// the centre between spokes. Line coverage 0..1.
+float web(vec2 px, vec2 c, float sp, float rot, float n0, float k0, float lw) {
+  vec2 p = px - c;
+  float r = length(p), k = r / sp;
+  float n = n0 * exp2(step(k0, k) + step(3.0 * k0, k) + step(6.0 * k0, k) + step(12.0 * k0, k));
+  float seg = 6.2831853 / n;
+  float t = fract((atan(p.y, p.x + 1e-4) - rot) / seg);
+  float aa = 0.8 * u_dpr;
+  float dS = r * sin(min(t, 1.0 - t) * seg);
+  float spoke = (1.0 - smoothstep(lw, lw + aa, dS)) * smoothstep(0.25 * sp, 0.6 * sp, r);
+  float rr = r + 0.3 * sin(3.14159 * t) * min(r * seg, sp);
+  float dR = abs(fract(rr / sp + 0.5) - 0.5) * sp;
+  float ring = (1.0 - smoothstep(lw, lw + aa, dR)) * smoothstep(0.5, 0.8, k);
+  return max(spoke, ring);
+}
+
+// Slanted rain streaks (coverage).
+float rain(vec2 px) {
+  vec2 p = px / u_dpr;
+  p.x += p.y * 0.22;
+  float col = floor(p.x / 6.0), h = hash12(vec2(col, 3.1));
+  float y = p.y / (40.0 + 30.0 * h) - u_time * (6.0 + 4.0 * h) + h * 17.0;
+  float s = fract(y);
+  float x = abs(fract(p.x / 6.0) - 0.5) * 6.0;
+  return step(0.86, hash12(vec2(col, floor(y)))) * smoothstep(0.0, 0.1, s) * (1.0 - smoothstep(0.25, 0.5, s)) * (1.0 - smoothstep(0.25, 0.8, x));
+}
+
+// The suited person over the backdrop. C, l, e: camera colour, luma and
+// luma gradient at px.
+vec3 suit(vec2 px, vec3 C, float l, float e) {
+  // Person mask + its gradient (for a constant-width ink outline). The mask
+  // is bilinear-smooth, so its screen derivatives are a good gradient.
+  float m = pmask(pxToUV(px));
+  vec2 g = vec2(dFdx(m), dFdy(m));
+  float edge = abs(m - 0.5) / max(length(g), 1e-4);  // device px to the outline
+  float pm = smoothstep(0.38, 0.62, m);
+
+  // Body form from 4 wide mask taps: the outward normal near the silhouette.
+  float fw = max(u_body.z, 1.0), fh = max(u_body.w, 1.0);
+  float rr = 0.2 * fw;
+  float aE = pmask(pxToUV(px + vec2(rr, 0.0))), aW = pmask(pxToUV(px - vec2(rr, 0.0)));
+  float aN = pmask(pxToUV(px - vec2(0.0, rr))), aS = pmask(pxToUV(px + vec2(0.0, rr)));
+  vec2 ov = vec2(aW - aE, aN - aS);
+  vec2 on = ov / max(length(ov), 1e-3) * smoothstep(0.1, 0.5, length(ov));
+  float ax = abs(px.x - u_body.x);
+  float head = step(0.5, u_bodyOn) * step(length(rot2(-u_face.w) * (px - u_head.xy) / u_head.zw), 1.0);
+  // Gloves: skin-coloured pixels around a tracked hand.
+  float glove = max((1.0 - smoothstep(0.75, 1.0, length(px - u_glove.xy) / max(u_gloveR.x, 1.0))) * step(1.0, u_gloveR.x),
+                    (1.0 - smoothstep(0.75, 1.0, length(px - u_glove.zw) / max(u_gloveR.y, 1.0))) * step(1.0, u_gloveR.y));
+  glove *= smoothstep(0.02, 0.07, C.r - C.g) * smoothstep(0.05, 0.12, C.r - C.b) * smoothstep(0.12, 0.25, l);
+
+  // Panels with a black seam.
+  float panel = 0.0, seam = 0.0;
+  if (u_look.x < 0.5) {
+    // Classic: navy torso sides past ~1.2 face widths from the centre line,
+    // below the shoulders with a rounded armpit, and the underside of the arms.
+    float ar = 0.45 * fw;
+    vec2 pq = vec2(ax - 1.22 * fw, px.y - u_body.y - 0.3 * fh);
+    float pd = min(min(pq.x, pq.y), ar - length(max(vec2(ar) - pq, 0.0)));
+    float side = smoothstep(-0.8 * u_dpr, 0.8 * u_dpr, pd);
+    float uf = on.y - 0.45, arm = step(0.8 * fw, ax);
+    panel = max(side, smoothstep(-0.03, 0.03, uf) * arm);
+    seam = max(1.0 - smoothstep(0.7 * u_dpr, 1.5 * u_dpr, abs(pd)),
+               (1.0 - smoothstep(0.8, 1.6, abs(uf) / max(fwidth(uf), 1e-4))) * arm * (1.0 - side));
+  } else if (u_look.x < 1.5) {
+    // Miles: red caps where the silhouette faces up (shoulders, the top of
+    // the arms), out from the neck, around shoulder height.
+    float tf = -on.y - 0.35;
+    float reach = smoothstep(0.5 * fw, 0.6 * fw, ax) * (1.0 - smoothstep(2.6 * fw, 2.9 * fw, ax));
+    panel = smoothstep(-0.03, 0.03, tf) * reach * (1.0 - smoothstep(0.9 * fh, 1.3 * fh, abs(px.y - u_body.y)));
+  }
+  panel *= u_bodyOn * (1.0 - head);
+  seam *= u_bodyOn * (1.0 - head) * (1.0 - glove);
+  // Gloves: the hands keep the suit colour (classic) or wear the panel's (Miles).
+  panel = mix(panel * (1.0 - glove), max(panel, glove), u_fx.z);
+
+  // Cel shading, key light from the upper right: three hard tones from the
+  // silhouette's form plus the local light, and glossy gleams (noise
+  // stretched along the form) on the lit rim and the brightest spots.
+  float key = dot(on, vec2(0.6, -0.8));
+  vec2 buv = vec2(px.x / u_res.x, 1.0 - px.y / u_res.y);
+  float Ls = texture(u_lumS, buv).r, Ll = texture(u_lumL, buv).r;
+  float shd = clamp(0.5 + 0.36 * key + clamp((Ls - Ll) * 2.4, -0.4, 0.4) + (Ll - 0.5) * 0.25, 0.0, 1.0);
+  float aw = fwidth(shd) * 0.75 + 0.012;
+  float tA = smoothstep(0.38 - aw, 0.38 + aw, shd);
+  float tB = smoothstep(0.66 - aw, 0.66 + aw, shd);
+  vec2 nd = ov / max(length(ov), 1e-3), gp = px - u_web.xy;
+  float gR = noise(vec2(dot(gp, vec2(-nd.y, nd.x)) / (0.2 * fw), dot(gp, nd) / (0.05 * fw)))
+           + 0.3 * smoothstep(0.6, 0.95, key) + 0.05 * u_look.z;
+  float gS = noise(mat2(0.8, 0.6, -0.6, 0.8) * gp / (vec2(0.3, 0.07) * fw)) * 0.4 + shd * 0.9 + 0.05 * u_look.z;
+  float gw = fwidth(gR) + 0.01, sw = fwidth(gS) + 0.01;
+  float tS = max(smoothstep(0.95 - gw, 0.95 + gw, gR) * smoothstep(0.5, 0.65, key),
+                 smoothstep(1.0 - sw, 1.0 + sw, gS)) * tA;
+  vec3 cA = mix(mix(u_pA[0], u_pA[1], tA), u_pA[2], tB);
+  vec3 cB = mix(mix(u_pB[0], u_pB[1], tA), u_pB[2], tB);
+  vec3 su = mix(mix(cA, cB, panel), mix(u_pA[3], u_pB[3], panel), tS);
+  // Shadows: hatching, cross-hatched in the deepest; or Ben-Day dots.
+  float dk = 1.0 - tA;
+  float hc = max(hatch(px, 4.0 * u_dpr, 0.4 * u_dpr) * dk, hatch(vec2(px.x, -px.y), 4.0 * u_dpr, 0.4 * u_dpr) * (1.0 - smoothstep(0.12, 0.24, shd)));
+  su = mix(su, su * 0.3, hc * u_fx.x);
+  su = mix(su, su * 0.4, bd(px, 5.0 * u_dpr, dk * 0.65 + (1.0 - tB) * 0.12) * u_fx.y);
+
+  // Web lines: from the nose bridge on the head, from the chest elsewhere,
+  // with a raised-thread highlight; not on the panels.
+  if (u_webC.a > 0.0) {
+    vec2 wc = mix(u_web.xy, u_face.xy, head);
+    float ws = mix(u_web.z, u_face.z, head), wr = mix(u_web.w, u_face.w, head);
+    float n0 = mix(8.0, 18.0, head), k0 = mix(1.0, 4.0, head), lw = 0.5 * u_dpr;
+    float w0 = web(px, wc, ws, wr, n0, k0, lw);
+    float w1 = web(px + vec2(0.9, 1.2) * u_dpr, wc, ws, wr, n0, k0, lw);
+    float wm = (1.0 - panel) * u_webC.a;
+    su += u_pA[3] * max(w1 - w0, 0.0) * 0.3 * wm;
+    su = mix(su, u_webC.rgb, w0 * wm);
+  }
+
+  // Emblem from the atlas, shaded like the suit.
+  vec2 eq = rot2(-u_embXf.w) * (px - u_embXf.xy) / u_embXf.z + 0.5;
+  float em = dot(texture(u_emb, eq).rgb, u_embSel) * u_bodyOn * (1.0 - head) * (1.0 - glove);
+  su = mix(su, mix(mix(mix(u_pE[0], u_pE[1], tA), u_pE[2], tB), u_pE[3], tS), em);
+
+  // Ink: folds from the camera, panel seams, then the silhouette outline.
+  su = mix(su, INK, smoothstep(0.14, 0.32, e) * 0.45 * (1.0 - em));
+  su = mix(su, INK, seam * 0.9);
+  vec3 bg = texture(u_city, vec2(px.x / u_res.x, 1.0 - px.y / u_res.y)).rgb;
+  vec3 c = mix(bg, su, pm);
+  // A thin rim light just inside the outline on the lit side, then the ink
+  // (the black suit's ink crawls like the symbiote).
+  float sym = step(1.5, u_look.y) * step(u_look.y, 2.5);
+  float ow = u_fx.w * u_dpr * mix(1.0, 0.4 + 2.2 * noise(px / (7.0 * u_dpr) + vec2(u_time * 0.7, -u_time * 0.4)), sym);
+  float gl = step(0.01, length(g) * u_dpr);
+  float rim = step(0.5, m) * (1.0 - smoothstep(ow + 1.8 * u_dpr, ow + 2.8 * u_dpr, edge)) * smoothstep(0.0, 0.4, key);
+  c = mix(c, u_pA[3], rim * gl * (0.55 + 0.35 * step(1.5, u_look.y)));
+  return mix(c, INK, (1.0 - smoothstep(ow, ow + u_dpr, edge)) * gl * 0.95);
+}
+
+// Noir: hard black-and-white film lit through venetian blinds, grain,
+// flicker, scratches and vignette; rain for the night looks.
+vec3 post(vec3 c, vec2 px) {
+  float noir = step(2.5, u_look.y);
+  if (noir > 0.5) {
+    float b = fract((px.x * 0.45 + px.y) / (30.0 * u_dpr) + 0.3 * sin(u_time * 0.21));
+    float blind = smoothstep(0.05, 0.14, b) * (1.0 - smoothstep(0.6, 0.69, b));
+    float l = smoothstep(0.03, 0.62, luma(c) * mix(0.42, 1.75, blind));
+    c = vec3(l * l * (3.0 - 2.0 * l)) * vec3(1.0, 0.98, 0.94);
+  }
+  if (u_look.w > 0.0) c = mix(c, mix(vec3(0.72, 0.82, 1.0), vec3(1.0), noir), rain(px) * u_look.w);
+  if (noir > 0.5) {
+    c += (hash12(floor(px / (1.5 * u_dpr)) + fract(u_time * 13.0) * 97.0) - 0.5) * 0.16;
+    c *= 1.0 - 0.8 * smoothstep(0.3, 0.78, length((v_local - 0.5) * vec2(1.0, 1.15)));
+    c *= 0.93 + 0.07 * hash12(vec2(floor(u_time * 18.0), 1.0));
+    c = mix(c, vec3(0.9), step(0.9975, hash12(vec2(floor(px.x / (2.0 * u_dpr)), floor(u_time * 9.0)))) * 0.5);
+  }
+  return c;
+}
+
+vec3 filt(vec2 px) {
+  // Spider-Verse: rows slip sideways in short glitch bursts.
+  float verse = step(0.5, u_look.y) * step(u_look.y, 1.5);
+  float tick = floor(u_time * 12.0), row = floor(px.y / (16.0 * u_dpr));
+  float burst = step(0.7, hash12(vec2(floor(u_time * 2.3), 5.3)));
+  px.x += verse * burst * step(0.75, hash12(vec2(row, tick))) * (hash12(vec2(tick, row + 3.0)) - 0.5) * 44.0 * u_dpr;
+
+  // 14 texture reads: 5 camera (misregistered plates, ink-line gradient),
+  // 2 blurred light, 5 person mask (outline, body form), 1 backdrop,
+  // 1 emblem.
+  float d = 1.6 * u_dpr;
+  vec3 C = cam(px);
+  vec3 R = cam(px + vec2(d, 0.0)), L = cam(px - vec2(d, 0.0));
+  vec3 U = cam(px - vec2(0.0, d)), D = cam(px + vec2(0.0, d));
+  float l = luma(C);
+  float e = length(vec2(luma(R) - luma(L), luma(D) - luma(U)));
+
+  // Comic print of the camera (no mask yet, or blended in as it arrives),
+  // in the version's colours.
+  vec3 pc = vec3(R.r, C.g, L.b);
+  pc = clamp(mix(vec3(l), pc, 1.55) * 1.08, 0.0, 1.0);
+  pc = mix(pc, floor(pc * 4.0 + 0.5) / 4.0, 0.45);
+  float sh = 1.0 - smoothstep(0.12, 0.55, l);
+  pc = mix(pc, pc * 0.3 + INK, bd(px, 6.0 * u_dpr, sh * 0.85) * 0.75);
+  pc *= vec3(1.07, 0.95, 0.92);
+  pc = mix(pc, INK, smoothstep(0.1, 0.24, e) * 0.85);
+  float pl = luma(pc);
+  vec3 duo = mix(vec3(0.13, 0.03, 0.3), vec3(1.0, 0.24, 0.42), smoothstep(0.12, 0.8, pl)) + vec3(0.0, 0.3, 0.4) * smoothstep(0.82, 1.0, pl);
+  pc = mix(pc, duo, 0.55 * verse);
+  pc = mix(pc, vec3(pl) * vec3(0.82, 0.9, 1.06), 0.8 * step(1.5, u_look.y));
+  vec3 c = pc;
+  if (u_seg > 0.002) c = mix(pc, suit(px, C, l, e), u_seg);
+  return post(c, px);
+}`;
+
 const BODIES = {
   // 1. The reference clip: an electric-blue panel; the scene as a halftone
   // of pale dots whose area follows brightness, deep navy in the shadows,
@@ -152,129 +444,10 @@ vec3 filt(vec2 px) {
   return c;
 }`,
 
-  // 2. You become Spider-Man: with person segmentation the body turns into
-  // the suit (red shaded by the camera, blue side panels, black web lines
-  // from the chest, ink outline) in front of the Spider-Verse skyline;
-  // portal.js draws the mask + chest emblem on top. Until the mask arrives
-  // it is a comic print of the camera.
-  spider: `
-uniform sampler2D u_city;  // Spider-Verse skyline, screen-sized (spider-gl.js)
-uniform float u_seg;       // 0..1 person mask is live (eased)
-uniform vec4 u_body;       // body centre line x, shoulder y, face width, face height (device px)
-uniform float u_bodyOn;    // 0..1 a face is known (blue side panels)
-uniform vec4 u_web;        // chest web centre x, y, ring spacing (device px), rotation
-uniform vec4 u_glove;      // two hands: middle knuckle x, y (device px) ...
-uniform vec2 u_gloveR;     // ... and glove radius (0 = no hand): hands stay red
+  // 2-5. The Spider-Man versions (SUIT above).
+  suit: SUIT,
 
-const vec3 RED = vec3(0.816, 0.078, 0.118);
-const vec3 BLUE = vec3(0.102, 0.235, 0.784);
-const vec3 INK = vec3(0.045, 0.01, 0.03);
-
-float pmask(vec2 uv) { return u_hasMask > 0.5 ? texture(u_mask, clamp(uv, 0.0, 1.0)).r : 0.0; }
-
-// Ben-Day dots on a 45 degree grid, cover 0..1.
-float bd(vec2 px, float cell, float cover) {
-  vec2 p = mat2(0.7071, 0.7071, -0.7071, 0.7071) * px / cell;
-  float r = sqrt(clamp(cover, 0.0, 1.0)) * 0.64;
-  return (1.0 - smoothstep(r - 0.1, r + 0.1, length(fract(p) - 0.5))) * step(0.02, cover);
-}
-
-// Suit web: 16 spokes from the chest + rings that sag toward the centre
-// between spokes. Returns line coverage 0..1.
-float web(vec2 px) {
-  vec2 p = px - u_web.xy;
-  float r = length(p), sp = u_web.z;
-  float seg = 6.2831853 / 16.0;
-  float f = (atan(p.y, p.x + 1e-4) - u_web.w) / seg;
-  float t = fract(f);
-  float lw = 0.65 * u_dpr, aa = 0.8 * u_dpr;
-  // every other spoke starts further out so the centre doesn't clog
-  float odd = mod(floor(f + 0.5), 2.0);
-  float dS = r * sin(min(t, 1.0 - t) * seg);
-  float spoke = (1.0 - smoothstep(lw, lw + aa, dS)) * smoothstep(sp * (0.45 + 0.7 * odd), sp * (0.8 + 0.9 * odd), r);
-  float sag = 1.0 - 0.14 * sin(3.14159 * t);
-  float k = r / (sag * sp);
-  float dR = abs(fract(k + 0.5) - 0.5) * sp * sag;
-  float ring = (1.0 - smoothstep(lw, lw + aa, dR)) * smoothstep(0.55, 0.8, k);
-  return max(spoke, ring);
-}
-
-vec3 filt(vec2 px) {
-  // 15 texture reads: 5 camera (shading, misregistered plates, ink-line
-  // gradient), 9 person mask (outline, body shape), 1 skyline.
-  float d = 1.6 * u_dpr;
-  vec3 C = cam(px);
-  vec3 R = cam(px + vec2(d, 0.0)), L = cam(px - vec2(d, 0.0));
-  vec3 U = cam(px - vec2(0.0, d)), D = cam(px + vec2(0.0, d));
-  float l = luma(C);
-  float lb = 0.5 * l + 0.125 * (luma(R) + luma(L) + luma(U) + luma(D));
-  float e = length(vec2(luma(R) - luma(L), luma(D) - luma(U)));
-
-  // Comic print of the camera (no mask yet, or blended in as it arrives).
-  vec3 pc = vec3(R.r, C.g, L.b);
-  pc = clamp(mix(vec3(l), pc, 1.55) * 1.08, 0.0, 1.0);
-  pc = mix(pc, floor(pc * 4.0 + 0.5) / 4.0, 0.45);
-  float sh = 1.0 - smoothstep(0.12, 0.55, l);
-  pc = mix(pc, pc * 0.3 + INK, bd(px, 6.0 * u_dpr, sh * 0.85) * 0.75);
-  pc *= vec3(1.07, 0.95, 0.92);
-  pc = mix(pc, INK, smoothstep(0.1, 0.24, e) * 0.85);
-  if (u_seg < 0.002) return pc;
-
-  // Person mask + its gradient (for a constant-width ink outline).
-  vec2 uv = pxToUV(px);
-  float md = 2.0 * u_dpr;
-  vec2 du = vec2(md / u_vrect.z, 0.0), dv = vec2(0.0, md / u_vrect.w);
-  float m = pmask(uv);
-  vec2 g = vec2(pmask(uv + du) - pmask(uv - du), pmask(uv + dv) - pmask(uv - dv)) / (2.0 * md);
-  float edge = abs(m - 0.5) / max(length(g), 1e-4);  // device px to the outline
-  float pm = smoothstep(0.38, 0.62, m);
-
-  // The suit: deep red shaded by the camera (folds keep their 3D), blue
-  // side panels away from the body centre line, a little sheen.
-  float s = smoothstep(0.03, 0.88, lb);
-  s = mix(s, floor(s * 4.0 + 0.5) / 4.0, 0.3);
-  // Blue panels: past ~1.2 face widths from the centre line and below the
-  // shoulders, with a rounded armpit. pd = device px inside the panel.
-  float fwp = max(u_body.z, 1.0), ar = 0.45 * fwp;
-  vec2 pq = vec2(abs(px.x - u_body.x) - 1.22 * fwp, px.y - u_body.y - 0.3 * u_body.w);
-  float pd = min(min(pq.x, pq.y), ar - length(max(vec2(ar) - pq, 0.0)));
-  // Gloves: around the tracked hands the suit stays red.
-  float glove = max((1.0 - smoothstep(0.75, 1.0, length(px - u_glove.xy) / max(u_gloveR.x, 1.0))) * step(1.0, u_gloveR.x),
-                    (1.0 - smoothstep(0.75, 1.0, length(px - u_glove.zw) / max(u_gloveR.y, 1.0))) * step(1.0, u_gloveR.y));
-  float panel = u_bodyOn * (1.0 - glove);
-  float blue = smoothstep(-0.8 * u_dpr, 0.8 * u_dpr, pd) * panel;
-  vec3 base = mix(RED, BLUE, blue);
-  vec3 su = base * (0.28 + 0.95 * s);
-  su += mix(vec3(1.0, 0.55, 0.5), vec3(0.6, 0.75, 1.0), blue) * smoothstep(0.75, 1.0, l) * 0.14;
-  su = mix(su, su * 0.45, bd(px, 5.0 * u_dpr, (1.0 - s) * 0.7) * 0.7);
-  su = mix(su, INK, smoothstep(0.12, 0.3, e) * 0.55);
-
-  // Body shape from 4 wide mask taps: limbs and torso round off toward the
-  // silhouette, dark on the far side, a warm rim from the skyline's sun.
-  float rr = 0.22 * u_body.z;
-  float aE = pmask(pxToUV(px + vec2(rr, 0.0))), aW = pmask(pxToUV(px - vec2(rr, 0.0)));
-  float aN = pmask(pxToUV(px - vec2(0.0, rr))), aS = pmask(pxToUV(px + vec2(0.0, rr)));
-  vec2 ov = vec2(aW - aE, aN - aS);  // points out of the body
-  float rim = 1.0 - smoothstep(0.55, 0.98, 0.25 * (aE + aW + aN + aS));
-  vec2 sun = vec2(0.77, 0.27) * u_res - px;
-  float lit = dot(ov, sun / max(length(sun), 1.0)) / max(length(ov), 0.08);
-  su *= 1.0 - rim * 0.5 * (1.0 - max(lit, 0.0));
-  su += vec3(1.0, 0.58, 0.32) * rim * smoothstep(0.15, 0.8, lit) * 0.6;
-
-  // Web lines (black, red parts only) with a raised-thread highlight.
-  float w0 = web(px), w1 = web(px + vec2(0.9, 1.2) * u_dpr);
-  su += vec3(1.0, 0.6, 0.55) * max(w1 - w0, 0.0) * 0.3 * (1.0 - blue);
-  su = mix(su, INK, w0 * (1.0 - blue) * 0.92);
-  // Black seam where the red meets the blue.
-  su = mix(su, INK, (1.0 - smoothstep(0.7 * u_dpr, 1.5 * u_dpr, abs(pd))) * 0.9 * panel);
-
-  vec3 city = texture(u_city, vec2(px.x / u_res.x, 1.0 - px.y / u_res.y)).rgb;
-  vec3 c = mix(city, su, pm);
-  c = mix(c, INK, (1.0 - smoothstep(1.3 * u_dpr, 2.3 * u_dpr, edge)) * step(0.02, length(g) * md) * 0.95);
-  return mix(pc, c, u_seg);
-}`,
-
-  // 3. Spider-Verse comic: posterized, CMY halftone in shadows, ink lines,
+  // 6. Spider-Verse comic: posterized, CMY halftone in shadows, ink lines,
   // red/cyan misregistration and the odd glitch frame.
   verse: `
 float ht(vec2 px, float ang, float cs, float amt) {
@@ -311,7 +484,7 @@ vec3 filt(vec2 px) {
   return col;
 }`,
 
-  // 4. Heat camera palette from blurred luminance (+ a little skin warmth).
+  // 7. Heat camera palette from blurred luminance (+ a little skin warmth).
   thermal: `
 vec3 heat(float t) {
   t = clamp(t, 0.0, 1.0) * 6.0;
@@ -336,7 +509,7 @@ vec3 filt(vec2 px) {
   return col * (0.93 + 0.07 * sin(px.y * 2.1 / u_dpr));
 }`,
 
-  // 5. Green code rain: luminance x falling streaks, bright leading glyphs.
+  // 8. Green code rain: luminance x falling streaks, bright leading glyphs.
   matrix: `
 uniform sampler2D u_glyphs;  // 8x8 glyph atlas, 32 px per glyph
 vec3 filt(vec2 px) {
@@ -368,7 +541,7 @@ vec3 filt(vec2 px) {
   return col + vec3(0.01, 0.2, 0.07) * l * l;
 }`,
 
-  // 6. Terminal ASCII art (amber phosphor).
+  // 9. Terminal ASCII art (amber phosphor).
   ascii: `
 uniform sampler2D u_ascii;  // ramp " .:-=+*#%@", 10 glyphs in a row
 vec3 filt(vec2 px) {
@@ -385,7 +558,7 @@ vec3 filt(vec2 px) {
   return col * (0.84 + 0.16 * step(0.5, fract(px.y / (2.0 * u_dpr))));
 }`,
 
-  // 7. Glowing sobel edges with a travelling hue on black.
+  // 10. Glowing sobel edges with a travelling hue on black.
   neon: `
 vec3 filt(vec2 px) {
   float e1 = sobel(px, 1.5 * u_dpr);
@@ -399,7 +572,7 @@ vec3 filt(vec2 px) {
   return col;
 }`,
 
-  // 8. Inverted cool-blue, hard contrast, scanlines, noise and a scan bar.
+  // 11. Inverted cool-blue, hard contrast, scanlines, noise and a scan bar.
   xray: `
 vec3 filt(vec2 px) {
   float l = luma(cam(px));
@@ -412,7 +585,7 @@ vec3 filt(vec2 px) {
   return col + (hash12(px + fract(u_time * 7.0) * 517.0) - 0.5) * 0.09;
 }`,
 
-  // 9. Game Boy: chunky pixels, 4 greens, Bayer ordered dither, LCD grid.
+  // 12. Game Boy: chunky pixels, 4 greens, Bayer ordered dither, LCD grid.
   pixel: `
 float bayer2(vec2 a) { a = floor(a); return fract(a.x / 2.0 + a.y * a.y * 0.75); }
 float bayer4(vec2 a) { return bayer2(0.5 * a) * 0.25 + bayer2(a); }
@@ -431,7 +604,7 @@ vec3 filt(vec2 px) {
   return col * (0.8 + 0.2 * step(0.13, min(g.x, g.y)));
 }`,
 
-  // 10. Datamosh: RGB split, slice displacement, block corruption, bursts.
+  // 13. Datamosh: RGB split, slice displacement, block corruption, bursts.
   glitch: `
 vec3 filt(vec2 px) {
   float t = u_time;
@@ -450,7 +623,7 @@ vec3 filt(vec2 px) {
   return clamp(col * (0.9 + 0.1 * sin(px.y / u_dpr * 1.7)), 0.0, 1.0);
 }`,
 
-  // 11. Eight mirrored wedges around the window centre, slowly turning.
+  // 14. Eight mirrored wedges around the window centre, slowly turning.
   kaleido: `
 vec3 filt(vec2 px) {
   vec2 p = px - u_center;
@@ -474,6 +647,7 @@ const FALLBACK = 'vec3 filt(vec2 px) { return cam(px) * vec3(0.6, 0.85, 1.2); }'
 // compile on some GPU falls back to a tinted camera instead of breaking.
 const broken = new Set();
 export function filterProgram(gfx, id) {
+  if (SUITS[id]) id = 'suit';
   if (!broken.has(id)) {
     try { return gfx.program('portal-' + id, COMMON + (BODIES[id] || FALLBACK) + MAIN); } catch (e) {
       broken.add(id);
@@ -484,6 +658,42 @@ export function filterProgram(gfx, id) {
 }
 
 export function bgProgram(gfx) { return gfx.program('portal-bg', COMMON + BG); }
+
+// The camera's light at two blur scales, in small screen-sized targets
+// redrawn every frame (at most 1/36 and 1/576 of the screen's pixels):
+// the suits' cel tones come from their difference, which follows folds and
+// the lit side of a body but not fabric texture. Box blurs, 4 taps each.
+const LUM_A = `
+uniform float u_step;
+void main() {
+  float o = u_step;
+  float l = 0.25 * (luma(cam(v_px + vec2(-o, -o))) + luma(cam(v_px + vec2(o, -o)))
+                  + luma(cam(v_px + vec2(-o, o))) + luma(cam(v_px + vec2(o, o))));
+  outColor = vec4(vec3(l), 1.0);
+}`;
+const LUM_B = `
+uniform sampler2D u_src;
+uniform float u_step;
+float at(vec2 p) { return texture(u_src, vec2(p.x / u_res.x, 1.0 - p.y / u_res.y)).r; }
+void main() {
+  float o = u_step;
+  float l = 0.25 * (at(v_px + vec2(-o, -o)) + at(v_px + vec2(o, -o)) + at(v_px + vec2(-o, o)) + at(v_px + vec2(o, o)));
+  outColor = vec4(vec3(l), 1.0);
+}`;
+let lum = null;
+export function lightTargets(gfx) {
+  if (!lum) {
+    const k = Math.min(1 / 6, 1 / (3 * gfx.dpr));  // ~2-3 CSS px per texel
+    lum = { a: gfx.renderTarget(k), b: gfx.renderTarget(k / 4), ua: { u_step: 0.25 / k }, ub: { u_src: null, u_step: 1 / k } };
+    lum.ub.u_src = lum.a;
+  }
+  gfx.bindTarget(lum.a);
+  gfx.fullscreen(gfx.program('portal-lum-a', LUM_A), lum.ua);
+  gfx.bindTarget(lum.b);
+  gfx.fullscreen(gfx.program('portal-lum-b', LUM_B), lum.ub);
+  gfx.bindTarget(null);
+  return lum;
+}
 
 // --- glyph atlases (built once) -------------------------------------------
 
@@ -532,5 +742,86 @@ export function buildAtlases(gfx) {
   g.font = 'bold 40px "DejaVu Sans Mono", Menlo, Consolas, "Courier New", monospace';
   [...ASCII_RAMP].forEach((ch, i) => g.fillText(ch, i * 32 + 16, 26));
 
-  return { glyphs: mipTexture(gfx, m), ascii: mipTexture(gfx, a) };
+  return { glyphs: mipTexture(gfx, m), ascii: mipTexture(gfx, a), emb: mipTexture(gfx, emblemAtlas()) };
+}
+
+// --- Spider-Man emblems: one per channel of a 512 px atlas (head up) -----------
+
+// A cubic leg [x0, y0, x1, y1, x2, y2, x3, y3] tapering from w0 to w1, and
+// its mirror image.
+function legs(g, list) {
+  for (const [x0, y0, x1, y1, x2, y2, x3, y3, w0, w1] of list) {
+    for (const k of [1, -1]) {
+      const L = [], R = [];
+      for (let i = 0; i <= 24; i++) {
+        const t = i / 24, u = 1 - t;
+        const x = k * (u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3);
+        const y = u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3;
+        const dx = k * (3 * u * u * (x1 - x0) + 6 * u * t * (x2 - x1) + 3 * t * t * (x3 - x2));
+        const dy = 3 * u * u * (y1 - y0) + 6 * u * t * (y2 - y1) + 3 * t * t * (y3 - y2);
+        const dl = Math.hypot(dx, dy) || 1, w = (w0 + (w1 - w0) * t) / 2;
+        L.push(x - (dy / dl) * w, y + (dx / dl) * w); R.push(x + (dy / dl) * w, y - (dx / dl) * w);
+      }
+      g.beginPath();
+      g.moveTo(L[0], L[1]);
+      for (let i = 2; i < L.length; i += 2) g.lineTo(L[i], L[i + 1]);
+      for (let i = R.length - 2; i >= 0; i -= 2) g.lineTo(R[i], R[i + 1]);
+      g.closePath();
+      g.fill();
+      g.beginPath();
+      g.arc(k * x3, y3, w1 / 2, 0, Math.PI * 2);
+      g.fill();
+    }
+  }
+}
+
+function blobs(g, list) {
+  g.beginPath();
+  for (const [x, y, rx, ry] of list) { g.moveTo(x + rx, y); g.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); }
+  g.fill();
+}
+
+function emblemAtlas() {
+  const N = 512, c = document.createElement('canvas');
+  c.width = c.height = N;
+  const g = c.getContext('2d');
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, N, N);
+  g.beginPath();
+  g.rect(3, 3, N - 6, N - 6);  // black border: clamped lookups stay empty
+  g.clip();
+  g.globalCompositeOperation = 'lighter';
+  const draw = (color, fn) => { g.save(); g.translate(N / 2, N / 2); g.scale(N / 2, N / 2); g.fillStyle = color; fn(); g.restore(); };
+  // r: the classic small black chest spider (legs bent at the knee).
+  draw('#f00', () => {
+    blobs(g, [[0, -0.45, 0.09, 0.1], [0, -0.21, 0.135, 0.17], [0, 0.17, 0.155, 0.27]]);
+    legs(g, [
+      [0.06, -0.3, 0.2, -0.45, 0.3, -0.53, 0.33, -0.57, 0.1, 0.09], [0.33, -0.57, 0.35, -0.7, 0.37, -0.82, 0.39, -0.93, 0.08, 0.04],
+      [0.1, -0.22, 0.3, -0.27, 0.45, -0.31, 0.54, -0.33, 0.1, 0.09], [0.54, -0.33, 0.6, -0.45, 0.65, -0.56, 0.69, -0.69, 0.08, 0.04],
+      [0.1, -0.12, 0.3, -0.04, 0.45, 0.01, 0.54, 0.03, 0.1, 0.09], [0.54, 0.03, 0.6, 0.2, 0.65, 0.33, 0.69, 0.45, 0.08, 0.04],
+      [0.07, 0.0, 0.2, 0.2, 0.3, 0.3, 0.33, 0.36, 0.1, 0.09], [0.33, 0.36, 0.35, 0.55, 0.37, 0.7, 0.39, 0.84, 0.08, 0.04],
+    ]);
+  });
+  // g: Miles' big stylised red spider, curvy legs hooking at the tips.
+  draw('#0f0', () => {
+    blobs(g, [[0, -0.32, 0.1, 0.1], [0, -0.14, 0.125, 0.12], [0, 0.16, 0.155, 0.26]]);
+    legs(g, [
+      [0.07, -0.22, 0.3, -0.64, 0.68, -0.72, 0.8, -0.38, 0.13, 0.05],
+      [0.12, -0.13, 0.5, -0.32, 0.88, -0.2, 0.92, 0.1, 0.12, 0.045],
+      [0.12, 0.0, 0.48, 0.05, 0.75, 0.24, 0.74, 0.52, 0.12, 0.045],
+      [0.08, 0.12, 0.3, 0.42, 0.52, 0.64, 0.34, 0.88, 0.13, 0.05],
+    ]);
+  });
+  // b: the black suit's huge white spider; the legs run off the edges
+  // (over the shoulders, round the ribs).
+  draw('#00f', () => {
+    blobs(g, [[0, -0.34, 0.12, 0.13], [0, 0.0, 0.15, 0.3]]);
+    legs(g, [
+      [0.05, -0.38, 0.14, -0.66, 0.3, -0.9, 0.48, -1.04, 0.16, 0.05],
+      [0.1, -0.26, 0.42, -0.5, 0.8, -0.52, 1.04, -0.32, 0.16, 0.045],
+      [0.12, -0.08, 0.46, -0.1, 0.78, 0.08, 1.0, 0.42, 0.15, 0.045],
+      [0.08, 0.14, 0.26, 0.42, 0.42, 0.7, 0.52, 1.04, 0.15, 0.05],
+    ]);
+  });
+  return c;
 }

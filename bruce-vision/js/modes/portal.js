@@ -1,21 +1,22 @@
 // PORTAL — raise both hands: the window spanned by your thumb and index
 // fingertips becomes a live filter lens over the camera (the viral blue
-// dot-matrix clip, plus ten more looks). Pinch to flip filters, swipe with
-// one hand, or point at a chip. SPIDER-MAN turns whoever is inside the window
-// into Spider-Man (suit shader + face-tracked mask and chest emblem).
+// dot-matrix clip, plus more looks). Pinch to flip filters, swipe with one
+// hand, or point at a chip. The Spider-Man versions (classic, Miles Morales,
+// black suit, Noir) turn whoever is inside the window into that Spider-Man:
+// suit shader + emblem, face-tracked mask, comic-cover masthead, backdrop.
 
 import { drawHand, drawGlow, glowSprite, comicText, clamp, lerp, easeOutCubic, easeOutBack } from '../draw.js';
 import { Particles } from '../particles.js';
-import { FILTERS, filterColor, filterProgram, bgProgram, buildAtlases } from './portal-filters.js';
+import { FILTERS, SUITS, filterColor, filterProgram, bgProgram, lightTargets, buildAtlases } from './portal-filters.js';
 import { SpiderMask } from './spider-mask.js';
-import { cityTexture } from './spider-gl.js';
+import { backdropTexture, backdropProgram } from './spider-gl.js';
 
 const BY_ID = Object.fromEntries(FILTERS.map((f) => [f.id, f]));
 const HANDLE = '#2bff88';
 const OPEN_S = 0.3;      // open animation
 const CLOSE_S = 0.34;    // CRT-style collapse
 const WIPE_S = 0.3;      // filter change wipe
-const SPIDER = 'spider'; // the filter that needs face + segmentation
+const isSuit = (id) => !!SUITS[id];  // Spider-Man versions: need face + segmentation
 const SCRAMBLE = '#%&@$*!?<>/=01ｱｶｻﾀﾅ';
 const HINTS = {
   none: 'Raise <b>both hands</b> 🙌 to frame a window',
@@ -39,15 +40,20 @@ const S = {
   uiScale: 1, hintKey: null, hintWant: null, hintSince: 0, humOn: false, sfxOpenAt: -9, sfxCloseAt: -9,
   safeTop: 120, safeBot: 9999, W: 1, H: 1, lab: { l: 0 }, pagerIn: false,
   particles: new Particles(320), atlas: null, warm: [], warmAt: 0,
-  // SPIDER-MAN: own mask instance, person-mask fade, skyline parallax, and
-  // the suit geometry from the face (CSS px; fw = 0 until a face was seen).
-  smask: null, seg: 0, head: { x: 0, y: 0 }, cityRT: null, thwipAt: -9,
-  geo: { on: 0, x: 0, sy: 0, fw: 0, fh: 0, cx: 0, cy: 0, rot: 0 },
+  // Spider-Man versions: own mask instance, person-mask fade, backdrop
+  // parallax + targets per version, the suit geometry from the face (CSS px;
+  // fw = 0 until a face was seen), the window's suit scale, the masthead.
+  smask: null, seg: 0, head: { x: 0, y: 0 }, bd: {}, thwipAt: -9,
+  geo: { on: 0, x: 0, sy: 0, fw: 0, fh: 0, chx: 0, chy: 0, dx: 0, dy: 1, rot: 0, tilt: 0, nx: 0, ny: 0, hx: 0, hy: 0 },
+  suit: { cx: 0, cy: 0, fw: 1, fh: 1 },
   gloves: [0, 0, 0, 0, 0, 0],  // two hands: x, y, radius (CSS px; radius 0 = none)
+  // masthead: on, position along the top edge (0..1), size + alpha (eased), on the left?
+  mh: { on: false, u: 0.035, k: 1, a: 1, left: true, bw: 0, mv: 0 },
 };
 const NEEDS_SPIDER = Object.freeze({ face: true, segment: true });
 const NEEDS_NONE = Object.freeze({});
-const CITY_LOOK = { pal: 0, head: S.head };
+const CITY_LOOK = { head: S.head };
+const MASK_STYLE = Object.fromEntries(Object.keys(SUITS).map((id) => [id, { amt: 1, miles: 0, comic: 1, ...SUITS[id].mask }]));
 
 // Uniform objects reused every frame (no per-frame allocation storms).
 const U = {
@@ -56,6 +62,8 @@ const U = {
     u_quad: new Float32Array(8), u_center: [0, 0], u_span: 1, u_alpha: 1, u_reveal: 1, u_cell: 10, u_band: [0, 1e5],
     u_wipe: 9, u_wipeDir: 1, u_wipeInv: 0, u_flash: 0, u_tint: [1, 1, 1], u_fade: [0, 0], u_glyphs: null, u_ascii: null,
     u_city: null, u_seg: 0, u_body: [0, 0, 1, 1], u_bodyOn: 0, u_web: [0, 0, 1, 0], u_glove: [0, 0, 0, 0], u_gloveR: [0, 0],
+    u_face: [0, 0, 1, 0], u_head: [0, 0, 1, 1], u_emb: null, u_embXf: [0, 0, 1, 0], u_embSel: null, u_lumS: null, u_lumL: null,
+    u_pA: null, u_pB: null, u_pE: null, u_webC: null, u_look: null, u_fx: null,
   },
 };
 
@@ -184,7 +192,7 @@ function switchTo(mode, app, id, dir, how) {
   // The HUD already beeps for its own chips.
   if (how !== 'chip') app.sfx.play('select');
   if (how === 'swipe') app.sfx.play('whoosh');
-  if (id === SPIDER) { app.sfx.play('thwip'); S.thwipAt = t; }
+  if (isSuit(id)) { app.sfx.play('thwip'); S.thwipAt = t; }
   // Sparks along the edge the wipe starts from.
   const q = S.open > 0.05 ? S.dq : S.gq;
   const a = dir > 0 ? q[0] : q[3], b = dir > 0 ? q[1] : q[2];
@@ -400,8 +408,9 @@ function drawReadouts(ctx, q, A, t) {
   const sc = S.uiScale;
   const need = 80 * sc;  // REC readout length along the edge
   let o = q[0], e = q[1], side = q[3];
-  if (S.lab.l < need + 10) {
-    // The label covers the top-left corner: use the bottom-left one.
+  if (S.lab.l < need + 10 || (S.mh.on && S.mh.a > 0.1 && S.mh.left && suitLive())) {
+    // The label (or a Spider-Man masthead) covers the top-left corner: use
+    // the bottom-left one.
     const lb = Math.hypot(q[2].x - q[3].x, q[2].y - q[3].y);
     if (S.pagerIn && lb / 2 - 48 < need) o = null;
     else { o = q[3]; e = q[2]; side = q[0]; }
@@ -572,27 +581,37 @@ function drawSwipeFx(ctx, t) {
   ctx.restore();
 }
 
-// --- SPIDER-MAN filter ----------------------------------------------------------
+// --- Spider-Man versions ----------------------------------------------------------
 
-// The spider filter is on screen: current, or the old side of a wipe.
-const spiderLive = () => S.cur === SPIDER || (S.prev === SPIDER && S.wipe < 1);
+// A Spider-Man version is on screen: current, or the old side of a wipe.
+const suitLive = () => isSuit(S.cur) || (isSuit(S.prev) && S.wipe < 1);
+const LIVE = [];
+function liveSuits() {
+  LIVE.length = 0;
+  if (S.wipe < 1 && isSuit(S.prev)) LIVE.push(S.prev);
+  if (isSuit(S.cur)) LIVE.push(S.cur);
+  return LIVE;
+}
 
-// Suit geometry from the face: body centre line, shoulder height, and the
-// chest (web centre + emblem) one face-height below the chin.
+// Suit geometry from the face: body centre line, shoulder height, the chin
+// and the body's down direction (the chest sits along it), the nose bridge
+// (head web centre) and the head ellipse.
 function suitGeo(f, dt) {
   const G = S.geo;
   if (f) {
-    const top = f.lm[10], chin = f.lm[152];
+    const top = f.lm[10], chin = f.lm[152], nb = f.lm[168];
     let ux = top.x - chin.x, uy = top.y - chin.y;
     const fh = Math.hypot(ux, uy);
-    if (fh > 8 && Number.isFinite(fh)) {
+    if (fh > 8 && Number.isFinite(fh + nb.x + nb.y)) {
       ux /= fh; uy /= fh;
       // the body stays more upright than a tilted head
       const dx = -ux * 0.5, dy = 0.5 - uy * 0.5, dl = Math.hypot(dx, dy) || 1;
       G.x = f.center.x; G.fw = f.width > 4 ? f.width : fh * 0.8; G.fh = fh;
       G.sy = chin.y + fh * 0.4;
-      G.cx = chin.x + (dx / dl) * fh; G.cy = chin.y + (dy / dl) * fh;
-      G.rot = Math.atan2(ux, -uy) * 0.6;
+      G.chx = chin.x; G.chy = chin.y; G.dx = dx / dl; G.dy = dy / dl;
+      G.tilt = Math.atan2(ux, -uy); G.rot = G.tilt * 0.6;
+      G.nx = nb.x; G.ny = nb.y;
+      G.hx = (top.x + chin.x) / 2 + ux * fh * 0.12; G.hy = (top.y + chin.y) / 2 + uy * fh * 0.12;
       G.on = Math.min(1, G.on + dt * 4);
       return;
     }
@@ -600,34 +619,53 @@ function suitGeo(f, dt) {
   G.on = Math.max(0, G.on - dt * 1.5);
 }
 
-// Shader inputs for one window (device px). Without a face yet, the web
-// is centred in the window.
-function spiderUniforms(gfx, q) {
-  const u = U.f, d = gfx.dpr, G = S.geo;
+// Shader inputs every version shares, for one window (device px). The
+// geometry blends from the window centre to the face's by the face presence,
+// so without a face the web is centred in the window and the suit slides
+// into place when one is found.
+function suitGeoUniforms(gfx, q) {
+  const u = U.f, d = gfx.dpr, G = S.geo, W = S.suit, k = G.on;
   let cx = 0, cy = 0;
   for (let i = 0; i < 4; i++) { cx += q[i].x / 4; cy += q[i].y / 4; }
-  const seen = G.fw > 0;
-  const fw = seen ? G.fw : Math.max(1, Math.sqrt(Math.abs(area(q)))) * 0.3;
-  u.u_city = S.cityRT || gfx.videoTex;
+  const fw0 = Math.max(1, Math.sqrt(Math.abs(area(q)))) * 0.3;
+  W.fw = lerp(fw0, G.fw, k); W.fh = lerp(fw0 * 1.25, G.fh, k);
+  W.cx = cx; W.cy = cy;
   u.u_seg = S.seg;
-  u.u_body[0] = (seen ? G.x : cx) * d; u.u_body[1] = (seen ? G.sy : cy) * d;
-  u.u_body[2] = fw * d; u.u_body[3] = (seen ? G.fh : fw * 1.25) * d;
-  u.u_bodyOn = G.on;
-  u.u_web[0] = (seen ? G.cx : cx) * d; u.u_web[1] = (seen ? G.cy : cy) * d;
-  u.u_web[2] = fw * 0.36 * d; u.u_web[3] = seen ? G.rot : 0;
+  u.u_body[0] = lerp(cx, G.x, k) * d; u.u_body[1] = lerp(cy, G.sy, k) * d;
+  u.u_body[2] = W.fw * d; u.u_body[3] = W.fh * d;
+  u.u_bodyOn = k;
+  u.u_face[0] = lerp(cx, G.nx, k) * d; u.u_face[1] = lerp(cy, G.ny, k) * d;
+  u.u_face[2] = W.fh * 0.1 * d; u.u_face[3] = G.tilt * k;
+  u.u_head[0] = lerp(cx, G.hx, k) * d; u.u_head[1] = lerp(cy, G.hy, k) * d;
+  u.u_head[2] = W.fw * 0.7 * d; u.u_head[3] = W.fh * 0.72 * d;
   const g = S.gloves;
   u.u_glove[0] = g[0] * d; u.u_glove[1] = g[1] * d; u.u_glove[2] = g[3] * d; u.u_glove[3] = g[4] * d;
   u.u_gloveR[0] = g[2] * d; u.u_gloveR[1] = g[5] * d;
+  u.u_emb = S.atlas ? S.atlas.emb : null;
 }
 
-// Red gloves: a circle over each tracked hand (around the middle knuckle).
+// One version's own inputs (palettes, web, panels, emblem, backdrop), set
+// before each pass so both sides of a wipe between two versions are right.
+function suitUniforms(gfx, id) {
+  const s = SUITS[id], u = U.f, d = gfx.dpr, G = S.geo, W = S.suit, k = G.on;
+  // the chest (web centre + emblem) along the body below the chin
+  const x = lerp(W.cx, G.chx + G.dx * G.fh * s.embAt, k), y = lerp(W.cy, G.chy + G.dy * G.fh * s.embAt, k);
+  const rot = G.rot * k;
+  u.u_web[0] = x * d; u.u_web[1] = y * d; u.u_web[2] = W.fw * s.webSp * d; u.u_web[3] = rot;
+  u.u_embXf[0] = x * d; u.u_embXf[1] = y * d; u.u_embXf[2] = W.fw * s.embSize * d; u.u_embXf[3] = rot;
+  u.u_embSel = s.chan; u.u_pA = s.pA; u.u_pB = s.pB; u.u_pE = s.pE;
+  u.u_webC = s.web; u.u_look = s.look; u.u_fx = s.fx;
+  u.u_city = S.bd[id] || gfx.videoTex;
+}
+
+// Gloves: a circle over each tracked hand (around the middle knuckle).
 function gloves(hands) {
   const g = S.gloves;
   g[2] = g[5] = 0;
   for (let i = 0, k = 0; i < hands.length && k < 2; i++) {
     const h = hands[i], p = h.lm && h.lm[9];
     if (!p || !(h.size > 5) || !Number.isFinite(p.x + p.y)) continue;
-    g[k * 3] = p.x; g[k * 3 + 1] = p.y; g[k * 3 + 2] = h.size * 1.3;
+    g[k * 3] = p.x; g[k * 3 + 1] = p.y; g[k * 3 + 2] = h.size * 1.05;
     k++;
   }
 }
@@ -640,17 +678,17 @@ function qp(o, q, u, v) {
 }
 const CLIP = quad4();
 
-// Clip to the part of a window that shows the spider filter: inside the open
-// reveal and on the spider side of a wipe (same maths as MAIN in the shader).
-function clipSpider(ctx, q, reveal) {
+// Clip to the part of a window that shows filter `id`: inside the open
+// reveal and on its side of a wipe (same maths as MAIN in the shader).
+function clipFilter(ctx, q, reveal, id) {
   let v0 = 0, v1 = 1;
   if (S.wipe < 1 && S.prev) {
     const f = clamp(-0.08 + easeOutCubic(S.wipe) * 1.25);
     const newTop = S.wipeDir > 0;
-    if (S.cur === SPIDER) { if (newTop) v1 = f; else v0 = 1 - f; }
-    else if (S.prev === SPIDER) { if (newTop) v0 = f; else v1 = 1 - f; }
+    if (S.cur === id) { if (newTop) v1 = f; else v0 = 1 - f; }
+    else if (S.prev === id) { if (newTop) v0 = f; else v1 = 1 - f; }
     else return false;
-  } else if (S.cur !== SPIDER) return false;
+  } else if (S.cur !== id) return false;
   const h = Math.min(0.5, reveal * 0.625);
   v0 = Math.max(v0, 0.5 - h); v1 = Math.min(v1, 0.5 + h);
   if (h < 0.005 || v1 - v0 < 0.005) return false;
@@ -663,75 +701,130 @@ function clipSpider(ctx, q, reveal) {
   return true;
 }
 
-// Chest emblem in unit size (legs span about ±0.46), head up.
-let emblem = null;
-function emblemPaths() {
-  if (emblem) return emblem;
-  const body = new Path2D();
-  for (const [x, y, rx, ry] of [[0, -0.3, 0.06, 0.07], [0, -0.14, 0.09, 0.115], [0, 0.11, 0.105, 0.18]]) {
-    body.moveTo(x + rx, y);
-    body.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+// Comic-cover masthead per version (small top line over a big main line),
+// pre-rendered once per power-of-two width.
+const MH = Object.fromEntries(Object.keys(SUITS).map((id) => [id, {}]));  // id -> bucket -> canvas
+let mhAsked = -1;
+function masthead(id, wpx) {
+  const bucket = Math.min(1024, Math.max(128, 2 ** Math.ceil(Math.log2(Math.max(1, wpx)))));
+  if (MH[id][bucket]) return MH[id][bucket];
+  const T = SUITS[id].title;
+  const fonts = typeof document !== 'undefined' ? document.fonts : null;
+  if (!T.serif && fonts && !fonts.check('40px Bangers')) {
+    // wait (up to 3 s) for the comic font rather than caching a fallback
+    if (mhAsked < 0) { mhAsked = S.t; fonts.load('40px Bangers').catch(() => {}); }
+    if (S.t - mhAsked < 3) return null;
   }
-  // Legs taper: a thick upper segment, a thinner lower one.
-  const upper = new Path2D(), lower = new Path2D();
-  const L = [
-    [0.04, -0.2, 0.22, -0.38, 0.26, -0.62],
-    [0.07, -0.15, 0.36, -0.22, 0.46, -0.46],
-    [0.07, -0.08, 0.36, 0.02, 0.46, 0.3],
-    [0.05, 0.0, 0.22, 0.24, 0.26, 0.56],
-  ];
-  for (const [ax, ay, bx, by, cx, cy] of L) {
-    for (const k of [1, -1]) {
-      upper.moveTo(ax * k, ay); upper.lineTo(bx * k, by);
-      lower.moveTo(bx * k, by); lower.lineTo(cx * k, cy);
-    }
+  const face = T.serif ? '700 {S}px Georgia, "Times New Roman", serif' : '{S}px Bangers, Impact, "Arial Black", sans-serif';
+  const font = (px) => face.replace('{S}', px);
+  const c = document.createElement('canvas');
+  let g = c.getContext('2d');
+  g.font = font(100);
+  const mw = g.measureText(T.main).width;
+  g.font = font(40);
+  const VW = Math.max(mw, g.measureText(T.top).width) + 36, VH = 162, k = bucket / VW;
+  c.width = bucket; c.height = Math.ceil(VH * k);
+  g = c.getContext('2d');
+  g.scale(k, k);
+  g.lineJoin = 'round';
+  g.font = font(40);
+  g.lineWidth = 7; g.strokeStyle = '#000'; g.strokeText(T.top, 14, 46);
+  g.fillStyle = T.topFill; g.fillText(T.top, 14, 46);
+  g.font = font(100);
+  const x = 12, y = 140;
+  if (T.ghost) {
+    // Spider-Verse: the plates printed off-register
+    g.globalAlpha = 0.9;
+    g.fillStyle = '#00d8ff'; g.fillText(T.main, x - 6, y + 1);
+    g.fillStyle = '#ff2bd6'; g.fillText(T.main, x + 6, y + 4);
+    g.globalAlpha = 1;
+  } else {
+    // a 3D block extruded down-right
+    g.lineWidth = 6; g.strokeStyle = '#000'; g.fillStyle = T.shade;
+    for (let i = 7; i >= 1; i--) { g.strokeText(T.main, x + i * 1.1, y + i * 1.3); g.fillText(T.main, x + i * 1.1, y + i * 1.3); }
   }
-  emblem = { body, upper, lower };
-  return emblem;
+  g.lineWidth = 12; g.strokeStyle = '#000'; g.strokeText(T.main, x, y);
+  g.fillStyle = T.fill; g.fillText(T.main, x, y);
+  MH[id][bucket] = c;
+  return c;
 }
 
-function drawEmblem(ctx, G, A) {
-  const { body, upper, lower } = emblemPaths();
+// Where the masthead goes this frame: along the top edge, in the corner
+// with more room beside the face, shrunk to fit that room (hidden when
+// there is too little).
+function placeMasthead(q, dt) {
+  const M = S.mh, tl = q[0], tr = q[1], bl = q[3];
+  const ex = tr.x - tl.x, ey = tr.y - tl.y, top = Math.hypot(ex, ey);
+  M.on = top > 170 && Math.hypot(bl.x - tl.x, bl.y - tl.y) > 120;
+  if (!M.on) return;
+  const ux = ex / top, uy = ey / top, vx = -uy, vy = ux;
+  const bw = Math.min(0.46 * top, 330 * S.uiScale), m = 0.035 * top, mv = 0.04 * top;
+  let fL = 1, fR = 1;  // how much of the masthead fits on each side
+  const G = S.geo;
+  if (G.on > 0.3 && G.fw > 0) {
+    // the face (with the hood's dome and jaw) as a box in the window frame
+    const x0 = G.x - 0.62 * G.fw - tl.x, x1 = G.x + 0.62 * G.fw - tl.x, y0 = G.chy - 1.35 * G.fh - tl.y, y1 = G.chy + 0.1 * G.fh - tl.y;
+    const fu0 = Math.min(ux * x0, ux * x1) + Math.min(uy * y0, uy * y1), fu1 = Math.max(ux * x0, ux * x1) + Math.max(uy * y0, uy * y1);
+    const fv0 = Math.min(vx * x0, vx * x1) + Math.min(vy * y0, vy * y1), fv1 = Math.max(vx * x0, vx * x1) + Math.max(vy * y0, vy * y1);
+    if (fv0 < mv + bw * 0.3 && fv1 > mv) {
+      fL = clamp((fu0 - m * 1.5) / bw); fR = clamp((top - m * 1.5 - fu1) / bw);
+    }
+  }
+  const left = fL >= fR - 0.05, f = left ? fL : fR;
+  const k = Math.min(1, dt * 6);
+  M.k += (clamp(f, 0.55, 1) - M.k) * k;
+  M.a += (smooth(0.45, 0.6, f) - M.a) * k;
+  const u = left ? m / top : 1 - (m + bw * M.k) / top;
+  M.u += (u - M.u) * k;
+  M.left = M.u < 0.3;
+  M.bw = bw; M.mv = mv;
+}
+
+function drawMasthead(ctx, q, id, A) {
+  const M = S.mh;
+  if (!M.on || A * M.a < 0.02) return;
+  const w = M.bw * M.k;
+  const spr = masthead(id, w * (globalThis.devicePixelRatio || 1));
+  if (!spr) return;
+  const tl = q[0], tr = q[1], top = Math.hypot(tr.x - tl.x, tr.y - tl.y) || 1;
+  const ux = (tr.x - tl.x) / top, uy = (tr.y - tl.y) / top;
   ctx.save();
-  ctx.translate(G.cx, G.cy);
-  ctx.rotate(G.rot);
-  const s = G.fw * 0.75;
-  ctx.scale(s, s);
-  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-  ctx.globalAlpha = A;
-  ctx.fillStyle = ctx.strokeStyle = '#0b0206';
-  ctx.lineWidth = 0.07; ctx.stroke(upper);
-  ctx.lineWidth = 0.048; ctx.stroke(lower);
-  ctx.fill(body);
+  ctx.globalAlpha = A * M.a;
+  ctx.translate(tl.x + ux * M.u * top - uy * M.mv, tl.y + uy * M.u * top + ux * M.mv);
+  ctx.rotate(Math.atan2(uy, ux));
+  ctx.drawImage(spr, 0, 0, w, (w * spr.height) / spr.width);
   ctx.restore();
 }
 
-// Mask + emblem in every window that shows the spider filter, clipped to it
-// and, like the shader, dimmed where the window reaches under the HUD bars.
-// The phantom goes first: its hologram fade must not touch the real window.
+// Mask + masthead in every window that shows a Spider-Man version, clipped
+// to it and, like the shader, dimmed where the window reaches under the HUD
+// bars. The phantom goes first: its hologram fade must not touch the real
+// window.
 const BANDS = [[0, 0, 1], [-1e4, 0, 0.3], [0, 1e5, 0.3]];  // y0, y1, alpha
-const MASK_STYLE = { amt: 1, miles: 0, comic: 1 };
-function drawSpider(ctx, frame) {
-  if (!S.smask || !spiderLive()) return;
+function drawSuits(ctx, frame) {
+  if (!S.smask || !suitLive()) return;
   BANDS[0][0] = BANDS[1][1] = S.safeTop - 9;
   BANDS[0][1] = BANDS[2][0] = S.safeBot + 9;
-  if (S.ghostA > 0.01) spiderIn(ctx, frame, S.gq, 1, S.ghostA * (0.8 + 0.2 * S.preview), true);
-  if (S.open > 0.001) spiderIn(ctx, frame, S.dq, S.present ? easeOutCubic(S.open) : 1, S.present ? 1 : smooth(0.35, 0.8, S.open), false);
+  for (const id of liveSuits()) {
+    if (S.ghostA > 0.01) suitIn(ctx, frame, S.gq, 1, S.ghostA * (0.8 + 0.2 * S.preview), true, id);
+    if (S.open > 0.001) suitIn(ctx, frame, S.dq, S.present ? easeOutCubic(S.open) : 1, S.present ? 1 : smooth(0.35, 0.8, S.open), false, id);
+  }
 }
 
-function spiderIn(ctx, frame, q, reveal, A, ghost) {
+function suitIn(ctx, frame, q, reveal, A, ghost, id) {
   if (A < 0.01) return;
   const y0 = Math.min(q[0].y, q[1].y, q[2].y, q[3].y), y1 = Math.max(q[0].y, q[1].y, q[2].y, q[3].y);
+  const st = MASK_STYLE[id];
   for (const b of BANDS) {
     if (y1 <= b[0] || y0 >= b[1] || b[1] <= b[0]) continue;
     ctx.save();
     ctx.beginPath();
     ctx.rect(-1e4, b[0], 2e4 + S.W, b[1] - b[0]);
     ctx.clip();
-    if (clipSpider(ctx, q, reveal)) {
-      if (S.geo.on > 0.01 && S.geo.fw > 0) drawEmblem(ctx, S.geo, A * b[2] * S.geo.on);
-      MASK_STYLE.amt = A * b[2];
-      S.smask.draw(ctx, frame, MASK_STYLE);
+    if (clipFilter(ctx, q, reveal, id)) {
+      drawMasthead(ctx, q, id, A * b[2]);
+      st.amt = A * b[2];
+      S.smask.draw(ctx, frame, st);
       if (ghost) holoFade(ctx, q);
     }
     ctx.restore();
@@ -757,15 +850,18 @@ function holoFade(ctx, q) {
   ctx.fillRect(-1e4, -1e4, 3e4, 3e4);
 }
 
-// Comic "THWIP!" popping in the window's top-right corner on the switch.
+// Comic "THWIP!" popping in a top corner of the window (the one the
+// masthead leaves free) on the switch, in the version's colours.
 function drawThwip(ctx, t) {
   const age = t - S.thwipAt;
-  if (age > 0.8 || S.cur !== SPIDER || (S.open < 0.05 && S.ghostA < 0.05)) return;
-  const q = S.open > 0.05 ? S.dq : S.gq, sc = S.uiScale;
-  const x = lerp(q[1].x, q[3].x, 0.16), y = Math.max(lerp(q[1].y, q[3].y, 0.14), S.safeTop + 22 * sc);
+  if (age > 0.8 || !isSuit(S.cur) || (S.open < 0.05 && S.ghostA < 0.05)) return;
+  const q = S.open > 0.05 ? S.dq : S.gq, sc = S.uiScale, pop = SUITS[S.cur].pop;
+  const right = !S.mh.on || S.mh.left;
+  const a = right ? q[1] : q[0], b = right ? q[3] : q[2];
+  const x = lerp(a.x, b.x, 0.16), y = Math.max(lerp(a.y, b.y, 0.14), S.safeTop + 22 * sc);
   ctx.save();
   comicText(ctx, 'THWIP!', x, y, {
-    size: 30 * sc, rot: -0.14, fill: '#ffffff', shadow: '#e62429',
+    size: 30 * sc, rot: right ? -0.14 : 0.14, fill: pop[0], shadow: pop[1],
     scale: easeOutBack(clamp(age / 0.14)), alpha: 1 - smooth(0.55, 0.8, age),
   });
   ctx.restore();
@@ -779,13 +875,13 @@ const portrait = () => typeof innerWidth !== 'undefined' && innerHeight > innerW
 // thumb tip below. side: 'left' | 'right'. gap widens/narrows the window.
 const frameX = () => (portrait() ? -0.1 : 0.16);
 const frameSize = () => (portrait() ? 0.3 : 0.27);
-function frameHand(t, side, gap = 0, pinch = false, breathe = 1) {
+function frameHand(t, side, gap = 0, pinch = false, breathe = 1, dy = 0) {
   const p = portrait(), k = side === 'left' ? 1 : -1;
   const br = Math.sin(t * 0.9) * (p ? 0.02 : 0.025) * breathe, sw = Math.sin(t * 0.7) * 0.015 * k * breathe;
   const x = frameX() + br - gap;
   return {
     id: side === 'left' ? 'L' : 'R', hand: side, pose: pinch ? 'pinch' : 'open',
-    x: side === 'left' ? x : 1 - x, y: (p ? 0.65 : 0.76) + sw, size: frameSize(),
+    x: side === 'left' ? x : 1 - x, y: (p ? 0.65 : 0.76) + sw + dy, size: frameSize(),
     rot: k * ((p ? 0.45 : 0.48) + Math.sin(t * (side === 'left' ? 0.5 : 0.6)) * 0.05 * breathe),
   };
 }
@@ -817,17 +913,19 @@ export default {
   // Drawn in draw2D instead, so the spider mask can sit under the skeletons.
   skeleton: false,
 
-  // Face + person segmentation only for the SPIDER-MAN filter, and only
+  // Face + person segmentation only for the Spider-Man versions, and only
   // while hands are up or the window is still showing, so idle frames give
   // all their time to hand tracking.
   needs(app) {
-    if (this.option !== SPIDER && !spiderLive()) return NEEDS_NONE;
+    if (!isSuit(this.option) && !suitLive()) return NEEDS_NONE;
     const busy = (app?.frame?.hands?.length || 0) > 0 || S.open > 0.001 || S.ghostA > 0.001 || (S.smask?.vis || 0) > 0;
     return busy ? NEEDS_SPIDER : NEEDS_NONE;
   },
 
   simScenarios: {
     frame: (t) => frameHands(t),
+    // The window held lower, over the chest (suit panels and emblem).
+    low: (t) => [frameHand(t, 'left', 0.02, false, 1, 0.17), frameHand(t, 'right', 0.02, false, 1, 0.17)],
     // Right hand pinches every 2.2 s: next filter each time.
     cycle: (t) => { const ph = t % 2.2; return frameHands(t, ph > 1.5 && ph < 1.95); },
     one: (t) => oneHand(t, Math.sin(t * 0.8) * 0.03),
@@ -864,7 +962,7 @@ export default {
       switchAt: -9, lastSwitch: -9, closedAt: -9, sfxOpenAt: -9, sfxCloseAt: -9,
     });
     S.memo.clear(); S.uiUntil.clear(); S.particles.clear();
-    S.warm = FILTERS.map((f) => f.id).filter((id) => id !== S.cur);
+    S.warm = FILTERS.map((f) => f.id).filter((id) => id !== S.cur).concat(['bd:wall', 'bd:verse', 'bd:night']);
     S.seg = 0; S.geo.on = 0; S.geo.fw = 0;
     S.smask?.reset();
   },
@@ -981,8 +1079,9 @@ export default {
     if (S.wipe < 1) S.wipe = Math.min(1, S.wipe + dt / WIPE_S);
     S.flash = Math.max(0, S.flash - dt * 3.5);
 
-    // SPIDER-MAN: suit geometry, mask fade, person-mask fade, parallax.
-    const spidey = spiderLive();
+    // Spider-Man versions: suit geometry, mask fade, person-mask fade,
+    // parallax, masthead placement.
+    const spidey = suitLive();
     const face = spidey && frame.face && frame.face.lm && frame.face.lm.length >= 468 ? frame.face : null;
     S.smask?.update(face, dt);
     suitGeo(face, dt);
@@ -993,6 +1092,7 @@ export default {
       S.head.x += (clamp((face.center.x / W - 0.5) * 2, -1, 1) - S.head.x) * k;
       S.head.y += (clamp((face.center.y / H - 0.45) * 2, -1, 1) - S.head.y) * k;
     }
+    if (spidey) placeMasthead(S.open > 0.05 ? S.dq : S.gq, dt);
     S.particles.update(dt);
 
     // Hint follows the state once it has settled (no flapping on tracking blips).
@@ -1009,13 +1109,21 @@ export default {
 
   renderGL(gfx, frame) {
     // Compile the other filters a few at a time so switching never hitches.
-    if (S.warm.length && frame.t - S.warmAt > 0.25) { S.warmAt = frame.t; filterProgram(gfx, S.warm.shift()); }
+    if (S.warm.length && frame.t - S.warmAt > 0.25) {
+      S.warmAt = frame.t;
+      const id = S.warm.shift();
+      if (!id.startsWith('bd:')) filterProgram(gfx, id);
+      else try { backdropProgram(gfx, id.slice(3)); } catch (e) { /* backdropTexture falls back */ }
+    }
 
     const showPortal = S.open > 0.001;
     const showGhost = S.ghostA > 0.01;
     if (!showPortal && !showGhost) { gfx.drawVideo(); return; }
-    // The skyline target is drawn before any pass that lands on screen.
-    if (spiderLive()) S.cityRT = cityTexture(gfx, CITY_LOOK);
+    // Backdrop and light targets are drawn before any pass that lands on screen.
+    if (suitLive()) {
+      for (const id of liveSuits()) S.bd[id] = backdropTexture(gfx, SUITS[id].bg, CITY_LOOK);
+      if (S.seg > 0.002) { const L = lightTargets(gfx); U.f.u_lumS = L.a; U.f.u_lumL = L.b; }
+    }
     const t = frame.t, d = gfx.dpr;
     const col = filterColor(BY_ID[S.cur], t);
     const bq = showPortal ? S.dq : S.gq;
@@ -1038,7 +1146,7 @@ export default {
 
   draw2D(ctx, frame) {
     const t = frame.t;
-    drawSpider(ctx, frame);
+    drawSuits(ctx, frame);
     for (const h of frame.hands) drawHand(ctx, h);
     if (S.ghostA > 0.01) drawPhantom(ctx, t);
     if (S.open > 0.001) drawPortal(ctx, t);
@@ -1065,13 +1173,15 @@ function drawFilter(gfx, q, alpha, reveal, flash, col) {
   u.u_band[0] = S.safeTop * d; u.u_band[1] = S.safeBot * d;
   u.u_wipeDir = S.wipeDir;
   if (S.atlas) { u.u_glyphs = S.atlas.glyphs; u.u_ascii = S.atlas.ascii; }
-  if (spiderLive()) spiderUniforms(gfx, q);
+  if (suitLive()) suitGeoUniforms(gfx, q);
   const wiping = S.wipe < 1 && S.prev && BY_ID[S.prev];
   const front = -0.08 + easeOutCubic(S.wipe) * 1.25;
   if (wiping) {
+    if (isSuit(S.prev)) suitUniforms(gfx, S.prev);
     u.u_wipe = front; u.u_wipeInv = 1;
     gfx.quad(filterProgram(gfx, S.prev), q, u, { blend: 'alpha' });
   }
+  if (isSuit(S.cur)) suitUniforms(gfx, S.cur);
   u.u_wipe = wiping ? front : 9; u.u_wipeInv = 0;
   gfx.quad(filterProgram(gfx, S.cur), q, u, { blend: 'alpha' });
 }

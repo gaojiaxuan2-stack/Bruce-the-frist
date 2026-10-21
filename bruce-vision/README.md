@@ -37,10 +37,21 @@ Works in Chrome, Edge and Firefox on computers, Safari on iPhone/iPad
 | 🤏 Pinch with either hand | Next filter |
 | 👋 One hand, quick swipe left / right | Next / previous filter |
 
-Filters: Dot Matrix (the blue halftone from the clip), Spider-Man (whoever
-is inside the window becomes Spider-Man: suit, mask and a comic New York
-behind them), Spider-Verse, Thermal, Matrix, ASCII, Neon Edges, X-Ray,
-8-Bit, Glitch, Kaleido.
+Filters: Dot Matrix (the blue halftone from the clip), then four
+Spider-Man versions: whoever is inside the window becomes that Spider-Man
+(suit, emblem, mask, a comic-cover title and a world behind them):
+
+- **Spider-Man**: the classic comic-cover suit, red with a fine black web
+  and navy panels, in front of a building wall hung with big webs
+- **Miles Morales**: black suit with red webs, the red spider and gloves,
+  in a glitchy Spider-Verse night city
+- **Black Suit**: glossy black with the huge white spider, on a rainy grey
+  night
+- **Spider-Noir**: black-and-white film with goggles, rain, grain and
+  light through the blinds
+
+Then Spider-Verse, Thermal, Matrix, ASCII, Neon Edges, X-Ray, 8-Bit,
+Glitch, Kaleido.
 
 **SPIDER-MAN** 🕷️
 

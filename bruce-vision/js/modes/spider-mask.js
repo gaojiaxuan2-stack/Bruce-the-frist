@@ -1,6 +1,9 @@
 // spider-mask.js — a procedural Spider-Man mask drawn over the 478 FaceMesh
 // landmarks: shaded red (or Miles-black) hood, curved web lines radiating
 // from the nose bridge, and big white lenses that squint with the user.
+// style.kind 'symbiote' (glossy black, big angular lenses), 'noir' (black
+// hood, goggles on a strap) and 'miles' (the Miles hood with a fine dark-red
+// web instead of the glowing one) are the PORTAL window's versions.
 
 import { HAND_CONNECTIONS } from '../gestures.js';
 import { drawGlow, glowSprite, clamp } from '../draw.js';
@@ -22,13 +25,24 @@ const LENS = [
   [-0.34, 0.21, -0.43, 0.14, -0.47, 0.07],
 ];
 const LENS_PIVOT = 0.04;
+// Black suit: bigger, sharper lenses sweeping up to a point.
+const LENS_SYM = [
+  [-0.52, 0.12],
+  [-0.38, -0.2, 0.0, -0.5, 0.56, -0.58],
+  [0.8, -0.62, 0.78, -0.14, 0.62, 0.12],
+  [0.44, 0.4, -0.02, 0.42, -0.28, 0.31],
+  [-0.4, 0.26, -0.48, 0.19, -0.52, 0.12],
+];
 
 // Peter (red) and Miles (black) palettes; lerped by `miles` 0..1.
 const PAL = {
   hood: [[255, 76, 76], [212, 22, 34], [140, 8, 22], [62, 0, 10]],
   hoodM: [[70, 70, 82], [30, 30, 38], [12, 12, 16], [0, 0, 0]],
   line: [34, 0, 6], lineM: [255, 32, 52],
+  hoodS: [[96, 106, 132], [26, 28, 38], [8, 8, 12], [0, 0, 0]],   // black suit, glossy
+  hoodN: [[88, 88, 88], [38, 38, 38], [15, 15, 15], [2, 2, 2]],   // noir
 };
+const rgb = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
 const mixc = (a, b, t, alpha = 1) => `rgba(${Math.round(a[0] + (b[0] - a[0]) * t)},${Math.round(a[1] + (b[1] - a[1]) * t)},${Math.round(a[2] + (b[2] - a[2]) * t)},${alpha})`;
 
 let halftone = null;
@@ -97,7 +111,8 @@ export class SpiderMask {
     }
   }
 
-  // style: { amt 0..1, miles 0..1, comic 0..1 }
+  // style: { amt 0..1, miles 0..1, comic 0..1, kind: '' | 'miles' | 'symbiote'
+  //          | 'noir', ink: lens outline weight (1 = default) }
   draw(ctx, frame, style) {
     const f = this.face;
     const amt = this.vis * style.amt;
@@ -138,6 +153,7 @@ export class SpiderMask {
       ctx.closePath();
     };
     const miles = style.miles, comic = style.comic;
+    const kind = style.kind || '', alt = kind === 'symbiote' ? PAL.hoodS : kind === 'noir' ? PAL.hoodN : null;
     const lw = Math.max(0.8, fw * 0.0068);
 
     ctx.save();
@@ -158,7 +174,7 @@ export class SpiderMask {
     const gx = C.x + ux * fh * 0.12 + rx * yaw * fw * 0.12, gy = C.y + uy * fh * 0.12 + ry * yaw * fw * 0.12;
     const grad = ctx.createRadialGradient(gx, gy, fw * 0.04, gx, gy, Math.max(fw, fh) * 0.72);
     const stops = [0, 0.42, 0.82, 1];
-    for (let i = 0; i < 4; i++) grad.addColorStop(stops[i], mixc(PAL.hood[i], PAL.hoodM[i], miles));
+    for (let i = 0; i < 4; i++) grad.addColorStop(stops[i], alt ? rgb(alt[i]) : mixc(PAL.hood[i], PAL.hoodM[i], miles));
     ovalPath();
     ctx.fillStyle = grad;
     ctx.fill();
@@ -181,10 +197,18 @@ export class SpiderMask {
     ctx.translate(C.x + ux * fh * 0.3 + rx * yaw * fw * 0.08, C.y + uy * fh * 0.3 + ry * yaw * fw * 0.08);
     ctx.rotate(Math.atan2(ry, rx));
     ctx.scale(fw * 0.32, fh * 0.13);
-    ctx.globalAlpha = amt * (0.22 - miles * 0.1);
-    ctx.drawImage(glowSprite('#ffd0d0'), -1, -1, 2, 2);
+    ctx.globalAlpha = amt * (alt ? (kind === 'noir' ? 0.14 : 0.3) : 0.22 - miles * 0.1);
+    ctx.drawImage(glowSprite(alt ? '#d4e0ff' : '#ffd0d0'), -1, -1, 2, 2);
+    if (kind === 'symbiote') {
+      // wet-look gloss: a sharp streak on the forehead and one on the cheek
+      ctx.globalAlpha = amt * 0.45;
+      ctx.drawImage(glowSprite('#ffffff'), -0.5, -0.45, 1, 0.9);
+      ctx.translate(0.55 - yaw * 0.3, 3.4);
+      ctx.drawImage(glowSprite('#cfdcff'), -0.35, -1.2, 0.7, 2.4);
+    }
     ctx.restore();
     ctx.globalCompositeOperation = 'source-over';
+    if (kind === 'noir') this._strap(ctx, lm, B, amt, C, ux, uy, fh, lw);
 
     // web lines: radials from the nose bridge + rings bowed toward it
     const webPath = () => {
@@ -204,17 +228,17 @@ export class SpiderMask {
         }
       }
     };
-    if (miles > 0.01) {
+    if (alt) { /* no web on the black suit / noir hood */ } else if (miles > 0.01) {
       webPath();
       ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = amt * miles * 0.35;
+      ctx.globalAlpha = amt * miles * (kind === 'miles' ? 0.1 : 0.35);
       ctx.strokeStyle = '#ff1030';
       ctx.lineWidth = lw * 3.5;
       ctx.stroke();
       ctx.globalCompositeOperation = 'source-over';
     }
     // raised-thread highlight (paths bake the transform, so rebuild it offset)
-    if (miles < 0.99) {
+    if (!alt && miles < 0.99) {
       ctx.save();
       ctx.translate(-lw * 0.5, -lw * 0.6);
       webPath();
@@ -224,13 +248,15 @@ export class SpiderMask {
       ctx.lineWidth = lw * 0.8;
       ctx.stroke();
     }
-    webPath();
-    ctx.globalAlpha = amt * 0.92;
-    ctx.strokeStyle = mixc(PAL.line, PAL.lineM, miles);
-    ctx.lineWidth = lw;
-    ctx.stroke();
+    if (!alt) {
+      webPath();
+      ctx.globalAlpha = amt * 0.92;
+      ctx.strokeStyle = kind === 'miles' ? '#a80d24' : mixc(PAL.line, PAL.lineM, miles);
+      ctx.lineWidth = kind === 'miles' ? lw * 0.6 : lw;
+      ctx.stroke();
+    }
     // Miles: the lenses glow red into the black hood (kept inside the mask)
-    if (miles > 0.01) this._lenses(ctx, lm, amt * miles, 1, true);
+    if (miles > 0.01) this._lenses(ctx, lm, amt * miles * (kind === 'miles' ? 0.5 : 1), 1, true);
     ctx.restore();   // unclip
 
     // ink outline (comic looks) / dark seam (plain)
@@ -240,7 +266,7 @@ export class SpiderMask {
     ctx.lineWidth = lw * (1.4 + comic * 1.4);
     ctx.stroke();
 
-    this._lenses(ctx, lm, amt, miles);
+    this._lenses(ctx, lm, amt, miles, false, kind, style.ink || 1);
 
     // Let hands in front of the face show through the mask.
     ctx.globalAlpha = 1;
@@ -262,8 +288,48 @@ export class SpiderMask {
     ctx.restore();
   }
 
+  // Noir: a leather strap across the eyes and a stitched seam up the
+  // middle of the hood (inside the hood clip).
+  _strap(ctx, lm, B, amt, C, ux, uy, fh, lw) {
+    const a = { x: (lm[33].x + lm[133].x) / 2, y: (lm[33].y + lm[133].y) / 2 };
+    const b = { x: (lm[263].x + lm[362].x) / 2, y: (lm[263].y + lm[362].y) / 2 };
+    const ex = b.x - a.x, ey = b.y - a.y, el = Math.hypot(ex, ey);
+    if (!(el > 4)) return;
+    const k = 3 / el;
+    const line = (o) => {
+      ctx.beginPath();
+      ctx.moveTo(a.x - ex * k + ux * o, a.y - ey * k + uy * o);
+      ctx.lineTo(b.x + ex * k + ux * o, b.y + ey * k + uy * o);
+    };
+    ctx.save();
+    ctx.lineCap = 'butt';
+    ctx.globalAlpha = amt;
+    line(0);
+    ctx.strokeStyle = '#0b0b0b'; ctx.lineWidth = el * 0.5; ctx.stroke();
+    ctx.strokeStyle = 'rgba(160,160,160,0.4)'; ctx.lineWidth = lw * 1.1;
+    ctx.setLineDash([el * 0.03, el * 0.07]);
+    line(el * 0.19); ctx.stroke();
+    line(-el * 0.19); ctx.stroke();
+    ctx.restore();
+    // centre seam with stitches, from the crown to the chin
+    const top = B[0], chin = lm[152];
+    ctx.save();
+    ctx.globalAlpha = amt * 0.75;
+    ctx.strokeStyle = '#4a4a4a';
+    ctx.lineWidth = lw * 1.3;
+    ctx.beginPath();
+    ctx.moveTo(top.x, top.y);
+    ctx.quadraticCurveTo(C.x + ux * fh * 0.2, C.y + uy * fh * 0.2, chin.x, chin.y);
+    ctx.stroke();
+    ctx.lineWidth = lw * 4;
+    ctx.setLineDash([lw * 1.1, lw * 3.2]);
+    ctx.globalAlpha = amt * 0.5;
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // glowOnly: just the soft red Miles glow behind each lens.
-  _lenses(ctx, lm, amt, miles, glowOnly = false) {
+  _lenses(ctx, lm, amt, miles, glowOnly = false, kind = '', ink = 1) {
     const ca = { x: (lm[33].x + lm[133].x) / 2, y: (lm[33].y + lm[133].y) / 2 };
     const cb = { x: (lm[263].x + lm[362].x) / 2, y: (lm[263].y + lm[362].y) / 2 };
     const left = ca.x < cb.x ? ca : cb, right = ca.x < cb.x ? cb : ca;
@@ -302,10 +368,27 @@ export class SpiderMask {
         ctx.restore();
         continue;
       }
+      if (kind === 'noir') { this._goggle(ctx, amt, unit); ctx.restore(); continue; }
+      if (kind === 'symbiote') {
+        // big white lenses, a thin dark rim, a glossy streak
+        this._lensPath(ctx, sq, LENS_SYM);
+        ctx.globalAlpha = amt;
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = Math.max(2, unit * 0.08) / unit;
+        ctx.stroke();
+        const gs = ctx.createLinearGradient(-0.3, -0.5, 0.4, 0.4);
+        gs.addColorStop(0, '#ffffff');
+        gs.addColorStop(0.6, '#eef2fa');
+        gs.addColorStop(1, '#b5c0d6');
+        ctx.fillStyle = gs;
+        ctx.fill();
+        ctx.restore();
+        continue;
+      }
       this._lensPath(ctx, sq);
       ctx.globalAlpha = amt;
       ctx.strokeStyle = '#050505';
-      ctx.lineWidth = Math.max(3, unit * 0.13) / unit;
+      ctx.lineWidth = (Math.max(3, unit * 0.13) * ink) / unit;
       ctx.stroke();
       const g = ctx.createRadialGradient(0.12, 0.08, 0.05, 0.05, 0, 0.62);
       g.addColorStop(0, '#ffffff');
@@ -317,14 +400,42 @@ export class SpiderMask {
     }
   }
 
-  _lensPath(ctx, sq) {
+  _lensPath(ctx, sq, shape = LENS) {
     const y = (v) => LENS_PIVOT + (v - LENS_PIVOT) * sq;
     ctx.beginPath();
-    ctx.moveTo(LENS[0][0], y(LENS[0][1]));
-    for (let k = 1; k < LENS.length; k++) {
-      const c = LENS[k];
+    ctx.moveTo(shape[0][0], y(shape[0][1]));
+    for (let k = 1; k < shape.length; k++) {
+      const c = shape[k];
       ctx.bezierCurveTo(c[0], y(c[1]), c[2], y(c[3]), c[4], y(c[5]));
     }
     ctx.closePath();
+  }
+
+  // Noir goggle in eye units: smoked glass in a metal rim, with a glint.
+  _goggle(ctx, amt, unit) {
+    ctx.globalAlpha = amt;
+    ctx.beginPath();
+    ctx.arc(0.04, 0.0, 0.44, 0, Math.PI * 2);
+    const gl = ctx.createRadialGradient(-0.1, -0.14, 0.02, 0.04, 0, 0.46);
+    gl.addColorStop(0, '#3c4248');
+    gl.addColorStop(1, '#050607');
+    ctx.fillStyle = gl;
+    ctx.fill();
+    const rim = ctx.createLinearGradient(-0.4, -0.4, 0.4, 0.4);
+    rim.addColorStop(0, '#e6e6e6');
+    rim.addColorStop(0.5, '#6a6a6a');
+    rim.addColorStop(1, '#2a2a2a');
+    ctx.strokeStyle = rim;
+    ctx.lineWidth = 0.13;
+    ctx.stroke();
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = Math.max(1.5, unit * 0.03) / unit;
+    ctx.beginPath(); ctx.arc(0.04, 0.0, 0.51, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = 0.05;
+    ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.arc(0.04, 0.0, 0.31, Math.PI * 1.08, Math.PI * 1.42); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.beginPath(); ctx.arc(0.18, 0.16, 0.035, 0, Math.PI * 2); ctx.fill();
   }
 }

@@ -18,8 +18,8 @@ float dots(vec2 px, float cell, float cover) {
 }
 `;
 
-// The procedural skyline, rendered into a cached target.
-const CITY_FRAG = COMMON + `
+// The procedural skyline (city(px)), rendered into a cached target.
+const CITY_LIB = COMMON + `
 uniform vec2 u_head;     // head offset from screen centre (-1..1), for parallax
 
 float segD(vec2 p, vec2 a, vec2 b) {
@@ -165,7 +165,8 @@ vec3 city(vec2 px) {
     mix(vec3(1.0, 0.72, 0.30), vec3(0.25, 0.95, 1.0), u_pal), 0.5, -hx * 0.1, 1.0);
   return col;
 }
-
+`;
+const CITY_FRAG = CITY_LIB + `
 void main() { outColor = vec4(city(v_px), 1.0); }
 `;
 
@@ -269,3 +270,243 @@ export function renderComic(gfx, look) {
     u_city: cache.rt || gfx.videoTex,
   });
 }
+
+// --- PORTAL backdrops: one per Spider-Man window version --------------------
+
+// Classic covers: a comic building facade (concrete bays, tall warm-lit
+// windows, golden light from the upper right, lilac shade lower left,
+// halftone shadows, ink lines), seen from a little below, with the big web
+// strands (pre-rendered canvas) strung across it.
+const WALL_FRAG = COMMON + `
+uniform sampler2D u_strands;  // web strands, straight alpha, row 0 = top
+uniform vec2 u_head;
+
+vec3 facade(vec2 px) {
+  vec2 R = u_res;
+  float S = min(R.x, R.y);
+  float lw = 1.4 * u_dpr;
+  float k = 1.0 + 0.2 * (1.0 - px.y / R.y);
+  vec2 p = vec2((px.x - R.x * 0.5) * k + R.x * 0.5 + S * 0.07, px.y + S * 0.05) - u_head * S * 0.012;
+  vec2 bay = vec2(0.25, 0.21) * S;
+  vec2 ci = floor(p / bay);
+  vec2 f = fract(p / bay);
+  vec2 fp = f * bay;
+  vec2 lp = (px - vec2(R.x, -R.y * 0.15)) / max(R.x, R.y);
+  float L = smoothstep(1.35, 0.2, length(lp * vec2(1.0, 1.2)));
+  vec3 wall = mix(vec3(0.33, 0.31, 0.4), vec3(0.86, 0.69, 0.45), L);
+  wall *= (0.9 + 0.1 * noise(p / (45.0 * u_dpr))) * (0.94 + 0.09 * noise(p / (2.5 * u_dpr)));
+  // pilaster on the left of each bay (lit right face), a ledge under the windows
+  float pil = 1.0 - step(0.13, f.x);
+  vec3 c = mix(wall, wall * mix(0.68, 1.22, smoothstep(0.02, 0.12, f.x)), pil);
+  c = mix(c, wall * 1.2, step(0.86, f.y) * step(f.y, 0.92) * (1.0 - pil));
+  c = mix(c, wall * 0.6, step(0.92, f.y) * step(f.y, 0.97) * (1.0 - pil));
+  // window: warm lit rooms or dark glass, reflection streaks, mullions
+  vec2 w0 = vec2(0.22, 0.14), w1 = vec2(0.9, 0.8);
+  vec2 wf = (f - w0) / (w1 - w0);
+  vec2 wp = wf * (w1 - w0) * bay;
+  float r = hash12(ci + 3.7);
+  vec3 glass = mix(vec3(1.0, 0.85, 0.5), vec3(0.97, 0.43, 0.17), wf.y);
+  glass *= mix(vec3(1.0), vec3(1.0, 0.7, 0.62), step(0.72, hash12(ci + 9.1)));
+  vec3 dark = mix(vec3(0.16, 0.14, 0.24), vec3(0.34, 0.31, 0.46), L * 0.6 + (1.0 - wf.y) * 0.3);
+  vec3 gc = mix(dark, glass, step(0.36, r));
+  float st = fract((wf.x * 0.6 - wf.y * 0.9) * 2.2 + r * 3.0);
+  gc = mix(gc, gc * 1.16 + 0.07, step(0.84, st) * 0.8);
+  float mul = 1.0 - step(lw * 1.1, abs(wp.x - (w1.x - w0.x) * bay.x * 0.5));
+  mul = max(mul, 1.0 - step(lw * 1.1, abs(wp.y - (w1.y - w0.y) * bay.y * 0.36)));
+  gc = mix(gc, vec3(0.22, 0.13, 0.1), mul);
+  gc *= mix(0.68, 1.0, smoothstep(0.0, 0.14, wf.y));
+  vec2 bc = (w0 + w1) * 0.5 * bay, hs = (w1 - w0) * 0.5 * bay;
+  vec2 qd = abs(fp - bc) - hs;
+  float sd = length(max(qd, 0.0)) + min(max(qd.x, qd.y), 0.0);
+  c = mix(c, gc, step(sd, 0.0));
+  c = mix(c, vec3(0.3, 0.19, 0.15) * (0.7 + 0.5 * L), step(-3.0 * lw, sd) * step(sd, 0.0));
+  c = mix(c, INK, 1.0 - smoothstep(lw * 0.4, lw * 1.1, abs(sd)));
+  c = mix(c, INK, (1.0 - smoothstep(lw * 0.4, lw * 1.1, abs(fp.x - 0.13 * bay.x))) * 0.8);
+  c = mix(c, INK, (1.0 - smoothstep(lw * 0.4, lw * 1.1, abs(fp.x))) * 0.55);
+  c = mix(c, INK, (1.0 - smoothstep(lw * 0.3, lw, abs(fp.y - 0.86 * bay.y))) * 0.55 * (1.0 - pil));
+  c = mix(c, c * 0.55, dots(px, 6.0 * u_dpr, (1.0 - L) * 0.7 + 0.04) * 0.8);
+  return c + vec3(1.0, 0.55, 0.2) * L * L * L * 0.12;
+}
+
+void main() {
+  vec3 c = facade(v_px);
+  vec4 s = texture(u_strands, (v_px - u_head * min(u_res.x, u_res.y) * 0.028) / u_res);
+  outColor = vec4(mix(c, s.rgb, s.a), 1.0);
+}
+`;
+
+// Miles: the night skyline pushed to Spider-Verse blue-violet, the red plate
+// printed off-register, some rows slipped and a few glitched blocks.
+const VERSE_FRAG = CITY_LIB + `
+void main() {
+  vec2 px = v_px;
+  float row = floor(px.y / (14.0 * u_dpr));
+  px.x += step(0.93, hash12(vec2(row, 2.0))) * (hash12(vec2(row, 5.0)) - 0.5) * 50.0 * u_dpr;
+  // glitched blocks: a slice of the city from elsewhere, tinted cyan or magenta
+  float h = hash12(floor(px / (vec2(64.0, 16.0) * u_dpr)) + 11.0);
+  float blk = step(0.972, h);
+  px.x += blk * (fract(h * 91.0) - 0.5) * 120.0 * u_dpr;
+  vec3 b = city(px);
+  vec3 c = vec3(city(px + vec2(3.0, 1.5) * u_dpr).r, b.g, b.b);
+  c = c * vec3(0.8, 0.86, 1.35) + vec3(0.02, 0.0, 0.07);
+  c = mix(c, c * mix(vec3(0.4, 1.3, 1.5), vec3(1.5, 0.5, 1.3), step(0.986, h)) + 0.04, blk);
+  outColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+}
+`;
+
+// Black suit / Noir: the night skyline drained to a cold grey, fog rising
+// from the street.
+const NIGHT_FRAG = CITY_LIB + `
+void main() {
+  vec3 c = city(v_px);
+  c = mix(vec3(luma(c)), c, 0.15) * vec3(0.86, 0.93, 1.08);
+  c = mix(c, vec3(0.42, 0.46, 0.55), smoothstep(0.55, 1.0, v_px.y / u_res.y) * 0.35);
+  outColor = vec4(c, 1.0);
+}
+`;
+
+// Seeded random, so the webs hang the same way every time.
+function rng(seed) {
+  return () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+}
+
+// Rope-like strands: a soft shadow on the wall, a dark edge, a silver body
+// and a white highlight. Each group is drawn as one, so its strands merge
+// where they cross like real silk; later groups lie on top.
+function ropes(g, list) {
+  const pass = (style, k, add, dx, dy) => {
+    g.strokeStyle = style;
+    for (const [p, w] of list) {
+      g.lineWidth = w * k + add;
+      if (dx || dy) { g.save(); g.translate(w * dx, w * dy); g.stroke(p); g.restore(); } else g.stroke(p);
+    }
+  };
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  pass('rgba(26,12,34,0.26)', 1.4, 0, 1.1, 1.6);
+  pass('rgba(30,34,58,0.9)', 1, 2, 0, 0);
+  pass('#c9cedb', 1, 0, 0, 0);
+  pass('rgba(255,255,255,0.95)', 0.38, 0, -0.17, -0.22);
+}
+
+// Big tangled webs like the covers: a radial web in the upper left, a
+// smaller one lower right, long sagging strands (twisted from a few fibres
+// with clumps) across the whole screen.
+function drawStrands(g, w, h) {
+  const S = Math.min(w, h), R = rng(11);
+  const radial = (hx, hy, n, rings, sc) => {
+    const out = [], ang = [];
+    for (let i = 0; i < n; i++) ang.push((i + (R() - 0.5) * 0.35) * Math.PI * 2 / n);
+    for (const a of ang) {
+      const p = new Path2D(), L = Math.max(w, h) * 1.5 * sc, j = (R() - 0.5) * 0.08;
+      p.moveTo(hx, hy);
+      p.quadraticCurveTo(hx + Math.cos(a + j) * L * 0.5, hy + Math.sin(a + j) * L * 0.5, hx + Math.cos(a) * L, hy + Math.sin(a) * L);
+      out.push([p, S * 0.008 * sc]);
+    }
+    for (let k = 1; k <= rings; k++) {
+      const rk = S * sc * (0.05 + 0.07 * k + 0.007 * k * k);
+      const p = new Path2D();
+      for (let i = 0; i < n; i++) {
+        if (R() < 0.13) continue;  // torn
+        const a = ang[i], b = ang[(i + 1) % n] + (i + 1 === n ? Math.PI * 2 : 0);
+        const ra = rk * (1 + (R() - 0.5) * 0.12), rb = rk * (1 + (R() - 0.5) * 0.12);
+        const ax = hx + Math.cos(a) * ra, ay = hy + Math.sin(a) * ra, bx = hx + Math.cos(b) * rb, by = hy + Math.sin(b) * rb;
+        const mx = (ax + bx) / 2, my = (ay + by) / 2 + rk * 0.04;  // a little gravity
+        p.moveTo(ax, ay);
+        p.quadraticCurveTo(hx + (mx - hx) * 0.8, hy + (my - hy) * 0.8, bx, by);
+      }
+      out.push([p, S * sc * Math.max(0.0028, 0.0052 - k * 0.0002)]);
+    }
+    return out;
+  };
+  const strand = (x0, y0, x1, y1, sag, wd) => {
+    const out = [];
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2 + sag * S;
+    const at = (t) => {
+      const u = 1 - t;
+      return [u * u * x0 + 2 * u * t * cx + t * t * x1, u * u * y0 + 2 * u * t * cy + t * t * y1];
+    };
+    const len = Math.hypot(x1 - x0, y1 - y0);
+    const nf = 2 + Math.floor(R() * 2);
+    for (let f = 0; f < nf; f++) {
+      const p = new Path2D(), ph = R() * 6.28, fr = 3 + R() * 4, amp = wd * (0.6 + R() * 0.9);
+      for (let i = 0; i <= 48; i++) {
+        const t = i / 48, [x, y] = at(t), [x2, y2] = at(Math.min(1, t + 0.01));
+        const dl = Math.hypot(x2 - x, y2 - y) || 1, nx = -(y2 - y) / dl, ny = (x2 - x) / dl;
+        const o = Math.sin(t * fr * Math.PI + ph + f * 2.1) * amp;
+        if (i) p.lineTo(x + nx * o, y + ny * o); else p.moveTo(x + nx * o, y + ny * o);
+      }
+      out.push([p, wd * (f ? 0.55 : 1)]);
+    }
+    for (let i = 0; i < Math.floor(len / (S * 0.45)); i++) {  // clumps
+      const [x, y] = at(0.15 + R() * 0.7), p = new Path2D();
+      p.ellipse(x, y, wd * 0.6, wd * 0.35, R() * 3, 0, Math.PI * 2);
+      out.push([p, wd * 1.3]);
+    }
+    return out;
+  };
+  g.clearRect(0, 0, w, h);
+  ropes(g, [...radial(w * 0.27, h * 0.3, 12, 10, 1), ...radial(w * 0.85, h * 0.72, 10, 6, 0.62)]);
+  const long = [
+    [-0.05, 0.55, 1.05, 0.3, 0.16], [0.1, -0.05, 0.95, 1.05, 0.1], [-0.05, 0.86, 0.62, -0.05, 0.12],
+    [0.45, 1.05, 1.05, 0.04, 0.08], [-0.05, 0.18, 1.05, 0.8, 0.2], [0.3, -0.05, 1.05, 0.52, 0.14],
+  ];
+  let list = [];
+  for (const [a, b, c, d, s] of long) list = list.concat(strand(a * w, b * h, c * w, d * h, s, S * (0.006 + R() * 0.004)));
+  // fine loose fibres bridging the tangle
+  for (let i = 0; i < 26; i++) {
+    const p = new Path2D(), x = R() * w, y = R() * h, a = R() * 6.28, L = S * (0.08 + R() * 0.25);
+    p.moveTo(x, y);
+    p.quadraticCurveTo(x + Math.cos(a) * L * 0.5, y + Math.sin(a) * L * 0.5 + L * 0.12, x + Math.cos(a) * L, y + Math.sin(a) * L);
+    list.push([p, Math.max(1, S * 0.0018)]);
+  }
+  ropes(g, list);
+}
+
+let strands = null;  // { tex, w, h }: redrawn only when the size changes a lot
+function strandTexture(gfx, w, h) {
+  if (strands && Math.abs(w / strands.w - 1) < 0.15 && Math.abs(h / strands.h - 1) < 0.15) return strands.tex;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  drawStrands(c.getContext('2d'), w, h);
+  strands = { tex: gfx.textureFrom(c, strands ? strands.tex : null), w, h };
+  return strands.tex;
+}
+
+const BACKDROPS = { wall: WALL_FRAG, verse: VERSE_FRAG, night: NIGHT_FRAG };
+const pool = [];  // two shared targets (at most 2x density): a wipe shows two versions
+const broken = new Set();
+const FALLBACK_LOOK = { pal: 1, head: { x: 0, y: 0 } };
+
+// A portal backdrop in a screen-sized target (sample it at (x / W, 1 - y / H)),
+// redrawn only on resize, head parallax, and (night skylines) window flicker.
+// A backdrop whose shader fails on this GPU falls back to the skyline.
+// kind: 'wall' | 'verse' | 'night'; look: { head: {x, y} }
+export function backdropTexture(gfx, kind, look) {
+  if (broken.has(kind)) { FALLBACK_LOOK.pal = kind === 'wall' ? 0 : 1; FALLBACK_LOOK.head = look.head; return cityTexture(gfx, FALLBACK_LOOK); }
+  let e = null;
+  for (const p of pool) if (p.kind === kind) e = p;
+  if (!e) {
+    if (pool.length < 2) { e = { rt: gfx.renderTarget(Math.min(1, 2 / gfx.dpr)) }; pool.push(e); }
+    else e = pool[0].used <= pool[1].used ? pool[0] : pool[1];
+    Object.assign(e, { kind, w: 0, h: 0, hx: 9, hy: 9, t: -9 });
+  }
+  const rt = e.rt, t = gfx.time;
+  e.used = t;
+  const stale = rt.w !== e.w || rt.h !== e.h || Math.abs(look.head.x - e.hx) > 0.015 || Math.abs(look.head.y - e.hy) > 0.015
+    || (kind !== 'wall' && t - e.t > 0.5);
+  if (stale) {
+    Object.assign(e, { w: rt.w, h: rt.h, hx: look.head.x, hy: look.head.y, t });
+    const u = { u_pal: kind === 'wall' ? 0 : 1, u_head: [look.head.x, look.head.y] };
+    if (kind === 'wall') u.u_strands = strandTexture(gfx, rt.w, rt.h);
+    let prog = null;
+    try { prog = backdropProgram(gfx, kind); } catch (err) { broken.add(kind); console.warn('[spider] backdrop shader failed:', kind, err.message); }
+    if (!prog) return backdropTexture(gfx, kind, look);
+    gfx.bindTarget(rt);
+    gfx.fullscreen(prog, u);
+    gfx.bindTarget(null);
+  }
+  return rt;
+}
+
+// Compile a backdrop's shader ahead of time (switching then never hitches).
+export function backdropProgram(gfx, kind) { return gfx.program('spider-bd-' + kind, BACKDROPS[kind]); }
