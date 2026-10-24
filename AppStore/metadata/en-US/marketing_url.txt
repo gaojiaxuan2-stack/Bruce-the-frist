@@ -1,0 +1,1 @@
+REPLACE_ME (optional): your landing page, e.g. https://<your-domain>. If you do not have one yet, delete this file before running fastlane deliver.

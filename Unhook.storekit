@@ -1,0 +1,154 @@
+{
+  "appPolicies" : {
+    "eula" : "",
+    "policies" : [
+      {
+        "locale" : "en_US",
+        "policyText" : "",
+        "policyURL" : ""
+      }
+    ]
+  },
+  "identifier" : "5A3C9E17",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+    {
+      "displayPrice" : "49.99",
+      "familyShareable" : false,
+      "internalID" : "6739204513",
+      "localizations" : [
+        {
+          "description" : "Every Pro feature, forever. Pay once.",
+          "displayName" : "Unhook Pro Lifetime",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "unhook.pro.lifetime",
+      "referenceName" : "Unhook Pro Lifetime",
+      "type" : "NonConsumable"
+    }
+  ],
+  "settings" : {
+    "_failTransactionsEnabled" : false,
+    "_locale" : "en_US",
+    "_storefront" : "USA",
+    "_storeKitErrors" : [
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Load Products"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Purchase"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Verification"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "App Store Sync"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Subscription Status"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "App Transaction"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Manage Subscriptions Sheet"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Refund Request Sheet"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Offer Code Redeem Sheet"
+      }
+    ]
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "21584327",
+      "localizations" : [
+
+      ],
+      "name" : "Unhook Pro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "29.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "6739204511",
+          "introductoryOffer" : {
+            "internalID" : "6739204514",
+            "paymentMode" : "free",
+            "subscriptionPeriod" : "P1W"
+          },
+          "localizations" : [
+            {
+              "description" : "Every Pro feature, billed once a year.",
+              "displayName" : "Unhook Pro Yearly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "unhook.pro.yearly",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Unhook Pro Yearly",
+          "subscriptionGroupID" : "21584327",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "4.99",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "6739204512",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Every Pro feature, billed monthly.",
+              "displayName" : "Unhook Pro Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "unhook.pro.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Unhook Pro Monthly",
+          "subscriptionGroupID" : "21584327",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}

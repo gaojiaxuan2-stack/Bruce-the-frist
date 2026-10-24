@@ -1,0 +1,1 @@
+REPLACE_ME: the public https URL of your privacy policy (required for every app). Start from AppStore/PRIVACY_POLICY.md and host it on your support site.
