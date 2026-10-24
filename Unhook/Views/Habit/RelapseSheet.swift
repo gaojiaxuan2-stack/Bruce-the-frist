@@ -10,6 +10,7 @@ struct RelapseSheet: View {
 
     @State private var date = Date.now
     @State private var note = ""
+    @State private var trigger: CravingTrigger?
 
     private var savedProgress: TimeInterval {
         habit.stats(at: date).lifetimeClean
@@ -33,12 +34,17 @@ struct RelapseSheet: View {
                 }
 
                 Section {
-                    TextField("Stress, boredom, a party…", text: $note, axis: .vertical)
-                        .lineLimit(2...4)
+                    CravingTriggerPicker(selection: $trigger, tint: habit.theme.gradient)
+                        .padding(.vertical, 6)
                 } header: {
-                    Text("What triggered it? (optional)")
+                    Text("What set it off?")
                 } footer: {
-                    Text("Spotting your triggers is the fastest way to beat them next time.")
+                    Text("Optional. Spotting your triggers is the fastest way to beat them next time.")
+                }
+
+                Section("Anything else? (optional)") {
+                    TextField("Where you were, how you felt…", text: $note, axis: .vertical)
+                        .lineLimit(2...4)
                 }
             }
             .navigationTitle("Reset streak")
@@ -56,9 +62,19 @@ struct RelapseSheet: View {
     }
 
     private func reset() {
-        habit.recordRelapse(at: date, note: note.trimmingCharacters(in: .whitespacesAndNewlines), in: context)
+        habit.recordRelapse(
+            at: date,
+            note: note.trimmingCharacters(in: .whitespacesAndNewlines),
+            trigger: trigger,
+            in: context
+        )
         NotificationManager.scheduleMilestones(for: habit)
         Haptics.warning()
         dismiss()
     }
+}
+
+#Preview {
+    RelapseSheet(habit: PreviewData.sampleHabit)
+        .previewEnvironment()
 }

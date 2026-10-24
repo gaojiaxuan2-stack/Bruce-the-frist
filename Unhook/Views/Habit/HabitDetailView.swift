@@ -19,7 +19,9 @@ struct HabitDetailView: View {
             VStack(spacing: 16) {
                 HabitHeroView(habit: habit)
                 statsGrid
+                RecoveryTimelineView(habit: habit)
                 reasonsCard
+                CoachEntryCard(habit: habit)
                 MilestoneListView(habit: habit)
                 historyCard
             }
@@ -161,8 +163,8 @@ struct HabitDetailView: View {
             HistoryItem(
                 id: urge.persistentModelID,
                 date: urge.date,
-                title: urge.resisted ? "Beat a craving" : "Logged a craving",
-                detail: "",
+                title: urge.resisted ? String(localized: "Beat a craving") : String(localized: "Logged a craving"),
+                detail: Self.cravingDetail(trigger: urge.trigger, intensity: urge.intensity, note: urge.note),
                 systemImage: "shield.lefthalf.filled",
                 tint: .purple
             )
@@ -171,13 +173,28 @@ struct HabitDetailView: View {
             HistoryItem(
                 id: relapse.persistentModelID,
                 date: relapse.date,
-                title: "Slipped after \(DurationFormatter.compact(relapse.streakSeconds))",
-                detail: relapse.note,
+                title: String(localized: "Slipped after \(DurationFormatter.compact(relapse.streakSeconds))"),
+                detail: Self.cravingDetail(trigger: relapse.trigger, intensity: 0, note: relapse.note),
                 systemImage: "arrow.counterclockwise",
                 tint: .pink
             )
         }
         return (urgeItems + relapseItems).sorted { $0.date > $1.date }
+    }
+
+    /// "😤 Stress · 4/5 · note", leaving out whatever wasn't logged.
+    private static func cravingDetail(trigger: CravingTrigger?, intensity: Int, note: String) -> String {
+        var parts: [String] = []
+        if let trigger {
+            parts.append("\(trigger.emoji) \(trigger.title)")
+        }
+        if intensity > 0 {
+            parts.append(String(localized: "\(intensity)/5 strength"))
+        }
+        if !note.isEmpty {
+            parts.append(note)
+        }
+        return parts.joined(separator: " · ")
     }
 
     private var historyCard: some View {
@@ -240,5 +257,5 @@ struct HabitDetailView: View {
     NavigationStack {
         HabitDetailView(habit: PreviewData.sampleHabit)
     }
-    .modelContainer(PreviewData.container)
+    .previewEnvironment()
 }

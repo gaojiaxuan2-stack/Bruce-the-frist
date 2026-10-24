@@ -125,5 +125,5 @@ struct ShareCardView: View {
 
 #Preview {
     ShareProgressSheet(habit: PreviewData.sampleHabit)
-        .modelContainer(PreviewData.container)
+        .previewEnvironment()
 }

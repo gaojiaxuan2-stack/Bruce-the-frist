@@ -16,6 +16,10 @@ struct HabitPreset: Identifiable, Hashable {
 
     var defaultName: String { id == Self.customID ? "" : title }
 
+    static func preset(id: String) -> HabitPreset? {
+        all.first { $0.id == id }
+    }
+
     static let all: [HabitPreset] = [
         HabitPreset(
             id: "smoking", title: "Smoking", emoji: "🚬", theme: .fire,

@@ -1,0 +1,35 @@
+Thank you for reviewing Unhook.
+
+NO LOGIN: Unhook has no accounts and no server. No demo account is needed. All data is stored on the device with SwiftData.
+
+QUICK TEST (about 3 minutes)
+1. Onboarding: pick a habit (for example Vaping), choose "Just now" or an earlier quit date, enter a rough daily cost, pick reasons, see the one-year projection, then choose whether to turn on reminders.
+2. The last onboarding screen is the Unhook Pro paywall. Close it with the X in the top-right corner to continue on the free plan.
+3. On the Today tab, open the habit to see the live streak, milestones and the recovery timeline.
+4. Tap "Craving? Tap for SOS" on the Today tab to start guided breathing. SOS is free and never behind the paywall.
+5. Tap "Talk to your coach" on the Today tab to try the coach.
+6. Open the Progress tab for totals, charts, achievements and craving trigger insights. The top trigger is free; peak times and the full breakdown are Pro.
+
+UNHOOK PRO (In-App Purchases, submitted with this version)
+- unhook.pro.yearly: auto-renewable, 1 year, 1-week free trial for eligible new subscribers
+- unhook.pro.monthly: auto-renewable, 1 month
+- unhook.pro.lifetime: non-consumable, one-time purchase
+Both subscriptions are in the "Unhook Pro" subscription group. Other ways to open the paywall: Settings > Unhook Pro, or try to add a second habit (+ on the Today tab) or a second savings goal. The free plan includes one habit and one active savings goal. Restore Purchases, Terms of Use and Privacy Policy are on the paywall. Pro unlocks unlimited habits and goals, full insights and alternate app icons (Settings > App Icon).
+
+HEALTH AND SAFETY
+- Unhook is a self-help tool and gives no medical advice. The recovery timeline shows general information with an in-app "not medical advice" note. The smoking timeline follows published WHO, CDC and NHS guidance; the alcohol timeline tells heavy daily drinkers to talk to a doctor before stopping.
+- Crisis resources: Settings > Support > "Find a free helpline near you" opens findahelpline.com, a free directory of crisis and support lines by country. This is never paywalled.
+- Habits such as porn, alcohol, cannabis and gambling appear only as things the user wants to quit. The app contains no sexual content, sells nothing age-restricted and has no gambling mechanics.
+
+ON-DEVICE COACH
+On devices running iOS 26 with Apple Intelligence turned on, coach replies come from Apple's on-device Foundation Models framework. On other devices a built-in scripted coach answers. Either way nothing is sent off the device and conversations are not saved. Messages about self-harm or crisis never reach the model: they get a fixed, caring reply that points to emergency services and helplines. The coach does not give medical advice.
+
+PRIVACY
+No analytics, no ads, no tracking, no third-party SDKs. The only network traffic is StoreKit (handled by Apple). App Privacy answer: Data Not Collected. Face ID is optional and only locks the app. Data export creates a file that the user shares through the system share sheet.
+
+OTHER FEATURES TO TRY
+- Widgets: add the Unhook "Streak" or "Craving SOS" widget from the Home Screen or Lock Screen widget gallery.
+- Siri and Shortcuts: say "Open SOS in Unhook" to Siri, or find Unhook's App Shortcuts (SOS Breathing, Log Beaten Craving, Check My Streak) in the Shortcuts app and Spotlight. No setup is needed.
+- Notifications are local only (daily pledge reminder and milestone alerts).
+
+Contact: REPLACE_ME_CONTACT_EMAIL

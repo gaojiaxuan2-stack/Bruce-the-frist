@@ -3,6 +3,9 @@ import SwiftData
 
 @main
 struct UnhookApp: App {
+    @State private var router = AppRouter.shared
+    @State private var store = Store.shared
+
     init() {
         NotificationManager.configure()
     }
@@ -10,7 +13,10 @@ struct UnhookApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                .environment(router)
+                .environment(store)
+                .task { store.start() }
         }
-        .modelContainer(for: [Habit.self, Relapse.self, Urge.self, Pledge.self])
+        .modelContainer(AppModelContainer.shared)
     }
 }

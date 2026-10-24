@@ -91,5 +91,5 @@ private struct PresetTile: View {
 
 #Preview {
     AddHabitView()
-        .modelContainer(PreviewData.container)
+        .previewEnvironment()
 }

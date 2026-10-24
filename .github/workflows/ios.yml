@@ -35,10 +35,28 @@ jobs:
             -project Unhook.xcodeproj \
             -scheme Unhook \
             -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee xcodebuild-compile.log | grep -E "error:|warning:|\*\* (BUILD|TEST BUILD)"
           status=${PIPESTATUS[0]}
           exit "$status"
+
+      - name: Check iOS 26-only frameworks are weak-linked
+        # The app supports iOS 17, so frameworks that only exist on iOS 26 (FoundationModels for the
+        # on-device coach) must be weak-linked or the app would crash at launch on older iPhones.
+        run: |
+          app=$(find build/DerivedData/Build/Products -path "*Debug-iphonesimulator/Unhook.app" -type d | head -1)
+          # Debug builds keep the app's code in Unhook.debug.dylib, so inspect it as well as the executable.
+          for binary in "$app/Unhook" "$app/Unhook.debug.dylib"; do
+            [ -f "$binary" ] || continue
+            echo "Inspecting $binary"
+            otool -l "$binary" | awk '/cmd LC_LOAD_DYLIB/{kind="strong"} /cmd LC_LOAD_WEAK_DYLIB/{kind="weak"} /name /{print kind, $2}'
+          done | tee linked.txt
+          grep "FoundationModels" linked.txt || echo "FoundationModels is not linked."
+          if grep -q "^strong .*FoundationModels" linked.txt; then
+            echo "FoundationModels is strongly linked; it must be weak-linked for iOS 17/18 support." >&2
+            exit 1
+          fi
 
       - name: Run unit tests
         if: steps.simulator.outputs.id != ''

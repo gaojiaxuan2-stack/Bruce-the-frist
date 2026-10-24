@@ -248,3 +248,51 @@ struct FormattingTests {
         #expect(!custom.isValid)
     }
 }
+
+struct FoundationTests {
+    @Test func freeTierAllowsOneHabitAndOneGoal() {
+        #expect(ProLimits.canAddHabit(currentCount: 0, isPro: false))
+        #expect(!ProLimits.canAddHabit(currentCount: 1, isPro: false))
+        #expect(ProLimits.canAddHabit(currentCount: 12, isPro: true))
+        #expect(ProLimits.canAddGoal(activeCount: 0, isPro: false))
+        #expect(!ProLimits.canAddGoal(activeCount: 1, isPro: false))
+        #expect(ProLimits.canAddGoal(activeCount: 5, isPro: true))
+    }
+
+    @Test func appIconOptionsRoundTripTheirSystemNames() {
+        for option in AppIconOption.allCases {
+            #expect(AppIconOption(alternateIconName: option.alternateIconName) == option)
+        }
+        #expect(AppIconOption(alternateIconName: "Unknown") == .standard)
+    }
+
+    @Test func everyPresetIsFindableByID() {
+        for preset in HabitPreset.all {
+            #expect(HabitPreset.preset(id: preset.id) == preset)
+        }
+        #expect(HabitPreset.preset(id: "nope") == nil)
+    }
+
+    @Test func urgeStoresTriggerAndClampsIntensity() {
+        let urge = Urge(resisted: true, trigger: .stress, intensity: 9)
+        #expect(urge.trigger == .stress)
+        #expect(urge.intensity == 5)
+        urge.trigger = nil
+        #expect(urge.triggerRaw.isEmpty)
+    }
+
+    @Test func relapseRecordsTriggerAndResetsCelebrations() throws {
+        let container = AppModelContainer.make(inMemory: true)
+        let context = ModelContext(container)
+        let start = Date(timeIntervalSince1970: 0)
+        let habit = Habit(name: "Vaping", emoji: "💨", theme: .grape, streakStart: start, presetID: "vaping")
+        context.insert(habit)
+        habit.celebratedMilestoneSeconds = 7 * day
+
+        let relapse = habit.recordRelapse(at: start.addingTimeInterval(8 * day), trigger: .social, in: context)
+
+        #expect(relapse.trigger == .social)
+        #expect(habit.celebratedMilestoneSeconds == 0)
+        #expect(habit.preset?.id == "vaping")
+    }
+}

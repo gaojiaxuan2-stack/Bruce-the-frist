@@ -6,9 +6,10 @@ struct HomeView: View {
     @Query(sort: \Pledge.day, order: .reverse) private var pledges: [Pledge]
     @AppStorage(AppSettings.Keys.currencyCode) private var currencyCode = AppSettings.defaultCurrencyCode
     @AppStorage(AppSettings.Keys.didPromptFirstHabit) private var didPromptFirstHabit = false
+    @Environment(AppRouter.self) private var router
+    @Environment(Store.self) private var store
 
     @State private var showingAddHabit = false
-    @State private var showingSOS = false
     @State private var showingPledge = false
 
     private var pledgedToday: Bool {
@@ -26,13 +27,15 @@ struct HomeView: View {
                 VStack(spacing: 16) {
                     greeting
                     if habits.isEmpty {
-                        EmptyHomeView { showingAddHabit = true }
+                        EmptyHomeView(addAction: addHabit)
                     } else {
                         SavingsBanner(habits: habits, currencyCode: currencyCode)
                         PledgeCard(pledgedToday: pledgedToday, streak: pledgeStreak) {
                             if !pledgedToday { showingPledge = true }
                         }
+                        CoachEntryCard(habit: nil)
                         habitList
+                        GoalsCard()
                     }
                 }
                 .padding(.horizontal)
@@ -45,9 +48,7 @@ struct HomeView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showingAddHabit = true
-                    } label: {
+                    Button(action: addHabit) {
                         Image(systemName: "plus.circle.fill")
                             .font(.title3)
                     }
@@ -58,7 +59,7 @@ struct HomeView: View {
                 if !habits.isEmpty {
                     SOSButton {
                         Haptics.tap()
-                        showingSOS = true
+                        router.isShowingSOS = true
                     }
                     .padding(.horizontal)
                     .padding(.bottom, 8)
@@ -70,9 +71,6 @@ struct HomeView: View {
             .sheet(isPresented: $showingPledge) {
                 PledgeSheet()
                     .presentationDetents([.medium])
-            }
-            .fullScreenCover(isPresented: $showingSOS) {
-                SOSView(habit: nil)
             }
             .onAppear {
                 if habits.isEmpty && !didPromptFirstHabit {
@@ -96,10 +94,19 @@ struct HomeView: View {
 
     private var greetingText: String {
         switch Calendar.current.component(.hour, from: .now) {
-        case 5..<12: "Good morning. One day at a time."
-        case 12..<17: "Good afternoon. You've got this."
-        case 17..<22: "Good evening. Stay strong tonight."
-        default: "Up late? Cravings pass. You'll stay free."
+        case 5..<12: String(localized: "Good morning. One day at a time.")
+        case 12..<17: String(localized: "Good afternoon. You've got this.")
+        case 17..<22: String(localized: "Good evening. Stay strong tonight.")
+        default: String(localized: "Up late? Cravings pass. You'll stay free.")
+        }
+    }
+
+    /// Free users track one habit at a time; adding another opens the Pro paywall.
+    private func addHabit() {
+        if ProLimits.canAddHabit(currentCount: habits.count, isPro: store.isPro) {
+            showingAddHabit = true
+        } else {
+            router.showPaywall(.moreHabits)
         }
     }
 
@@ -155,5 +162,5 @@ private struct EmptyHomeView: View {
 
 #Preview {
     HomeView()
-        .modelContainer(PreviewData.container)
+        .previewEnvironment()
 }

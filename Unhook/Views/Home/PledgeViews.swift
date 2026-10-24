@@ -111,5 +111,5 @@ struct PledgeSheet: View {
 
 #Preview {
     PledgeSheet()
-        .modelContainer(PreviewData.container)
+        .previewEnvironment()
 }

@@ -1,133 +1,137 @@
 import SwiftUI
+import SwiftData
 
+/// First-run flow: pick the habit, personalize it, see what quitting gives back, opt into reminders and
+/// meet Unhook Pro. The habit is created only at the very end, so leaving midway never saves half an answer.
 struct OnboardingView: View {
     let onFinish: () -> Void
 
-    @State private var page = 0
-    @State private var isFinishing = false
+    @Environment(\.modelContext) private var context
+    @Environment(Store.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private let pages = OnboardingPage.all
+    @State private var step: OnboardingStep = .welcome
+    @State private var answers = OnboardingAnswers()
+    @State private var isMovingForward = true
+    @State private var didFinish = false
 
-    private var isLastPage: Bool { page == pages.count - 1 }
+    init(onFinish: @escaping () -> Void) {
+        self.onFinish = onFinish
+    }
 
     var body: some View {
         ZStack {
             Brand.night
                 .ignoresSafeArea()
 
-            VStack(spacing: 20) {
-                TabView(selection: $page) {
-                    ForEach(pages.indices, id: \.self) { index in
-                        OnboardingPageView(page: pages[index])
-                            .tag(index)
-                    }
+            VStack(spacing: 0) {
+                if let number = step.questionNumber {
+                    OnboardingTopBar(
+                        questionNumber: number,
+                        questionCount: OnboardingStep.questionCount,
+                        tint: accentGradient,
+                        onBack: { goBack() }
+                    )
+                    .transition(.opacity)
                 }
-                .tabViewStyle(.page(indexDisplayMode: .always))
 
-                Button(action: advance) {
-                    Text(isLastPage ? "Get started" : "Continue")
+                ZStack {
+                    currentStep
+                        .id(step)
+                        .transition(stepTransition)
                 }
-                .buttonStyle(PrimaryButtonStyle())
-                .disabled(isFinishing)
-                .padding(.horizontal, 24)
-
-                Text("Free · Private · No account needed")
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.6))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .padding(.bottom, 12)
         }
         .environment(\.colorScheme, .dark)
     }
 
-    private func advance() {
-        Haptics.tap()
-        guard isLastPage else {
-            withAnimation { page += 1 }
-            return
-        }
-        isFinishing = true
-        Task {
-            if await NotificationManager.requestAuthorization() {
-                UserDefaults.standard.set(true, forKey: AppSettings.Keys.reminderEnabled)
-                NotificationManager.scheduleDailyReminder(hour: AppSettings.reminderHour, minute: AppSettings.reminderMinute)
-            }
-            onFinish()
+    @ViewBuilder
+    private var currentStep: some View {
+        switch step {
+        case .welcome:
+            OnboardingWelcomeStep { move(to: .habit) }
+        case .habit:
+            OnboardingHabitStep(selectedPresetID: answers.selectedPresetID) { preset in choose(preset) }
+        case .quitDate:
+            OnboardingQuitDateStep(answers: $answers) { move(to: .cost) }
+        case .cost:
+            OnboardingCostStep(answers: $answers) { move(to: .reasons) }
+        case .reasons:
+            OnboardingReasonsStep(answers: $answers) { move(to: .projection) }
+        case .projection:
+            OnboardingProjectionStep(answers: answers) { move(to: .reminders) }
+        case .reminders:
+            OnboardingRemindersStep(theme: answers.theme) { leaveReminders() }
+        case .paywall:
+            PaywallView(reason: .onboarding, onClose: { finish() })
         }
     }
-}
 
-private struct OnboardingPage {
-    let symbol: String
-    let title: String
-    let message: String
-    let theme: HabitTheme
+    /// The chosen habit's colors once there is one, the brand's before that.
+    private var accentGradient: LinearGradient {
+        answers.hasChosenPreset ? answers.theme.gradient : Brand.gradient
+    }
 
-    static let all: [OnboardingPage] = [
-        OnboardingPage(
-            symbol: "link",
-            title: "Break free from any habit",
-            message: "Smoking, vaping, drinking, doomscrolling, sugar. Unhook helps you quit anything, one day at a time.",
-            theme: .grape
-        ),
-        OnboardingPage(
-            symbol: "chart.line.uptrend.xyaxis",
-            title: "Watch your progress grow",
-            message: "See every second, dollar and hour you win back, and unlock milestones as your streak grows.",
-            theme: .forest
-        ),
-        OnboardingPage(
-            symbol: "wind",
-            title: "Beat cravings in 60 seconds",
-            message: "Craving hits? Tap SOS. A guided breathing exercise and your own reasons carry you through it.",
-            theme: .ocean
-        ),
-        OnboardingPage(
-            symbol: "lock.shield.fill",
-            title: "Private by design",
-            message: "No account, no ads, no tracking. Everything stays on your iPhone.",
-            theme: .candy
-        ),
-    ]
-}
+    /// Only the incoming screen moves (the outgoing one fades), so the direction is always read from current
+    /// state and going back never slides the wrong way.
+    private var stepTransition: AnyTransition {
+        guard !reduceMotion else { return .opacity }
+        return .asymmetric(
+            insertion: .offset(x: isMovingForward ? 48 : -48).combined(with: .opacity),
+            removal: .opacity
+        )
+    }
 
-private struct OnboardingPageView: View {
-    let page: OnboardingPage
+    // MARK: Navigation
 
-    var body: some View {
-        VStack(spacing: 32) {
-            Spacer()
-            ZStack {
-                Circle()
-                    .fill(page.theme.gradient)
-                    .frame(width: 200, height: 200)
-                    .blur(radius: 50)
-                    .opacity(0.8)
-                Circle()
-                    .fill(page.theme.gradient)
-                    .frame(width: 150, height: 150)
-                Image(systemName: page.symbol)
-                    .font(.system(size: 64, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .symbolEffect(.pulse, options: .repeating)
-            }
-            VStack(spacing: 14) {
-                Text(page.title)
-                    .font(.largeTitle.bold())
-                    .multilineTextAlignment(.center)
-                Text(page.message)
-                    .font(.body)
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.white.opacity(0.75))
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 32)
-            Spacer()
-            Spacer()
+    private func move(to target: OnboardingStep) {
+        guard target != step, !didFinish else { return }
+        isMovingForward = target > step
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.9)) {
+            step = target
         }
+    }
+
+    private func goBack() {
+        guard let previous = step.previous else { return }
+        Haptics.tap()
+        move(to: previous)
+    }
+
+    private func choose(_ preset: HabitPreset) {
+        Haptics.selection()
+        answers.choose(preset)
+        move(to: .quitDate)
+    }
+
+    /// Members who already have Pro (restored, or Family Sharing) skip straight past the paywall.
+    private func leaveReminders() {
+        if store.isPro {
+            finish()
+        } else {
+            move(to: .paywall)
+        }
+    }
+
+    // MARK: Finish
+
+    private func finish() {
+        guard !didFinish else { return }
+        didFinish = true
+
+        let habit = answers.makeHabit()
+        context.insert(habit)
+        // Save right away: this is the user's whole setup, and autosave may not run before the app is closed.
+        try? context.save()
+        NotificationManager.scheduleMilestones(for: habit)
+        UserDefaults.standard.set(true, forKey: AppSettings.Keys.didPromptFirstHabit)
+        Haptics.success()
+        onFinish()
     }
 }
 
 #Preview {
     OnboardingView {}
+        .previewEnvironment()
 }

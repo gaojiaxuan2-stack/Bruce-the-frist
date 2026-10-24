@@ -18,6 +18,7 @@ struct InsightsView: View {
                 VStack(spacing: 16) {
                     totalsGrid
                     cravingsChart
+                    TriggerInsightsCard()
                     moodChart
                     achievementsCard
                 }
@@ -164,5 +165,5 @@ private struct AchievementBadge: View {
 
 #Preview {
     InsightsView()
-        .modelContainer(PreviewData.container)
+        .previewEnvironment()
 }

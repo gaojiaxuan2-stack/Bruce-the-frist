@@ -23,6 +23,10 @@ final class Habit {
     var bankedSeconds: Double = 0
     var bestStreakSeconds: Double = 0
     var sortIndex: Int = 0
+    /// The `HabitPreset.id` this habit was created from ("custom" if none). Drives the recovery timeline.
+    var presetID: String = "custom"
+    /// Highest milestone (in seconds) already celebrated in the app for the current streak.
+    var celebratedMilestoneSeconds: Double = 0
 
     @Relationship(deleteRule: .cascade, inverse: \Relapse.habit)
     var relapses: [Relapse] = []
@@ -40,7 +44,8 @@ final class Habit {
         unitsPerDay: Double = 0,
         unitName: String = "",
         reasons: [String] = [],
-        sortIndex: Int = 0
+        sortIndex: Int = 0,
+        presetID: String = HabitPreset.customID
     ) {
         self.name = name
         self.emoji = emoji
@@ -53,6 +58,7 @@ final class Habit {
         self.unitName = unitName
         self.reasons = reasons
         self.sortIndex = sortIndex
+        self.presetID = presetID
     }
 }
 
@@ -64,6 +70,10 @@ extension Habit {
 
     var resistedUrgeCount: Int {
         urges.filter(\.resisted).count
+    }
+
+    var preset: HabitPreset? {
+        HabitPreset.preset(id: presetID)
     }
 
     func stats(at now: Date = .now) -> HabitStats {
@@ -80,14 +90,21 @@ extension Habit {
 
     /// Records a slip: banks the streak's clean time, updates the best streak and starts a new streak at `date`.
     @discardableResult
-    func recordRelapse(at date: Date = .now, note: String = "", in context: ModelContext) -> Relapse {
+    func recordRelapse(
+        at date: Date = .now,
+        note: String = "",
+        trigger: CravingTrigger? = nil,
+        in context: ModelContext
+    ) -> Relapse {
         let date = max(date, streakStart)
         let streak = date.timeIntervalSince(streakStart)
         bankedSeconds += streak
         bestStreakSeconds = max(bestStreakSeconds, streak)
         streakStart = date
+        celebratedMilestoneSeconds = 0
 
         let relapse = Relapse(date: date, streakSeconds: streak, note: note)
+        relapse.trigger = trigger
         context.insert(relapse)
         relapses.append(relapse)
         return relapse

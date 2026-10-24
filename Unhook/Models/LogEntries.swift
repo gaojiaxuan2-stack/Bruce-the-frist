@@ -7,6 +7,8 @@ final class Relapse {
     var date: Date = Date.now
     var streakSeconds: Double = 0
     var note: String = ""
+    /// `CravingTrigger` raw value, or "" when the user didn't say.
+    var triggerRaw: String = ""
     var habit: Habit?
 
     init(date: Date, streakSeconds: Double, note: String) {
@@ -16,16 +18,38 @@ final class Relapse {
     }
 }
 
-/// A craving the user rode out with the SOS screen.
+/// A craving the user rode out with the SOS screen (or logged from a shortcut).
 @Model
 final class Urge {
     var date: Date = Date.now
     var resisted: Bool = true
+    /// `CravingTrigger` raw value, or "" when the user didn't say.
+    var triggerRaw: String = ""
+    /// 1 (mild) … 5 (overwhelming), or 0 when the user didn't say.
+    var intensity: Int = 0
+    var note: String = ""
     var habit: Habit?
 
-    init(date: Date = .now, resisted: Bool) {
+    init(date: Date = .now, resisted: Bool, trigger: CravingTrigger? = nil, intensity: Int = 0, note: String = "") {
         self.date = date
         self.resisted = resisted
+        self.triggerRaw = trigger?.rawValue ?? ""
+        self.intensity = min(max(intensity, 0), 5)
+        self.note = note
+    }
+}
+
+extension Relapse {
+    var trigger: CravingTrigger? {
+        get { CravingTrigger(rawValue: triggerRaw) }
+        set { triggerRaw = newValue?.rawValue ?? "" }
+    }
+}
+
+extension Urge {
+    var trigger: CravingTrigger? {
+        get { CravingTrigger(rawValue: triggerRaw) }
+        set { triggerRaw = newValue?.rawValue ?? "" }
     }
 }
 

@@ -1,0 +1,1 @@
+REPLACE_ME: a public https URL where people can get help with Unhook, e.g. https://<your-domain>/support. A simple page with a contact email is enough. App Store Connect requires it.

@@ -2,6 +2,7 @@ import Foundation
 
 /// Editable copy of a habit used by the add/edit form. Numbers are kept as text so typing never loses input.
 struct HabitDraft {
+    var presetID = HabitPreset.customID
     var name = ""
     var emoji = "✨"
     var theme: HabitTheme = .ocean
@@ -16,6 +17,7 @@ struct HabitDraft {
     init() {}
 
     init(preset: HabitPreset) {
+        presetID = preset.id
         name = preset.defaultName
         emoji = preset.emoji
         theme = preset.theme
@@ -27,6 +29,7 @@ struct HabitDraft {
     }
 
     init(habit: Habit) {
+        presetID = habit.presetID
         name = habit.name
         emoji = habit.emoji
         theme = habit.theme

@@ -190,7 +190,7 @@ struct HabitFormView: View {
             habit = editing
         } else {
             let nextIndex = (habits.map(\.sortIndex).max() ?? -1) + 1
-            habit = Habit(name: draft.trimmedName, emoji: draft.emoji, theme: draft.theme, sortIndex: nextIndex)
+            habit = Habit(name: draft.trimmedName, emoji: draft.emoji, theme: draft.theme, sortIndex: nextIndex, presetID: draft.presetID)
             context.insert(habit)
         }
 
@@ -203,6 +203,9 @@ struct HabitFormView: View {
         habit.unitName = draft.unitName.trimmingCharacters(in: .whitespacesAndNewlines)
         habit.reasons = draft.cleanedReasons
         habit.streakStart = min(draft.quitDate, .now)
+        // Moving the quit date later must not leave an old celebration record that would skip milestones.
+        let reached = Milestone.latest(reachedBy: habit.stats().currentStreak)?.seconds ?? 0
+        habit.celebratedMilestoneSeconds = min(habit.celebratedMilestoneSeconds, reached)
 
         NotificationManager.scheduleMilestones(for: habit)
         Haptics.success()
@@ -214,5 +217,5 @@ struct HabitFormView: View {
     NavigationStack {
         HabitFormView(draft: HabitDraft(preset: HabitPreset.all[0]), editing: nil) {}
     }
-    .modelContainer(PreviewData.container)
+    .previewEnvironment()
 }

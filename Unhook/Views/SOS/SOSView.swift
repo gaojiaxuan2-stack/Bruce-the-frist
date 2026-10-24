@@ -50,6 +50,14 @@ struct SOSView: View {
     @State private var runID = UUID()
     @State private var beatenCount = 0
     @State private var distractions = Array(SOSView.allDistractions.shuffled().prefix(3))
+    /// After "I beat this craving": the quick "what set it off / how strong" step before the celebration.
+    @State private var isTaggingCraving = false
+    @State private var selectedTrigger: CravingTrigger?
+    /// 1 (mild) … 5 (overwhelming), or 0 when not rated.
+    @State private var intensity = 0
+    /// Stops a double tap on Close from logging the craving twice while the screen slides away.
+    @State private var didLogOnClose = false
+    @State private var showingCoach = false
 
     private var theme: HabitTheme { habit?.theme ?? .grape }
 
@@ -84,6 +92,9 @@ struct SOSView: View {
             closeButton
         }
         .environment(\.colorScheme, .dark)
+        .sheet(isPresented: $showingCoach) {
+            CoachView(habit: habit)
+        }
         .task(id: runID) {
             await runBreathing()
         }
@@ -190,30 +201,138 @@ struct SOSView: View {
                 Image(systemName: "water.waves")
                     .font(.system(size: 56))
                     .foregroundStyle(theme.gradient)
-                    .padding(.top, 64)
+                    .padding(.top, isTaggingCraving ? 40 : 64)
+                    .accessibilityHidden(true)
 
                 VStack(spacing: 10) {
                     Text("You rode the wave")
                         .font(.largeTitle.bold())
                         .foregroundStyle(.white)
-                    Text("Cravings peak and pass within minutes. You just proved you can outlast one.")
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.white.opacity(0.75))
+                    if !isTaggingCraving {
+                        Text("Cravings peak and pass within minutes. You just proved you can outlast one.")
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.white.opacity(0.75))
+                    }
                 }
 
-                Button(action: logResisted) {
-                    Label("I beat this craving", systemImage: "hand.thumbsup.fill")
-                }
-                .buttonStyle(PrimaryButtonStyle(gradient: theme.gradient))
+                if isTaggingCraving {
+                    cravingDetails
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                } else {
+                    Button(action: startTagging) {
+                        Label("I beat this craving", systemImage: "hand.thumbsup.fill")
+                    }
+                    .buttonStyle(PrimaryButtonStyle(gradient: theme.gradient))
 
-                distractionList
+                    distractionList
 
-                Button(action: restart) {
-                    Label("Breathe again", systemImage: "arrow.clockwise")
+                    Button {
+                        Haptics.tap()
+                        showingCoach = true
+                    } label: {
+                        Label("Talk it through with your coach", systemImage: "sparkles")
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+
+                    Button(action: restart) {
+                        Label("Breathe again", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
                 }
-                .buttonStyle(SecondaryButtonStyle())
             }
             .padding(24)
+        }
+    }
+
+    // MARK: What set it off
+
+    /// One quick, optional step: tag the trigger and the strength, then save or skip. Both log the win.
+    private var cravingDetails: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("What set it off?")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+                CravingTriggerPicker(selection: $selectedTrigger, tint: theme.gradient)
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("How strong was it?")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+                intensityPicker
+            }
+
+            HStack(spacing: 12) {
+                Button("Skip") {
+                    logResisted(trigger: nil, intensity: 0)
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .accessibilityHint("Logs the win without these details")
+
+                Button("Save") {
+                    logResisted(trigger: selectedTrigger, intensity: intensity)
+                }
+                .buttonStyle(PrimaryButtonStyle(gradient: theme.gradient))
+            }
+        }
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var intensityPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                ForEach(1...5, id: \.self) { level in
+                    intensityButton(level)
+                }
+            }
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: intensity)
+
+            Text(Self.intensityDescription(intensity))
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.7))
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Strength")
+        .accessibilityValue(intensity == 0 ? String(localized: "Not rated") : Self.intensityDescription(intensity))
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment:
+                intensity = min(intensity + 1, 5)
+            case .decrement:
+                intensity = max(intensity - 1, 0)
+            default:
+                break
+            }
+        }
+    }
+
+    /// Circles that grow with the level, filled up to the chosen one. Tapping the chosen level clears it.
+    private func intensityButton(_ level: Int) -> some View {
+        let isFilled = level <= intensity
+        let diameter = CGFloat(16 + level * 4)
+        return Button {
+            intensity = intensity == level ? 0 : level
+            Haptics.selection()
+        } label: {
+            Circle()
+                .fill(isFilled ? AnyShapeStyle(theme.gradient) : AnyShapeStyle(Color.white.opacity(0.18)))
+                .frame(width: diameter, height: diameter)
+                .frame(width: 48, height: 48)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private static func intensityDescription(_ level: Int) -> String {
+        switch level {
+        case 1: String(localized: "Mild")
+        case 2: String(localized: "Manageable")
+        case 3: String(localized: "Strong")
+        case 4: String(localized: "Intense")
+        case 5: String(localized: "Overwhelming")
+        default: String(localized: "Tap a circle to rate it")
         }
     }
 
@@ -240,8 +359,8 @@ struct SOSView: View {
                 .font(.largeTitle.bold())
                 .foregroundStyle(.white)
             Text(beatenCount == 1
-                 ? "Your first one. Each craving you beat makes the next one weaker."
-                 : "That's \(beatenCount) cravings beaten. Each one makes the next one weaker.")
+                 ? "Your first one. Every craving you ride out proves you can do it."
+                 : "That's \(beatenCount) cravings beaten. Every one you ride out proves you can do it.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.white.opacity(0.8))
         }
@@ -249,9 +368,7 @@ struct SOSView: View {
     }
 
     private var closeButton: some View {
-        Button {
-            dismiss()
-        } label: {
+        Button(action: close) {
             Image(systemName: "xmark")
                 .font(.headline)
                 .foregroundStyle(.white.opacity(0.8))
@@ -264,13 +381,16 @@ struct SOSView: View {
 
     // MARK: Actions
 
-    private func logResisted() {
+    private func startTagging() {
+        Haptics.tap()
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) { isTaggingCraving = true }
+    }
+
+    private func logResisted(trigger: CravingTrigger?, intensity level: Int) {
+        // A quick double tap (or a tap while Close is dismissing the screen) must not log the same craving twice.
+        guard phase == .finished, !didLogOnClose else { return }
         beatenCount = urges.filter(\.resisted).count + 1
-        let urge = Urge(resisted: true)
-        context.insert(urge)
-        if let target = habit ?? (allHabits.count == 1 ? allHabits.first : nil) {
-            target.urges.append(urge)
-        }
+        saveResistedUrge(trigger: trigger, intensity: level)
 
         Haptics.success()
         withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { phase = .celebrating }
@@ -280,11 +400,33 @@ struct SOSView: View {
         }
     }
 
+    private func saveResistedUrge(trigger: CravingTrigger?, intensity level: Int) {
+        let urge = Urge(resisted: true, trigger: trigger, intensity: level)
+        context.insert(urge)
+        if let target = habit ?? (allHabits.count == 1 ? allHabits.first : nil) {
+            target.urges.append(urge)
+        }
+        // Counts toward the App Store review prompt, which is only shown later at a calm high point.
+        ReviewPrompter.standard.recordPositiveMoment()
+    }
+
+    /// Closing from the "what set it off" step still counts the craving the user just said they beat.
+    private func close() {
+        if isTaggingCraving, phase == .finished, !didLogOnClose {
+            didLogOnClose = true
+            saveResistedUrge(trigger: selectedTrigger, intensity: intensity)
+        }
+        dismiss()
+    }
+
     private func restart() {
         circleScale = Self.restingScale
         step = .inhale
         cycle = 1
         distractions = Array(Self.allDistractions.shuffled().prefix(3))
+        isTaggingCraving = false
+        selectedTrigger = nil
+        intensity = 0
         withAnimation(.easeInOut(duration: 0.4)) { phase = .breathing }
         runID = UUID()
     }
@@ -292,5 +434,5 @@ struct SOSView: View {
 
 #Preview {
     SOSView(habit: nil)
-        .modelContainer(PreviewData.container)
+        .previewEnvironment()
 }

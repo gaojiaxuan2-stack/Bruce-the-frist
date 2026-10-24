@@ -1,18 +1,13 @@
-import Foundation
+import SwiftUI
 import SwiftData
 
 /// Sample data for SwiftUI previews.
 @MainActor
 enum PreviewData {
     static let container: ModelContainer = {
-        let schema = Schema([Habit.self, Relapse.self, Urge.self, Pledge.self])
-        do {
-            let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
-            populate(container.mainContext)
-            return container
-        } catch {
-            fatalError("Could not create preview container: \(error)")
-        }
+        let container = AppModelContainer.make(inMemory: true)
+        populate(container.mainContext)
+        return container
     }()
 
     static var sampleHabit: Habit {
@@ -38,15 +33,30 @@ enum PreviewData {
             reasons: ["Be present with my family"],
             sortIndex: 1
         )
+        smoking.presetID = "smoking"
+        scrolling.presetID = "social"
         context.insert(smoking)
         context.insert(scrolling)
+        context.insert(SavingsGoal(title: "Trip to Japan", emoji: "🗾", cost: 1_200, sortIndex: 0))
+        context.insert(SavingsGoal(title: "New running shoes", emoji: "👟", cost: 140, sortIndex: 1))
 
         let moods = [3, 4, 3, 5, 4, 2, 4, 5, 4, 3]
         for (offset, mood) in moods.enumerated() {
             let urge = Urge(date: .now.addingTimeInterval(-Double(offset) * day * 0.7), resisted: true)
             context.insert(urge)
+            urge.trigger = CravingTrigger.allCases[offset % CravingTrigger.allCases.count]
+            urge.intensity = 1 + offset % 5
             smoking.urges.append(urge)
             context.insert(Pledge(day: .now.addingTimeInterval(-Double(offset) * day), mood: mood))
         }
+    }
+}
+
+extension View {
+    /// Sample data plus the environment objects every screen expects. Use in `#Preview`s.
+    @MainActor func previewEnvironment() -> some View {
+        modelContainer(PreviewData.container)
+            .environment(AppRouter.shared)
+            .environment(Store.shared)
     }
 }
